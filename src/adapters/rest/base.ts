@@ -12,6 +12,7 @@ export abstract class BaseExchange implements ExchangeInterface {
     this.exchange = new (ccxt as any)[exchangeId]({
       apiKey: config.apiKey,
       secret: config.apiSecret,
+      password: config.apiPass,
       options: config.options || {},
     })
   }
@@ -27,33 +28,33 @@ export abstract class BaseExchange implements ExchangeInterface {
 
   async getUSDTPerpetualSymbols(): Promise<string[]> {
     try {
-      // const markets = Object.values(this.exchange.markets)
+    //   const markets = Object.values(this.exchange.markets)
 
-      // logger.info(`Found ${markets.length} markets`)
+    //   logger.info(`Found ${markets.length} markets`)
 
-      // const USDTmarkets = Object.values(this.exchange.markets)
-      // .filter(
-      //   market =>
-      //     market.quote === 'USDT'
-      // )
+    //   const USDTmarkets = Object.values(this.exchange.markets)
+    //   .filter(
+    //     market =>
+    //       market.quote === 'USDT'
+    //   )
 
-      // logger.info(`Found ${USDTmarkets.length} markets`)
+    //   logger.info(`Found ${USDTmarkets.length} markets`)
 
-      // const Swapmarkets = Object.values(this.exchange.markets)
-      // .filter(
-      //   market =>
-      //     market.quote === 'USDT' && market.swap
-      // )
+    //   const Swapmarkets = Object.values(this.exchange.markets)
+    //   .filter(
+    //     market =>
+    //       market.quote === 'USDT' && market.swap
+    //   )
 
-      // logger.info(`Found ${Swapmarkets.length} markets`)
+    //   logger.info(`Found ${Swapmarkets.length} markets`)
 
-      // const notInverseMarkets = Object.values(this.exchange.markets)
-      // .filter(
-      //   market =>
-      //     market.quote === 'USDT' && market.swap && !market.inverse
-      // )
+    //   const notInverseMarkets = Object.values(this.exchange.markets)
+    //   .filter(
+    //     market =>
+    //       market.quote === 'USDT' && market.swap && !market.inverse
+    //   )
 
-      // logger.info(`Found ${notInverseMarkets.length} markets`)
+    //   logger.info(`Found ${notInverseMarkets.length} markets`)
 
       const usdtPairs = Object.values(this.exchange.markets)
         .filter(

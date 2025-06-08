@@ -1,16 +1,10 @@
 import { Market, Order, Balances, Dictionary } from 'ccxt'
 
-export interface ExchangeOptions {
-  defaultType?: string
-  adjustForTimeDifference?: boolean
-  recvWindow?: number
-  [key: string]: any
-}
-
 export interface ExchangeConfig {
-  apiKey?: string
-  apiSecret?: string
-  options?: ExchangeOptions
+  apiKey: string
+  apiSecret: string
+  apiPass?: string
+  options?: Record<string, any>
 }
 
 export interface ExchangeInterface {

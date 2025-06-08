@@ -16,9 +16,10 @@ interface AppConfig {
   logLevel: string
 }
 
-interface ExchangeConfig {
+interface ExchangeConfiguration {
   apiKey: string
   apiSecret: string
+  apiPass?: string
   maxStreamsPerConnection: number
   reconnectInterval: number
 }
@@ -26,8 +27,9 @@ interface ExchangeConfig {
 interface Config {
   app: AppConfig
   exchanges: {
-    binance: ExchangeConfig
-    bybit: ExchangeConfig
+    binance: ExchangeConfiguration
+    bybit: ExchangeConfiguration
+    okx: ExchangeConfiguration
   }
   trackedPairs: string[]
 }
@@ -42,14 +44,21 @@ const config: Config = {
     binance: {
       apiKey: process.env.BINANCE_API_KEY || '',
       apiSecret: process.env.BINANCE_API_SECRET || '',
-      maxStreamsPerConnection: yamlConfig?.exchanges?.binance?.maxStreamsPerConnection || 1024,
-      reconnectInterval: yamlConfig?.exchanges?.binance?.reconnectInterval || 5000,
+      maxStreamsPerConnection: yamlConfig?.exchanges?.binance?.maxStreamsPerConnection,
+      reconnectInterval: yamlConfig?.exchanges?.binance?.reconnectInterval,
     },
     bybit: {
       apiKey: process.env.BYBIT_API_KEY || '',
       apiSecret: process.env.BYBIT_API_SECRET || '',
-      maxStreamsPerConnection: yamlConfig?.exchanges?.bybit?.maxStreamsPerConnection || 100,
-      reconnectInterval: yamlConfig?.exchanges?.bybit?.reconnectInterval || 5000,
+      maxStreamsPerConnection: yamlConfig?.exchanges?.bybit?.maxStreamsPerConnection,
+      reconnectInterval: yamlConfig?.exchanges?.bybit?.reconnectInterval,
+    },
+    okx: {
+      apiKey: process.env.OKX_API_KEY || '',
+      apiSecret: process.env.OKX_API_SECRET || '',
+      apiPass: process.env.OKX_API_PASS || '',
+      maxStreamsPerConnection: yamlConfig?.exchanges?.okx?.maxStreamsPerConnection,
+      reconnectInterval: yamlConfig?.exchanges?.okx?.reconnectInterval,
     },
   },
   trackedPairs: yamlConfig?.trackedPairs || ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'],

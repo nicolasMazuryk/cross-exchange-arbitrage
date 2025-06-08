@@ -22,7 +22,7 @@ exchanges:
     maxStreamsPerConnection: 50 # max 60 streams per connection
     reconnectInterval: 5000
   okx:
-    maxStreamsPerConnection: 100
+    maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
     reconnectInterval: 5000
   bitget:
     maxStreamsPerConnection: 100
