@@ -3,6 +3,7 @@ import logger from '../../utils/logger'
 import config from '../../utils/config'
 import { WebsocketClient } from 'binance'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
+import { wait } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'binance'
 
@@ -23,7 +24,7 @@ export class BinanceWebSocketClient extends EventEmitter {
   async initialize(symbols: string[]): Promise<void> {
     // Group symbols into batches of MAX_STREAMS_PER_CONNECTION
     const batches = this.groupSymbolsIntoBatches(symbols)
-    
+
     for (let i = 0; i < batches.length; i++) {
       await this.createWebSocketConnection(batches[i], i)
     }
@@ -42,14 +43,14 @@ export class BinanceWebSocketClient extends EventEmitter {
     const client = new WebsocketClient({
       api_key: config.exchanges.binance.apiKey,
       api_secret: config.exchanges.binance.apiSecret,
-      wsUrl: 'wss://fstream.binance.com/ws'
+      wsUrl: 'wss://fstream.binance.com/ws',
     })
-    
+
     const batch: StreamBatch = {
       id: batchIndex,
       client,
       symbols,
-      isConnected: false
+      isConnected: false,
     }
 
     client.on('open', () => {
@@ -57,10 +58,10 @@ export class BinanceWebSocketClient extends EventEmitter {
       batch.isConnected = true
     })
 
-    client.on('close', () => {
+    client.on('close', async () => {
       logger.warn(`[${EXCHANGE_NAME}] WebSocket connection closed for batch ${batch.id}`)
       batch.isConnected = false
-      this.handleConnectionError(batch)
+      await this.handleConnectionError(batch)
     })
 
     client.on('message', (data: any) => {
@@ -70,17 +71,17 @@ export class BinanceWebSocketClient extends EventEmitter {
             type: 'snapshot',
             exchange: EXCHANGE_NAME,
             symbol: data.s,
-            bids: data.b.map(([price, quantity]: [string, string]) => ({
-              price: parseFloat(price),
-              quantity: parseFloat(quantity),
-              amount: parseFloat(price) * parseFloat(quantity)
-            })),
+            timestamp: data.E,
             asks: data.a.map(([price, quantity]: [string, string]) => ({
               price: parseFloat(price),
               quantity: parseFloat(quantity),
-              amount: parseFloat(price) * parseFloat(quantity)
+              amount: parseFloat(price) * parseFloat(quantity),
             })),
-            timestamp: data.E,
+            bids: data.b.map(([price, quantity]: [string, string]) => ({
+              price: parseFloat(price),
+              quantity: parseFloat(quantity),
+              amount: parseFloat(price) * parseFloat(quantity),
+            })),
             firstUpdateId: data.U,
             finalUpdateId: data.u,
             prevFinalUpdateId: data.pu,
@@ -92,26 +93,28 @@ export class BinanceWebSocketClient extends EventEmitter {
       }
     })
     // read response to command sent via WS stream (e.g LIST_SUBSCRIPTIONS)
-    client.on('reply', (data) => {
+    client.on('reply', data => {
       logger.info(`[${EXCHANGE_NAME}] WebSocket reply received:`, data)
     })
-    
+
     // receive notification when a ws connection is reconnecting automatically
-    client.on('reconnecting', (data) => {
-      logger.info(`[${EXCHANGE_NAME}] WebSocket automatically reconnecting for batch ${batch.id} ...`, { wsKey: data?.wsKey })
+    client.on('reconnecting', data => {
+      logger.info(`[${EXCHANGE_NAME}] WebSocket automatically reconnecting for batch ${batch.id} ...`, {
+        wsKey: data?.wsKey,
+      })
       batch.isConnected = false
     })
-    
+
     // receive notification that a reconnection completed successfully (e.g use REST to check for missing data)
-    client.on('reconnected', (data) => {
+    client.on('reconnected', data => {
       logger.info(`[${EXCHANGE_NAME}] WebSocket reconnected successfully for batch ${batch.id}`, { wsKey: data?.wsKey })
       batch.isConnected = true
     })
 
-    client.on('error', (error: any) => {
+    client.on('error', async (error: any) => {
       logger.error(`[${EXCHANGE_NAME}] WebSocket error for batch ${batch.id}:`, error)
       batch.isConnected = false
-      this.handleConnectionError(batch)
+      await this.handleConnectionError(batch)
     })
 
     // Subscribe to orderbook streams for each symbol
@@ -122,11 +125,15 @@ export class BinanceWebSocketClient extends EventEmitter {
     this.streamBatches.push(batch)
   }
 
-  private handleConnectionError(batch: StreamBatch): void {
-    setTimeout(async () => {
-      logger.info(`[${EXCHANGE_NAME}] Attempting to reconnect batch ${batch.id}...`)
+  private async handleConnectionError(batch: StreamBatch): Promise<void> {
+    logger.info(`[${EXCHANGE_NAME}] Attempting to reconnect batch ${batch.id}...`)
+    try {
+      await wait(config.exchanges.binance.reconnectInterval)
       await this.createWebSocketConnection(batch.symbols, batch.id)
-    }, config.exchanges.binance.reconnectInterval)
+    } catch (error) {
+      logger.error(`[${EXCHANGE_NAME}] Failed to reconnect batch ${batch.id}:`, error)
+      await this.handleConnectionError(batch)
+    }
   }
 
   public close(): void {

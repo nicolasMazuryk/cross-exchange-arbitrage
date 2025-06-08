@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "binance": "^2.15.21",
+    "bybit-api": "^4.1.10",
     "ccxt": "^4.4.88",
     "dotenv": "^16.4.5",
     "winston": "^3.17.0",

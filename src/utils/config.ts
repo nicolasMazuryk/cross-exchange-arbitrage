@@ -7,11 +7,7 @@ import path from 'path'
 dotenv.config()
 
 // Load YAML config
-const configPath = path.join(
-  process.cwd(),
-  'config',
-  `${process.env.NODE_ENV || 'development'}.yaml`
-)
+const configPath = path.join(process.cwd(), 'config', `${process.env.NODE_ENV || 'development'}.yaml`)
 const yamlConfig = parse(fs.readFileSync(configPath, 'utf8'))
 
 interface AppConfig {
@@ -31,6 +27,7 @@ interface Config {
   app: AppConfig
   exchanges: {
     binance: ExchangeConfig
+    bybit: ExchangeConfig
   }
   trackedPairs: string[]
 }
@@ -48,14 +45,14 @@ const config: Config = {
       maxStreamsPerConnection: yamlConfig?.exchanges?.binance?.maxStreamsPerConnection || 1024,
       reconnectInterval: yamlConfig?.exchanges?.binance?.reconnectInterval || 5000,
     },
+    bybit: {
+      apiKey: process.env.BYBIT_API_KEY || '',
+      apiSecret: process.env.BYBIT_API_SECRET || '',
+      maxStreamsPerConnection: yamlConfig?.exchanges?.bybit?.maxStreamsPerConnection || 100,
+      reconnectInterval: yamlConfig?.exchanges?.bybit?.reconnectInterval || 5000,
+    },
   },
-  trackedPairs: yamlConfig?.trackedPairs || [
-    'BTCUSDT',
-    'ETHUSDT',
-    'BNBUSDT',
-    'ADAUSDT',
-    'DOGEUSDT',
-  ],
+  trackedPairs: yamlConfig?.trackedPairs || ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'],
 }
 
 export default config

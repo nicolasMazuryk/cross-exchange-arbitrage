@@ -16,16 +16,16 @@ const logger = winston.createLogger({
         winston.format.printf(({ timestamp, level, message, ...meta }) => {
           return `${timestamp} ${level}: ${message} ${Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''}`
         })
-      )
+      ),
     }),
     new winston.transports.File({
       filename: path.join('logs', 'error.log'),
-      level: 'error'
+      level: 'error',
     }),
     new winston.transports.File({
-      filename: path.join('logs', 'combined.log')
-    })
-  ]
+      filename: path.join('logs', 'combined.log'),
+    }),
+  ],
 })
 
 export default logger

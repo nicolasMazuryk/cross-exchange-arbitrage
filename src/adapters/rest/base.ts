@@ -1,4 +1,4 @@
-import ccxt, { Exchange, Market, Order, Balances, binance, Dictionary } from 'ccxt'
+import ccxt, { Exchange, Market, Order, Balances, Dictionary } from 'ccxt'
 import { ExchangeConfig, ExchangeInterface } from './types'
 import logger from '../../utils/logger'
 
@@ -12,7 +12,7 @@ export abstract class BaseExchange implements ExchangeInterface {
     this.exchange = new (ccxt as any)[exchangeId]({
       apiKey: config.apiKey,
       secret: config.apiSecret,
-      options: config.options
+      options: config.options || {},
     })
   }
 
@@ -27,14 +27,43 @@ export abstract class BaseExchange implements ExchangeInterface {
 
   async getUSDTPerpetualSymbols(): Promise<string[]> {
     try {
+      // const markets = Object.values(this.exchange.markets)
+
+      // logger.info(`Found ${markets.length} markets`)
+
+      // const USDTmarkets = Object.values(this.exchange.markets)
+      // .filter(
+      //   market =>
+      //     market.quote === 'USDT'
+      // )
+
+      // logger.info(`Found ${USDTmarkets.length} markets`)
+
+      // const Swapmarkets = Object.values(this.exchange.markets)
+      // .filter(
+      //   market =>
+      //     market.quote === 'USDT' && market.swap
+      // )
+
+      // logger.info(`Found ${Swapmarkets.length} markets`)
+
+      // const notInverseMarkets = Object.values(this.exchange.markets)
+      // .filter(
+      //   market =>
+      //     market.quote === 'USDT' && market.swap && !market.inverse
+      // )
+
+      // logger.info(`Found ${notInverseMarkets.length} markets`)
+
       const usdtPairs = Object.values(this.exchange.markets)
-        .filter((market) => 
-          market.quote === 'USDT' && // TODO: add USDC
-          market.swap && 
-          !market.inverse && 
-          market.active
+        .filter(
+          market =>
+            market.quote === 'USDT' && // TODO: add USDC
+            market.swap && // TODO: add SPOT markets
+            !market.inverse &&
+            market.active
         )
-        .map((market) => market.id)
+        .map(market => market.id)
         .slice(-2)
 
       logger.info(`Found ${usdtPairs.length} USDT perpetual futures pairs`)
@@ -47,7 +76,7 @@ export abstract class BaseExchange implements ExchangeInterface {
 
   async createOrder(symbol: string, type: string, side: string, amount: number, price?: number): Promise<Order> {
     try {
-      return await this.exchange.createOrder(symbol, type, side, amount, price) as Order
+      return (await this.exchange.createOrder(symbol, type, side, amount, price)) as Order
     } catch (error) {
       logger.error(`Error creating order for ${symbol} on ${this.exchangeId}:`, error)
       throw error
@@ -56,7 +85,7 @@ export abstract class BaseExchange implements ExchangeInterface {
 
   async cancelOrder(id: string, symbol: string): Promise<Order> {
     try {
-      return await this.exchange.cancelOrder(id, symbol) as Order
+      return (await this.exchange.cancelOrder(id, symbol)) as Order
     } catch (error) {
       logger.error(`Error canceling order ${id} for ${symbol} on ${this.exchangeId}:`, error)
       throw error

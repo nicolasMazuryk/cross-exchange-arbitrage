@@ -1,8 +1,10 @@
 import config from './utils/config'
 import logger from './utils/logger'
 import { BinanceWebSocketClient } from './adapters/websocket/binance'
+import { BybitWebSocketClient } from './adapters/websocket/bybit'
 import { OrderbookManager } from './core/orderbook/orderbookManager'
 import { BinanceExchange } from './adapters/rest'
+import { BybitExchange } from './adapters/rest'
 
 async function main() {
   try {
@@ -10,27 +12,43 @@ async function main() {
       environment: config.app.environment,
     })
 
-    // Initialize Binance exchange
+    // Initialize exchanges
     const binance = new BinanceExchange({
       apiKey: config.exchanges.binance.apiKey,
-      apiSecret: config.exchanges.binance.apiSecret
+      apiSecret: config.exchanges.binance.apiSecret,
     })
 
-    await binance.loadMarkets()
+    // const bybit = new BybitExchange({
+    //   apiKey: config.exchanges.bybit.apiKey,
+    //   apiSecret: config.exchanges.bybit.apiSecret
+    // })
+
+    await Promise.all([
+      binance.loadMarkets(),
+      // bybit.loadMarkets()
+    ])
 
     // Fetch all USDT perpetual pairs
-    const pairs = await binance.getUSDTPerpetualSymbols()
+    const [binancePairs] = await Promise.all([
+      binance.getUSDTPerpetualSymbols(),
+      // bybit.getUSDTPerpetualSymbols()
+    ])
 
     // Initialize orderbook manager
     const orderbookManager = new OrderbookManager()
 
-    // Initialize WebSocket client
-    const wsClient = new BinanceWebSocketClient()
+    // Initialize WebSocket clients
+    const binanceWs = new BinanceWebSocketClient()
+    // const bybitWs = new BybitWebSocketClient()
 
     // Connect WebSocket updates to orderbook manager
-    wsClient.on('orderbookUpdate', update => {
+    binanceWs.on('orderbookUpdate', update => {
       orderbookManager.updateOrderbook(update)
     })
+
+    // bybitWs.on('orderbookUpdate', update => {
+    //   orderbookManager.updateOrderbook(update)
+    // })
 
     // TODO: Initialize exchange adapters
     // TODO: Initialize orderbook manager
@@ -39,12 +57,16 @@ async function main() {
     // TODO: Initialize trade monitor
 
     // Initialize WebSocket connections
-    await wsClient.initialize(pairs)
+    await Promise.all([
+      binanceWs.initialize(binancePairs),
+      // bybitWs.initialize(bybitPairs)
+    ])
 
     // Handle graceful shutdown
     process.on('SIGINT', () => {
       logger.info('Shutting down...')
-      wsClient.close()
+      binanceWs.close()
+      // bybitWs.close()
       process.exit(0)
     })
 

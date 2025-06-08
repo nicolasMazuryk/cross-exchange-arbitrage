@@ -18,6 +18,18 @@ exchanges:
   binance:
     maxStreamsPerConnection: 1000 # max 1024 streams per connection
     reconnectInterval: 5000
+  bybit:
+    maxStreamsPerConnection: 50 # max 60 streams per connection
+    reconnectInterval: 5000
+  okx:
+    maxStreamsPerConnection: 100
+    reconnectInterval: 5000
+  bitget:
+    maxStreamsPerConnection: 100
+    reconnectInterval: 5000
+  gateio:
+    maxStreamsPerConnection: 100
+    reconnectInterval: 5000
 
 trackedPairs:
   - BTCUSDT
