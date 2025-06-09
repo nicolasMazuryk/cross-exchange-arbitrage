@@ -1,147 +1,104 @@
-import { EventEmitter } from 'events'
-import logger from '../../utils/logger'
-import config from '../../utils/config'
 import { WebsocketClient } from 'binance'
+import { BaseWebSocketClient } from './base'
+import { WebSocketConfig, WebSocketMessageParser, StreamBatch } from './types'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
-import { wait } from '../../utils/utils'
+import logger from '../../utils/logger'
 
 const EXCHANGE_NAME = 'binance'
 
-interface StreamBatch {
-  id: number
-  client: WebsocketClient
-  symbols: string[]
-  isConnected: boolean
+class BinanceMessageParser implements WebSocketMessageParser {
+  isOrderBookMessage(data: any): boolean {
+    return data.e === 'depthUpdate'
+  }
+
+  parseOrderBookUpdate(data: any): OrderBookUpdate {
+    return {
+      type: 'snapshot',
+      exchange: EXCHANGE_NAME,
+      symbol: data.s,
+      timestamp: data.E,
+      asks: data.a.map(([price, quantity]: [string, string]) => ({
+        price: parseFloat(price),
+        quantity: parseFloat(quantity),
+        amount: parseFloat(price) * parseFloat(quantity),
+      })),
+      bids: data.b.map(([price, quantity]: [string, string]) => ({
+        price: parseFloat(price),
+        quantity: parseFloat(quantity),
+        amount: parseFloat(price) * parseFloat(quantity),
+      })),
+      firstUpdateId: data.U,
+      finalUpdateId: data.u,
+      prevFinalUpdateId: data.pu,
+    }
+  }
 }
 
-export class BinanceWebSocketClient extends EventEmitter {
-  private streamBatches: StreamBatch[] = []
+export class BinanceWebSocketClient extends BaseWebSocketClient {
+  protected readonly exchangeName = EXCHANGE_NAME
+  protected readonly messageParser = new BinanceMessageParser()
 
-  constructor() {
-    super()
+  constructor(config: WebSocketConfig) {
+    super(config)
   }
 
-  async initialize(symbols: string[]): Promise<void> {
-    // Group symbols into batches of MAX_STREAMS_PER_CONNECTION
-    const batches = this.groupSymbolsIntoBatches(symbols)
-
-    for (let i = 0; i < batches.length; i++) {
-      await this.createWebSocketConnection(batches[i], i)
-    }
-  }
-
-  private groupSymbolsIntoBatches(symbols: string[]): string[][] {
-    const maxStreams = config.exchanges.binance.maxStreamsPerConnection
-    const batches: string[][] = []
-    for (let i = 0; i < symbols.length; i += maxStreams) {
-      batches.push(symbols.slice(i, i + maxStreams))
-    }
-    return batches
-  }
-
-  private async createWebSocketConnection(symbols: string[], batchIndex: number): Promise<void> {
-    const client = new WebsocketClient({
-      api_key: config.exchanges.binance.apiKey,
-      api_secret: config.exchanges.binance.apiSecret,
-      wsUrl: 'wss://fstream.binance.com/ws',
+  protected createClient(): WebsocketClient {
+    return new WebsocketClient({
+      api_key: this.config.apiKey,
+      api_secret: this.config.apiSecret,
+      wsUrl: this.config.wsUrl || 'wss://fstream.binance.com/ws',
     })
+  }
 
-    const batch: StreamBatch = {
-      id: batchIndex,
-      client,
-      symbols,
-      isConnected: false,
-    }
-
-    client.on('open', () => {
-      logger.info(`[${EXCHANGE_NAME}] WebSocket connection opened for batch ${batch.id} with ${symbols.length} symbols`)
+  protected setupEventHandlers(batch: StreamBatch): void {
+    batch.client.on('open', () => {
+      logger.info(`[${this.exchangeName}] WebSocket connection opened for batch ${batch.id} with ${batch.symbols.length} symbols`)
       batch.isConnected = true
     })
 
-    client.on('close', async () => {
-      logger.warn(`[${EXCHANGE_NAME}] WebSocket connection closed for batch ${batch.id}`)
+    batch.client.on('close', async () => {
+      logger.warn(`[${this.exchangeName}] WebSocket connection closed for batch ${batch.id}`)
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
-    client.on('message', (data: any) => {
-      try {
-        if (data.e === 'depthUpdate') {
-          const update: OrderBookUpdate = {
-            type: 'snapshot',
-            exchange: EXCHANGE_NAME,
-            symbol: data.s,
-            timestamp: data.E,
-            asks: data.a.map(([price, quantity]: [string, string]) => ({
-              price: parseFloat(price),
-              quantity: parseFloat(quantity),
-              amount: parseFloat(price) * parseFloat(quantity),
-            })),
-            bids: data.b.map(([price, quantity]: [string, string]) => ({
-              price: parseFloat(price),
-              quantity: parseFloat(quantity),
-              amount: parseFloat(price) * parseFloat(quantity),
-            })),
-            firstUpdateId: data.U,
-            finalUpdateId: data.u,
-            prevFinalUpdateId: data.pu,
-          }
-          this.emit('orderbookUpdate', update)
-        }
-      } catch (error) {
-        logger.error(`[${EXCHANGE_NAME}] Error parsing WebSocket message for batch ${batch.id}:`, error)
-      }
-    })
-    // read response to command sent via WS stream (e.g LIST_SUBSCRIPTIONS)
-    client.on('reply', data => {
-      logger.info(`[${EXCHANGE_NAME}] WebSocket reply received:`, data)
+    batch.client.on('reply', (data: any) => {
+      logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
     })
 
-    // receive notification when a ws connection is reconnecting automatically
-    client.on('reconnecting', data => {
-      logger.info(`[${EXCHANGE_NAME}] WebSocket automatically reconnecting for batch ${batch.id} ...`, {
+    batch.client.on('reconnecting', (data: any) => {
+      logger.info(`[${this.exchangeName}] WebSocket automatically reconnecting for batch ${batch.id} ...`, {
         wsKey: data?.wsKey,
       })
       batch.isConnected = false
     })
 
-    // receive notification that a reconnection completed successfully (e.g use REST to check for missing data)
-    client.on('reconnected', data => {
-      logger.info(`[${EXCHANGE_NAME}] WebSocket reconnected successfully for batch ${batch.id}`, { wsKey: data?.wsKey })
+    batch.client.on('reconnected', (data: any) => {
+      logger.info(`[${this.exchangeName}] WebSocket reconnected successfully for batch ${batch.id}`, { wsKey: data?.wsKey })
       batch.isConnected = true
     })
 
-    client.on('error', async (error: any) => {
-      logger.error(`[${EXCHANGE_NAME}] WebSocket error for batch ${batch.id}:`, error)
+    batch.client.on('error', async (error: any) => {
+      logger.error(`[${this.exchangeName}] WebSocket error for batch ${batch.id}:`, error)
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
-    // Subscribe to orderbook streams for each symbol
-    for (const symbol of symbols) {
-      client.subscribePartialBookDepths(symbol, 5, 100, 'usdm')
-    }
-
-    this.streamBatches.push(batch)
-  }
-
-  private async handleConnectionError(batch: StreamBatch): Promise<void> {
-    logger.info(`[${EXCHANGE_NAME}] Attempting to reconnect batch ${batch.id}...`)
-    try {
-      await wait(config.exchanges.binance.reconnectInterval)
-      await this.createWebSocketConnection(batch.symbols, batch.id)
-    } catch (error) {
-      logger.error(`[${EXCHANGE_NAME}] Failed to reconnect batch ${batch.id}:`, error)
-      await this.handleConnectionError(batch)
-    }
-  }
-
-  public close(): void {
-    this.streamBatches.forEach(batch => {
-      batch.client.closeAll()
-      batch.isConnected = false
-      logger.info(`[${EXCHANGE_NAME}] Closed WebSocket connection for batch ${batch.id}`)
+    batch.client.on('message', (data: any) => {
+      try {
+        if (this.messageParser.isOrderBookMessage(data)) {
+          const update = this.messageParser.parseOrderBookUpdate(data)
+          this.emit('orderbookUpdate', update)
+        }
+      } catch (error) {
+        logger.error(`[${this.exchangeName}] Error parsing WebSocket message for batch ${batch.id}:`, error)
+      }
     })
-    this.streamBatches = []
+  }
+
+  protected async subscribeToSymbols(batch: StreamBatch): Promise<void> {
+    for (const symbol of batch.symbols) {
+      batch.client.subscribePartialBookDepths(symbol, 5, 100, 'usdm')
+    }
   }
 }

@@ -15,15 +15,15 @@ async function main() {
     })
 
     // Initialize exchanges
-    // const binance = new BinanceExchange({
-    //   apiKey: config.exchanges.binance.apiKey,
-    //   apiSecret: config.exchanges.binance.apiSecret,
-    // })
+    const binance = new BinanceExchange({
+      apiKey: config.exchanges.binance.apiKey,
+      apiSecret: config.exchanges.binance.apiSecret,
+    })
 
-    // const bybit = new BybitExchange({
-    //   apiKey: config.exchanges.bybit.apiKey,
-    //   apiSecret: config.exchanges.bybit.apiSecret,
-    // })
+    const bybit = new BybitExchange({
+      apiKey: config.exchanges.bybit.apiKey,
+      apiSecret: config.exchanges.bybit.apiSecret,
+    })
 
     const okx = new OkxExchange({
       apiKey: config.exchanges.okx.apiKey,
@@ -32,15 +32,15 @@ async function main() {
     })
 
     await Promise.all([
-      // binance.loadMarkets(),
-      // bybit.loadMarkets(),
+      binance.loadMarkets(),
+      bybit.loadMarkets(),
       okx.loadMarkets(),
     ])
 
     // Fetch all USDT perpetual pairs
-    const [okxPairs] = await Promise.all([
-      // binance.getUSDTPerpetualSymbols(),
-      // bybit.getUSDTPerpetualSymbols(),
+    const [binancePairs, bybitPairs, okxPairs] = await Promise.all([
+      binance.getUSDTPerpetualSymbols(),
+      bybit.getUSDTPerpetualSymbols(),
       okx.getUSDTPerpetualSymbols(),
     ])
 
@@ -48,18 +48,34 @@ async function main() {
     const orderbookManager = new OrderbookManager()
 
     // Initialize WebSocket clients
-    // const binanceWs = new BinanceWebSocketClient()
-    // const bybitWs = new BybitWebSocketClient()
-    const okxWs = new OkxWebSocketClient()
+    const binanceWs = new BinanceWebSocketClient({
+      apiKey: config.exchanges.binance.apiKey,
+      apiSecret: config.exchanges.binance.apiSecret,
+      maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
+      reconnectInterval: config.exchanges.binance.reconnectInterval,
+    })
+    const bybitWs = new BybitWebSocketClient({
+      apiKey: config.exchanges.bybit.apiKey,
+      apiSecret: config.exchanges.bybit.apiSecret,
+      maxStreamsPerConnection: config.exchanges.bybit.maxStreamsPerConnection,
+      reconnectInterval: config.exchanges.bybit.reconnectInterval,
+    })
+    const okxWs = new OkxWebSocketClient({
+      apiKey: config.exchanges.okx.apiKey,
+      apiSecret: config.exchanges.okx.apiSecret,
+      apiPass: config.exchanges.okx.apiPass,
+      maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
+      reconnectInterval: config.exchanges.okx.reconnectInterval,
+    })
 
     // Connect WebSocket updates to orderbook manager
-    // binanceWs.on('orderbookUpdate', update => {
-    //   orderbookManager.updateOrderbook(update)
-    // })
+    binanceWs.on('orderbookUpdate', update => {
+      orderbookManager.updateOrderbook(update)
+    })
 
-    // bybitWs.on('orderbookUpdate', update => {
-    //   orderbookManager.updateOrderbook(update)
-    // })
+    bybitWs.on('orderbookUpdate', update => {
+      orderbookManager.updateOrderbook(update)
+    })
 
     okxWs.on('orderbookUpdate', update => {
       orderbookManager.updateOrderbook(update)
@@ -73,8 +89,8 @@ async function main() {
 
     // Initialize WebSocket connections
     await Promise.all([
-      // binanceWs.initialize(binancePairs),
-      // bybitWs.initialize(bybitPairs),
+      binanceWs.initialize(binancePairs),
+      bybitWs.initialize(bybitPairs),
       okxWs.initialize(okxPairs),
     ])
 
@@ -82,8 +98,8 @@ async function main() {
     process.on('SIGINT', () => {
       logger.info('Shutting down...')
       
-      // binanceWs.close()
-      // bybitWs.close()
+      binanceWs.close()
+      bybitWs.close()
       okxWs.close()
       
       process.exit(0)
