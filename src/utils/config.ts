@@ -16,12 +16,32 @@ interface AppConfig {
   logLevel: string
 }
 
+interface FeeConfig {
+  maker: number
+  taker: number
+}
+
 interface ExchangeConfiguration {
   apiKey: string
   apiSecret: string
   apiPass?: string
   maxStreamsPerConnection: number
   reconnectInterval: number
+  fees: FeeConfig
+}
+
+interface ArbitrageConfig {
+  blacklistPairs: string[]
+  minConfidenceScore: number
+  maxMarketSpread: number
+  maxCrossMarketSpread: number
+  maxOrderbookAge: number
+  minProfitThreshold: number
+  orderAmountTolerance: number
+}
+
+interface TradingConfig {
+  orderAmount: number
 }
 
 interface Config {
@@ -32,13 +52,15 @@ interface Config {
     okx: ExchangeConfiguration
   }
   trackedPairs: string[]
+  arbitrage: ArbitrageConfig
+  trading: TradingConfig
 }
 
 const config: Config = {
   app: {
     environment: process.env.NODE_ENV || 'development',
-    version: process.env.APP_VERSION || '1.0.0',
-    logLevel: process.env.LOG_LEVEL || 'info',
+    version: process.env.APP_VERSION || '0.0.0',
+    logLevel: process.env.LOG_LEVEL || 'debug',
   },
   exchanges: {
     binance: {
@@ -46,12 +68,20 @@ const config: Config = {
       apiSecret: process.env.BINANCE_API_SECRET || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.binance?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.binance?.reconnectInterval,
+      fees: {
+        maker: yamlConfig?.exchanges?.binance?.fees?.maker,
+        taker: yamlConfig?.exchanges?.binance?.fees?.taker
+      }
     },
     bybit: {
       apiKey: process.env.BYBIT_API_KEY || '',
       apiSecret: process.env.BYBIT_API_SECRET || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.bybit?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.bybit?.reconnectInterval,
+      fees: {
+        maker: yamlConfig?.exchanges?.bybit?.fees?.maker,
+        taker: yamlConfig?.exchanges?.bybit?.fees?.taker
+      }
     },
     okx: {
       apiKey: process.env.OKX_API_KEY || '',
@@ -59,9 +89,25 @@ const config: Config = {
       apiPass: process.env.OKX_API_PASS || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.okx?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.okx?.reconnectInterval,
+      fees: {
+        maker: yamlConfig?.exchanges?.okx?.fees?.maker,
+        taker: yamlConfig?.exchanges?.okx?.fees?.taker
+      }
     },
   },
   trackedPairs: yamlConfig?.trackedPairs || ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'],
+  arbitrage: {
+    blacklistPairs: yamlConfig?.arbitrage?.blacklistPairs || [],
+    minConfidenceScore: yamlConfig?.arbitrage?.minConfidenceScore,
+    maxMarketSpread: yamlConfig?.arbitrage?.maxMarketSpread,
+    maxCrossMarketSpread: yamlConfig?.arbitrage?.maxCrossMarketSpread,
+    maxOrderbookAge: yamlConfig?.arbitrage?.maxOrderbookAge,
+    minProfitThreshold: yamlConfig?.arbitrage?.minProfitThreshold,
+    orderAmountTolerance: yamlConfig?.arbitrage?.orderAmountTolerance
+  },
+  trading: {
+    orderAmount: yamlConfig?.trading?.orderAmount
+  }
 }
 
 export default config

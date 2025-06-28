@@ -1,18 +1,23 @@
 import { EventEmitter } from 'events'
+import { Dictionary, Market } from 'ccxt'
 import { WebSocketClientInterface, WebSocketConfig, StreamBatch, WebSocketMessageParser } from './types'
 import logger from '../../utils/logger'
 import { wait } from '../../utils/utils'
 
 export abstract class BaseWebSocketClient extends EventEmitter implements WebSocketClientInterface {
-  protected streamBatches: StreamBatch[] = []
   protected abstract readonly exchangeName: string
   protected abstract readonly messageParser: WebSocketMessageParser
+  protected markets: Dictionary<Market> = {}
+  protected streamBatches: StreamBatch[] = []
 
   constructor(protected readonly config: WebSocketConfig) {
     super()
   }
 
-  public async initialize(symbols: string[]): Promise<void> {
+  public async initialize(markets: Dictionary<Market>): Promise<void> {
+    this.markets = markets
+    const symbols = Object.values(this.markets).map(market => market!.id) as string[]
+    
     const batches = this.groupSymbolsIntoBatches(symbols)
     for (let i = 0; i < batches.length; i++) {
       await this.createWebSocketConnection(batches[i], i)
@@ -61,6 +66,11 @@ export abstract class BaseWebSocketClient extends EventEmitter implements WebSoc
       logger.info(`[${this.exchangeName}] Closed WebSocket connection for batch ${batch.id}`)
     })
     this.streamBatches = []
+  }
+
+  protected getUnifiedSymbol(marketId: string): string {
+    const market = Object.values(this.markets).find(market => market!.id === marketId)
+    return market!.symbol
   }
 
   // Abstract methods to be implemented by exchange-specific clients

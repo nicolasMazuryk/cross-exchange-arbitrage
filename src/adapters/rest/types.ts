@@ -10,7 +10,7 @@ export interface ExchangeConfig {
 export interface ExchangeInterface {
   // Market data
   loadMarkets(): Promise<Dictionary<Market>>
-  getUSDTPerpetualSymbols(): Promise<string[]>
+  getTradingMarkets(): Promise<Dictionary<Market>>
 
   // Trading
   createOrder(symbol: string, type: string, side: string, amount: number, price?: number): Promise<Order>

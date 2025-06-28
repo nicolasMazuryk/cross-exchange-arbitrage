@@ -29,6 +29,8 @@ export interface OrderBook {
 }
 
 export interface TopOfBook {
+  exchange: string
+  symbol: string
   bestBid: OrderBookLevel
   bestAsk: OrderBookLevel
   spread: number
@@ -74,6 +76,8 @@ export class OrderbookManager extends EventEmitter {
       const spread = ((bestAsk.price - bestBid.price) / bestBid.price) * 100
 
       const newTopOfBook: TopOfBook = {
+        exchange,
+        symbol,
         bestBid,
         bestAsk,
         spread,

@@ -7,6 +7,8 @@ import logger from '../../utils/logger'
 const EXCHANGE_NAME = 'binance'
 
 class BinanceMessageParser implements WebSocketMessageParser {
+  constructor(private getUnifiedSymbol: (marketId: string) => string) {}
+
   isOrderBookMessage(data: any): boolean {
     return data.e === 'depthUpdate'
   }
@@ -15,7 +17,7 @@ class BinanceMessageParser implements WebSocketMessageParser {
     return {
       type: 'snapshot',
       exchange: EXCHANGE_NAME,
-      symbol: data.s,
+      symbol: this.getUnifiedSymbol(data.s),
       timestamp: data.E,
       asks: data.a.map(([price, quantity]: [string, string]) => ({
         price: parseFloat(price),
@@ -36,10 +38,11 @@ class BinanceMessageParser implements WebSocketMessageParser {
 
 export class BinanceWebSocketClient extends BaseWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
-  protected readonly messageParser = new BinanceMessageParser()
+  protected readonly messageParser: BinanceMessageParser
 
   constructor(config: WebSocketConfig) {
     super(config)
+    this.messageParser = new BinanceMessageParser(this.getUnifiedSymbol.bind(this))
   }
 
   protected createClient(): WebsocketClient {

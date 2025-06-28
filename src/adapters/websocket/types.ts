@@ -1,3 +1,4 @@
+import { Dictionary, Market } from 'ccxt'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 
 export interface WebSocketConfig {
@@ -18,7 +19,7 @@ export interface StreamBatch {
 }
 
 export interface WebSocketClientInterface {
-  initialize(symbols: string[]): Promise<void>
+  initialize(markets: Dictionary<Market>): Promise<void>
   close(): void
   on(event: string, listener: (...args: any[]) => void): this
   emit(event: string, ...args: any[]): boolean

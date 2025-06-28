@@ -7,6 +7,8 @@ import logger from '../../utils/logger'
 const EXCHANGE_NAME = 'okx'
 
 class OkxMessageParser implements WebSocketMessageParser {
+  constructor(private getUnifiedSymbol: (marketId: string) => string) {}
+
   isOrderBookMessage(data: any): boolean {
     return data.arg?.channel === 'books5'
   }
@@ -15,7 +17,7 @@ class OkxMessageParser implements WebSocketMessageParser {
     return {
       type: 'snapshot',
       exchange: EXCHANGE_NAME,
-      symbol: data.arg.instId,
+      symbol: this.getUnifiedSymbol(data.arg.instId),
       timestamp: +data.data[0].ts,
       asks: data.data[0].asks.map(([price, quantity]: [string, string]) => ({
         price: parseFloat(price),
@@ -35,10 +37,11 @@ class OkxMessageParser implements WebSocketMessageParser {
 
 export class OkxWebSocketClient extends BaseWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
-  protected readonly messageParser = new OkxMessageParser()
+  protected readonly messageParser: OkxMessageParser
 
   constructor(config: WebSocketConfig) {
     super(config)
+    this.messageParser = new OkxMessageParser(this.getUnifiedSymbol.bind(this))
   }
 
   protected createClient(): WebsocketClient {

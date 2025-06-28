@@ -18,18 +18,33 @@ exchanges:
   binance:
     maxStreamsPerConnection: 1000 # max 1024 streams per connection
     reconnectInterval: 5000
+    fees:
+      maker: 0.0002 # 0.02%
+      taker: 0.0005 # 0.05%
   bybit:
     maxStreamsPerConnection: 50 # max 60 streams per connection
     reconnectInterval: 5000
+    fees:
+      maker: 0.0002 # 0.02%
+      taker: 0.00055 # 0.055%
   okx:
     maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
     reconnectInterval: 5000
+    fees:
+      maker: 0.0002 # 0.02%
+      taker: 0.0005 # 0.05%
   bitget:
     maxStreamsPerConnection: 100
     reconnectInterval: 5000
+    fees:
+      maker: 0.0002 # 0.02%
+      taker: 0.0006 # 0.06%
   gateio:
     maxStreamsPerConnection: 100
     reconnectInterval: 5000
+    fees:
+      maker: 0.0002 # 0.02%
+      taker: 0.0005 # 0.05%
 
 trackedPairs:
   - BTCUSDT
@@ -39,7 +54,13 @@ trackedPairs:
   - DOGEUSDT
 
 trading:
-  maxPositionAmount: 20  # in USDT
+  orderAmount: 1000  # in USDT, default order size for arbitrage opportunities
+
+arbitrage:
+  blacklistPairs: []  # pairs to exclude from arbitrage
+  minConfidenceScore: 0.7  # minimum confidence score for opportunities
+  maxMarketSpread: 0.003  # maximum market spread width within an exchange (0.3%)
+  maxCrossMarketSpread: 0.03  # maximum cross-market spread between exchanges (3%)
+  maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
   minProfitThreshold: 0.002  # 0.2%
-  maxSlippage: 0.002  # 0.2%
-  executionTimeout: 5000  # ms
+  orderAmountTolerance: 0.90  # minimum order amount tolerance (90% of order amount)

@@ -26,49 +26,55 @@ export abstract class BaseExchange implements ExchangeInterface {
     }
   }
 
-  async getUSDTPerpetualSymbols(): Promise<string[]> {
+  async getTradingMarkets(): Promise<Dictionary<Market>> {
     try {
-    //   const markets = Object.values(this.exchange.markets)
+      // const markets = Object.values(this.exchange.markets)
 
-    //   logger.info(`Found ${markets.length} markets`)
+      // logger.info(`Found ${markets.length} markets`)
 
-    //   const USDTmarkets = Object.values(this.exchange.markets)
-    //   .filter(
-    //     market =>
-    //       market.quote === 'USDT'
-    //   )
+      // const USDTmarkets = Object.values(this.exchange.markets)
+      // .filter(
+      //   market =>
+      //     market.quote === 'USDT'
+      // )
 
-    //   logger.info(`Found ${USDTmarkets.length} markets`)
+      // logger.info(`Found ${USDTmarkets.length} markets`)
 
-    //   const Swapmarkets = Object.values(this.exchange.markets)
-    //   .filter(
-    //     market =>
-    //       market.quote === 'USDT' && market.swap
-    //   )
+      // const Swapmarkets = Object.values(this.exchange.markets)
+      // .filter(
+      //   market =>
+      //     market.quote === 'USDT' && market.swap
+      // )
 
-    //   logger.info(`Found ${Swapmarkets.length} markets`)
+      // logger.info(`Found ${Swapmarkets.length} markets`)
 
-    //   const notInverseMarkets = Object.values(this.exchange.markets)
-    //   .filter(
-    //     market =>
-    //       market.quote === 'USDT' && market.swap && !market.inverse
-    //   )
+      // const notInverseMarkets = Object.values(this.exchange.markets)
+      // .filter(
+      //   market =>
+      //     market.quote === 'USDT' && market.swap && !market.inverse
+      // )
 
-    //   logger.info(`Found ${notInverseMarkets.length} markets`)
+      // logger.info(`Found ${notInverseMarkets.length} markets`)
 
-      const usdtPairs = Object.values(this.exchange.markets)
-        .filter(
-          market =>
+      const usdtPerpetualMarkets = Object.fromEntries(
+        Object.entries(this.exchange.markets)
+          .filter(([symbol, market]) =>
             market.quote === 'USDT' && // TODO: add USDC
             market.swap && // TODO: add SPOT markets
             !market.inverse &&
             market.active
-        )
-        .map(market => market.id)
-        .slice(-2)
+          )
+          // .filter(([symbol, market]) => 
+          //   symbol.startsWith('SAHARA') || 
+          //   // symbol.startsWith('SOL') || 
+          //   // symbol.startsWith('GOAT') || 
+          //   // symbol.startsWith('DOGS') ||
+          //   symbol.startsWith('PENGU')
+          // )
+      )
 
-      logger.info(`Found ${usdtPairs.length} USDT perpetual futures pairs`)
-      return usdtPairs
+      logger.info(`[${this.exchangeId}] Found ${Object.keys(usdtPerpetualMarkets).length} USDT perpetual futures markets`)
+      return usdtPerpetualMarkets
     } catch (error) {
       logger.error('Error fetching USDT perpetual pairs:', error)
       throw error

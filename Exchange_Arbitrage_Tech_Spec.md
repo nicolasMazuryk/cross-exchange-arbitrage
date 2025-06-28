@@ -50,8 +50,8 @@ This document details the technical implementation of the exchange-arbitrage hig
 - Rate limit-aware request scheduler
 
 **Structure:**
-- `src/adapters/{exchangeName}/websocket.ts`
-- `src/adapters/{exchangeName}/restClient.ts`
+- `src/adapters/websocket/{exchangeName}.ts`
+- `src/adapters/rest/{exchangeName}.ts`
 
 **Interfaces:**
 ```ts

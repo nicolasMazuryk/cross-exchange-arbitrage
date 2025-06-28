@@ -4,6 +4,7 @@ import { BinanceWebSocketClient } from './adapters/websocket/binance'
 import { BybitWebSocketClient } from './adapters/websocket/bybit'
 import { OkxWebSocketClient } from './adapters/websocket/okx'
 import { OrderbookManager } from './core/orderbook/orderbookManager'
+import { ArbitrageEngine } from './core/arbitrage/arbitrageEngine'
 import { BinanceExchange } from './adapters/rest'
 import { BybitExchange } from './adapters/rest'
 import { OkxExchange } from './adapters/rest'
@@ -38,14 +39,55 @@ async function main() {
     ])
 
     // Fetch all USDT perpetual pairs
-    const [binancePairs, bybitPairs, okxPairs] = await Promise.all([
-      binance.getUSDTPerpetualSymbols(),
-      bybit.getUSDTPerpetualSymbols(),
-      okx.getUSDTPerpetualSymbols(),
+    const [binanceMarkets, bybitMarkets, okxMarkets] = await Promise.all([
+      binance.getTradingMarkets(),
+      bybit.getTradingMarkets(),
+      okx.getTradingMarkets(),
     ])
 
     // Initialize orderbook manager
     const orderbookManager = new OrderbookManager()
+
+    // Initialize arbitrage engine
+    const exchangeConfigs = [
+      {
+        name: 'binance',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.binance.fees.maker,
+          taker: config.exchanges.binance.fees.taker
+        }
+      },
+      {
+        name: 'bybit',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.bybit.fees.maker,
+          taker: config.exchanges.bybit.fees.taker
+        }
+      },
+      {
+        name: 'okx',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.okx.fees.maker,
+          taker: config.exchanges.okx.fees.taker
+        }
+      }
+    ]
+
+    const blacklistPairs = config.arbitrage.blacklistPairs || []
+    const arbitrageEngine = new ArbitrageEngine(
+      orderbookManager,
+      blacklistPairs,
+      exchangeConfigs
+    )
+
+    // Listen for arbitrage opportunities
+    arbitrageEngine.on('opportunities', (opportunities) => {
+      // logger.info('Found arbitrage opportunities:', opportunities)
+      // TODO: Pass opportunities to trade execution engine
+    })
 
     // Initialize WebSocket clients
     const binanceWs = new BinanceWebSocketClient({
@@ -89,9 +131,9 @@ async function main() {
 
     // Initialize WebSocket connections
     await Promise.all([
-      binanceWs.initialize(binancePairs),
-      bybitWs.initialize(bybitPairs),
-      okxWs.initialize(okxPairs),
+      binanceWs.initialize(binanceMarkets),
+      bybitWs.initialize(bybitMarkets),
+      okxWs.initialize(okxMarkets),
     ])
 
     // Handle graceful shutdown

@@ -7,6 +7,8 @@ import logger from '../../utils/logger'
 const EXCHANGE_NAME = 'bybit'
 
 class BybitMessageParser implements WebSocketMessageParser {
+  constructor(private getUnifiedSymbol: (marketId: string) => string) {}
+
   isOrderBookMessage(data: any): boolean {
     return data.topic?.startsWith('orderbook.50.')
   }
@@ -15,7 +17,7 @@ class BybitMessageParser implements WebSocketMessageParser {
     return {
       type: data.type,
       exchange: EXCHANGE_NAME,
-      symbol: data.data.s,
+      symbol: this.getUnifiedSymbol(data.data.s),
       timestamp: data.ts,
       asks: data.data.a.map(([price, quantity]: [string, string]) => ({
         price: parseFloat(price),
@@ -35,10 +37,11 @@ class BybitMessageParser implements WebSocketMessageParser {
 
 export class BybitWebSocketClient extends BaseWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
-  protected readonly messageParser = new BybitMessageParser()
+  protected readonly messageParser: BybitMessageParser
 
   constructor(config: WebSocketConfig) {
     super(config)
+    this.messageParser = new BybitMessageParser(this.getUnifiedSymbol.bind(this))
   }
 
   protected createClient(): WebsocketClient {
