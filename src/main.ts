@@ -3,11 +3,13 @@ import logger from './utils/logger'
 import { BinanceWebSocketClient } from './adapters/websocket/binance'
 import { BybitWebSocketClient } from './adapters/websocket/bybit'
 import { OkxWebSocketClient } from './adapters/websocket/okx'
+import { BitgetWebSocketClient } from './adapters/websocket/bitget'
 import { OrderbookManager } from './core/orderbook/orderbookManager'
 import { ArbitrageEngine } from './core/arbitrage/arbitrageEngine'
 import { BinanceExchange } from './adapters/rest'
 import { BybitExchange } from './adapters/rest'
 import { OkxExchange } from './adapters/rest'
+import { BitgetExchange } from './adapters/rest'
 
 async function main() {
   try {
@@ -32,17 +34,25 @@ async function main() {
       apiPass: config.exchanges.okx.apiPass,
     })
 
+    const bitget = new BitgetExchange({
+      apiKey: config.exchanges.bitget.apiKey,
+      apiSecret: config.exchanges.bitget.apiSecret,
+      apiPass: config.exchanges.bitget.apiPass,
+    })
+
     await Promise.all([
       binance.loadMarkets(),
       bybit.loadMarkets(),
       okx.loadMarkets(),
+      bitget.loadMarkets(),
     ])
 
     // Fetch all USDT perpetual pairs
-    const [binanceMarkets, bybitMarkets, okxMarkets] = await Promise.all([
+    const [binanceMarkets, bybitMarkets, okxMarkets, bitgetMarkets] = await Promise.all([
       binance.getTradingMarkets(),
       bybit.getTradingMarkets(),
       okx.getTradingMarkets(),
+      bitget.getTradingMarkets(),
     ])
 
     // Initialize orderbook manager
@@ -72,6 +82,14 @@ async function main() {
         feeModel: {
           maker: config.exchanges.okx.fees.maker,
           taker: config.exchanges.okx.fees.taker
+        }
+      },
+      {
+        name: 'bitget',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.bitget.fees.maker,
+          taker: config.exchanges.bitget.fees.taker
         }
       }
     ]
@@ -109,6 +127,13 @@ async function main() {
       maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
       reconnectInterval: config.exchanges.okx.reconnectInterval,
     })
+    const bitgetWs = new BitgetWebSocketClient({
+      apiKey: config.exchanges.bitget.apiKey,
+      apiSecret: config.exchanges.bitget.apiSecret,
+      apiPass: config.exchanges.bitget.apiPass,
+      maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
+      reconnectInterval: config.exchanges.bitget.reconnectInterval,
+    })
 
     // Connect WebSocket updates to orderbook manager
     binanceWs.on('orderbookUpdate', update => {
@@ -123,6 +148,10 @@ async function main() {
       orderbookManager.updateOrderbook(update)
     })
 
+    bitgetWs.on('orderbookUpdate', update => {
+      orderbookManager.updateOrderbook(update)
+    })
+
     // TODO: Initialize exchange adapters
     // TODO: Initialize orderbook manager
     // TODO: Initialize arbitrage engine
@@ -134,6 +163,7 @@ async function main() {
       binanceWs.initialize(binanceMarkets),
       bybitWs.initialize(bybitMarkets),
       okxWs.initialize(okxMarkets),
+      bitgetWs.initialize(bitgetMarkets),
     ])
 
     // Handle graceful shutdown
@@ -143,6 +173,7 @@ async function main() {
       binanceWs.close()
       bybitWs.close()
       okxWs.close()
+      bitgetWs.close()
       
       process.exit(0)
     })

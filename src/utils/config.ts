@@ -50,6 +50,7 @@ interface Config {
     binance: ExchangeConfiguration
     bybit: ExchangeConfiguration
     okx: ExchangeConfiguration
+    bitget: ExchangeConfiguration
   }
   trackedPairs: string[]
   arbitrage: ArbitrageConfig
@@ -92,6 +93,17 @@ const config: Config = {
       fees: {
         maker: yamlConfig?.exchanges?.okx?.fees?.maker,
         taker: yamlConfig?.exchanges?.okx?.fees?.taker
+      }
+    },
+    bitget: {
+      apiKey: process.env.BITGET_API_KEY || '',
+      apiSecret: process.env.BITGET_API_SECRET || '',
+      apiPass: process.env.BITGET_API_PASS || '',
+      maxStreamsPerConnection: yamlConfig?.exchanges?.bitget?.maxStreamsPerConnection,
+      reconnectInterval: yamlConfig?.exchanges?.bitget?.reconnectInterval,
+      fees: {
+        maker: yamlConfig?.exchanges?.bitget?.fees?.maker,
+        taker: yamlConfig?.exchanges?.bitget?.fees?.taker
       }
     },
   },

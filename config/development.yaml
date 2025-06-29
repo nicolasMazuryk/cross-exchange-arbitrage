@@ -34,7 +34,7 @@ exchanges:
       maker: 0.0002 # 0.02%
       taker: 0.0005 # 0.05%
   bitget:
-    maxStreamsPerConnection: 100
+    maxStreamsPerConnection: 500 # max connections per IP - 100; max subscriptions per connection - 1000; max subscription messages per hour - 240 per connection; max messages per second per connection - 10 (includes PING, subs)
     reconnectInterval: 5000
     fees:
       maker: 0.0002 # 0.02%
