@@ -1,12 +1,12 @@
 import { WebsocketClient } from 'binance'
-import { BaseWebSocketClient } from './base'
-import { WebSocketConfig, WebSocketMessageParser, StreamBatch } from './types'
+import { BasePublicWebSocketClient } from './base'
+import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './types'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
 
 const EXCHANGE_NAME = 'binance'
 
-class BinanceMessageParser implements WebSocketMessageParser {
+class BinanceMessageParser implements PublicWebSocketMessageParser {
   constructor(private getUnifiedSymbol: (marketId: string) => string) {}
 
   isOrderBookMessage(data: any): boolean {
@@ -36,7 +36,7 @@ class BinanceMessageParser implements WebSocketMessageParser {
   }
 }
 
-export class BinanceWebSocketClient extends BaseWebSocketClient {
+export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
   protected readonly messageParser: BinanceMessageParser
 

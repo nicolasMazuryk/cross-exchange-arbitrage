@@ -1,200 +1,29 @@
-import config from './utils/config'
+import { createOrchestrator } from './core/orchestration'
 import logger from './utils/logger'
-import { BinanceWebSocketClient } from './adapters/websocket/binance'
-import { BybitWebSocketClient } from './adapters/websocket/bybit'
-import { OkxWebSocketClient } from './adapters/websocket/okx'
-import { BitgetWebSocketClient } from './adapters/websocket/bitget'
-import { OrderbookManager } from './core/orderbook/orderbookManager'
-import { ArbitrageEngine } from './core/arbitrage/arbitrageEngine'
-import { BinanceExchange } from './adapters/rest'
-import { BybitExchange } from './adapters/rest'
-import { OkxExchange } from './adapters/rest'
-import { BitgetExchange } from './adapters/rest'
 
 async function main() {
   try {
-    logger.info('Starting ArbiNet...', {
-      environment: config.app.environment,
+    logger.info('🚀 Starting ArbiNet...')
+    
+    // Create and initialize the orchestrator with default configuration
+    const orchestrator = await createOrchestrator()
+    
+    orchestrator.on('arbitrageOpportunities', (opportunities) => {
+      logger.info('💰 Arbitrage opportunities detected:', opportunities)
+      // TODO: Handle arbitrage opportunities
     })
-
-    // Initialize exchanges
-    const binance = new BinanceExchange({
-      apiKey: config.exchanges.binance.apiKey,
-      apiSecret: config.exchanges.binance.apiSecret,
+    
+    orchestrator.on('accountUpdate', (update) => {
+      logger.debug('📊 Account state update:', update)
+      // TODO: Handle account updates
     })
-
-    const bybit = new BybitExchange({
-      apiKey: config.exchanges.bybit.apiKey,
-      apiSecret: config.exchanges.bybit.apiSecret,
-    })
-
-    const okx = new OkxExchange({
-      apiKey: config.exchanges.okx.apiKey,
-      apiSecret: config.exchanges.okx.apiSecret,
-      apiPass: config.exchanges.okx.apiPass,
-    })
-
-    const bitget = new BitgetExchange({
-      apiKey: config.exchanges.bitget.apiKey,
-      apiSecret: config.exchanges.bitget.apiSecret,
-      apiPass: config.exchanges.bitget.apiPass,
-    })
-
-    await Promise.all([
-      binance.loadMarkets(),
-      bybit.loadMarkets(),
-      okx.loadMarkets(),
-      bitget.loadMarkets(),
-    ])
-
-    // Fetch all USDT perpetual pairs
-    const [binanceMarkets, bybitMarkets, okxMarkets, bitgetMarkets] = await Promise.all([
-      binance.getTradingMarkets(),
-      bybit.getTradingMarkets(),
-      okx.getTradingMarkets(),
-      bitget.getTradingMarkets(),
-    ])
-
-    // Initialize orderbook manager
-    const orderbookManager = new OrderbookManager()
-
-    // Initialize arbitrage engine
-    const exchangeConfigs = [
-      {
-        name: 'binance',
-        isHealthy: true,
-        feeModel: {
-          maker: config.exchanges.binance.fees.maker,
-          taker: config.exchanges.binance.fees.taker
-        }
-      },
-      {
-        name: 'bybit',
-        isHealthy: true,
-        feeModel: {
-          maker: config.exchanges.bybit.fees.maker,
-          taker: config.exchanges.bybit.fees.taker
-        }
-      },
-      {
-        name: 'okx',
-        isHealthy: true,
-        feeModel: {
-          maker: config.exchanges.okx.fees.maker,
-          taker: config.exchanges.okx.fees.taker
-        }
-      },
-      {
-        name: 'bitget',
-        isHealthy: true,
-        feeModel: {
-          maker: config.exchanges.bitget.fees.maker,
-          taker: config.exchanges.bitget.fees.taker
-        }
-      }
-    ]
-
-    const blacklistPairs = config.arbitrage.blacklistPairs || []
-    const arbitrageEngine = new ArbitrageEngine(
-      orderbookManager,
-      blacklistPairs,
-      exchangeConfigs
-    )
-
-    // Listen for arbitrage opportunities
-    arbitrageEngine.on('opportunities', (opportunities) => {
-      // logger.info('Found arbitrage opportunities:', opportunities)
-      // TODO: Pass opportunities to trade execution engine
-    })
-
-    // Initialize WebSocket clients
-    const binanceWs = new BinanceWebSocketClient({
-      apiKey: config.exchanges.binance.apiKey,
-      apiSecret: config.exchanges.binance.apiSecret,
-      maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
-      reconnectInterval: config.exchanges.binance.reconnectInterval,
-    })
-    const bybitWs = new BybitWebSocketClient({
-      apiKey: config.exchanges.bybit.apiKey,
-      apiSecret: config.exchanges.bybit.apiSecret,
-      maxStreamsPerConnection: config.exchanges.bybit.maxStreamsPerConnection,
-      reconnectInterval: config.exchanges.bybit.reconnectInterval,
-    })
-    const okxWs = new OkxWebSocketClient({
-      apiKey: config.exchanges.okx.apiKey,
-      apiSecret: config.exchanges.okx.apiSecret,
-      apiPass: config.exchanges.okx.apiPass,
-      maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
-      reconnectInterval: config.exchanges.okx.reconnectInterval,
-    })
-    const bitgetWs = new BitgetWebSocketClient({
-      apiKey: config.exchanges.bitget.apiKey,
-      apiSecret: config.exchanges.bitget.apiSecret,
-      apiPass: config.exchanges.bitget.apiPass,
-      maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
-      reconnectInterval: config.exchanges.bitget.reconnectInterval,
-    })
-
-    // Connect WebSocket updates to orderbook manager
-    binanceWs.on('orderbookUpdate', update => {
-      orderbookManager.updateOrderbook(update)
-    })
-
-    bybitWs.on('orderbookUpdate', update => {
-      orderbookManager.updateOrderbook(update)
-    })
-
-    okxWs.on('orderbookUpdate', update => {
-      orderbookManager.updateOrderbook(update)
-    })
-
-    bitgetWs.on('orderbookUpdate', update => {
-      orderbookManager.updateOrderbook(update)
-    })
-
-    // TODO: Initialize exchange adapters
-    // TODO: Initialize orderbook manager
-    // TODO: Initialize arbitrage engine
-    // TODO: Initialize trade execution engine
-    // TODO: Initialize trade monitor
-
-    // Initialize WebSocket connections
-    await Promise.all([
-      binanceWs.initialize(binanceMarkets),
-      bybitWs.initialize(bybitMarkets),
-      okxWs.initialize(okxMarkets),
-      bitgetWs.initialize(bitgetMarkets),
-    ])
-
-    // Handle graceful shutdown
-    process.on('SIGINT', () => {
-      logger.info('Shutting down...')
-      
-      binanceWs.close()
-      bybitWs.close()
-      okxWs.close()
-      bitgetWs.close()
-      
-      process.exit(0)
-    })
-
-    logger.info('ArbiNet initialized successfully')
+    
+    logger.info('✅ ArbiNet startup complete')
   } catch (error) {
-    logger.error('Fatal error:', error)
+    logger.error('❌ Fatal error during startup:', error)
     process.exit(1)
   }
 }
 
-// Handle uncaught exceptions
-process.on('uncaughtException', error => {
-  logger.error('Uncaught Exception', { error })
-  process.exit(1)
-})
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', reason => {
-  logger.error('Unhandled Rejection', { reason })
-  process.exit(1)
-})
-
+// Start the application
 main()

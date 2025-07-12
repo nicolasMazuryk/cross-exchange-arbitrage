@@ -1,8 +1,8 @@
 import ccxt, { Exchange, Market, Order, Balances, Dictionary } from 'ccxt'
-import { ExchangeConfig, ExchangeInterface } from './types'
+import { ExchangeConfig, RestClientInterface } from './types'
 import logger from '../../utils/logger'
 
-export abstract class BaseExchange implements ExchangeInterface {
+export abstract class BaseExchange implements RestClientInterface {
   protected exchange: Exchange
 
   constructor(
@@ -13,7 +13,12 @@ export abstract class BaseExchange implements ExchangeInterface {
       apiKey: config.apiKey,
       secret: config.apiSecret,
       password: config.apiPass,
-      options: config.options || {},
+      options: {
+        // Suppress warning about fetching open orders without symbol
+        // This is needed because we fetch all open orders during snapshots
+        warnOnFetchOpenOrdersWithoutSymbol: false,
+        ...config.options
+      },
     })
   }
 
@@ -26,7 +31,7 @@ export abstract class BaseExchange implements ExchangeInterface {
     }
   }
 
-  async getTradingMarkets(): Promise<Dictionary<Market>> {
+  getTradingMarkets(): Dictionary<Market> {
     try {
       // const markets = Object.values(this.exchange.markets)
 
@@ -72,8 +77,7 @@ export abstract class BaseExchange implements ExchangeInterface {
           //   symbol.startsWith('PENGU')
           // )
       )
-
-      logger.info(`[${this.exchangeId}] Found ${Object.keys(usdtPerpetualMarkets).length} USDT perpetual futures markets`)
+      
       return usdtPerpetualMarkets
     } catch (error) {
       logger.error('Error fetching USDT perpetual pairs:', error)

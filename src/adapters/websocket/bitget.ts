@@ -1,12 +1,12 @@
 import { WebsocketClientV2 } from 'bitget-api'
-import { BaseWebSocketClient } from './base'
-import { WebSocketConfig, WebSocketMessageParser, StreamBatch } from './types'
+import { BasePublicWebSocketClient } from './base'
+import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './types'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
 
 const EXCHANGE_NAME = 'bitget'
 
-class BitgetMessageParser implements WebSocketMessageParser {
+class BitgetMessageParser implements PublicWebSocketMessageParser {
   constructor(private getUnifiedSymbol: (marketId: string) => string) {}
 
   isOrderBookMessage(data: any): boolean {
@@ -37,7 +37,7 @@ class BitgetMessageParser implements WebSocketMessageParser {
   }
 }
 
-export class BitgetWebSocketClient extends BaseWebSocketClient {
+export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
   protected readonly messageParser: BitgetMessageParser
 

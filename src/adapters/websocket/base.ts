@@ -1,12 +1,12 @@
 import { EventEmitter } from 'events'
 import { Dictionary, Market } from 'ccxt'
-import { WebSocketClientInterface, WebSocketConfig, StreamBatch, WebSocketMessageParser } from './types'
+import { PublicWebSocketClientInterface, WebSocketConfig, StreamBatch, PublicWebSocketMessageParser } from './types'
 import logger from '../../utils/logger'
 import { wait } from '../../utils/utils'
 
-export abstract class BaseWebSocketClient extends EventEmitter implements WebSocketClientInterface {
+export abstract class BasePublicWebSocketClient extends EventEmitter implements PublicWebSocketClientInterface {
   protected abstract readonly exchangeName: string
-  protected abstract readonly messageParser: WebSocketMessageParser
+  protected abstract readonly messageParser: PublicWebSocketMessageParser
   protected markets: Dictionary<Market> = {}
   protected streamBatches: StreamBatch[] = []
 
@@ -20,7 +20,7 @@ export abstract class BaseWebSocketClient extends EventEmitter implements WebSoc
     
     const batches = this.groupSymbolsIntoBatches(symbols)
     for (let i = 0; i < batches.length; i++) {
-      await this.createWebSocketConnection(batches[i], i)
+      await this.createPublicWebSocketConnection(batches[i], i)
     }
   }
 
@@ -32,7 +32,7 @@ export abstract class BaseWebSocketClient extends EventEmitter implements WebSoc
     return batches
   }
 
-  protected async createWebSocketConnection(symbols: string[], batchIndex: number): Promise<void> {
+  protected async createPublicWebSocketConnection(symbols: string[], batchIndex: number): Promise<void> {
     const client = this.createClient()
 
     const batch: StreamBatch = {
@@ -52,7 +52,7 @@ export abstract class BaseWebSocketClient extends EventEmitter implements WebSoc
     logger.info(`[${this.exchangeName}] Attempting to connect again for batch ${batch.id}...`)
     try {
       await wait(this.config.reconnectInterval)
-      await this.createWebSocketConnection(batch.symbols, batch.id)
+      await this.createPublicWebSocketConnection(batch.symbols, batch.id)
     } catch (error) {
       logger.error(`[${this.exchangeName}] Failed to connect again for batch ${batch.id}:`, error)
       await this.handleConnectionError(batch)

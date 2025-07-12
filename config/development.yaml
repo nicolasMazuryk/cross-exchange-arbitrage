@@ -54,7 +54,7 @@ trackedPairs:
   - DOGEUSDT
 
 trading:
-  orderAmount: 1000  # in USDT, default order size for arbitrage opportunities
+  orderAmount: 100  # in USDT, default order size for arbitrage opportunities
 
 arbitrage:
   blacklistPairs: []  # pairs to exclude from arbitrage
@@ -64,3 +64,7 @@ arbitrage:
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
   minProfitThreshold: 0.002  # 0.2%
   orderAmountTolerance: 0.90  # minimum order amount tolerance (90% of order amount)
+
+accountSync:
+  maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)
+  snapshotIntervalMs: 180000  # interval for periodic snapshots in milliseconds (3 minutes)

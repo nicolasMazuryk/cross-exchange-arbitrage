@@ -44,6 +44,11 @@ interface TradingConfig {
   orderAmount: number
 }
 
+interface AccountSyncConfig {
+  maxStateAgeMs: number
+  snapshotIntervalMs: number
+}
+
 interface Config {
   app: AppConfig
   exchanges: {
@@ -55,6 +60,7 @@ interface Config {
   trackedPairs: string[]
   arbitrage: ArbitrageConfig
   trading: TradingConfig
+  accountSync: AccountSyncConfig
 }
 
 const config: Config = {
@@ -119,6 +125,10 @@ const config: Config = {
   },
   trading: {
     orderAmount: yamlConfig?.trading?.orderAmount
+  },
+  accountSync: {
+    maxStateAgeMs: yamlConfig?.accountSync?.maxStateAgeMs,
+    snapshotIntervalMs: yamlConfig?.accountSync?.snapshotIntervalMs
   }
 }
 

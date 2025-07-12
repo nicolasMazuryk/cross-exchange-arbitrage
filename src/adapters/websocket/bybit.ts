@@ -1,12 +1,12 @@
 import { WebsocketClient } from 'bybit-api'
-import { BaseWebSocketClient } from './base'
-import { WebSocketConfig, WebSocketMessageParser, StreamBatch } from './types'
+import { BasePublicWebSocketClient } from './base'
+import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './types'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
 
 const EXCHANGE_NAME = 'bybit'
 
-class BybitMessageParser implements WebSocketMessageParser {
+class BybitMessageParser implements PublicWebSocketMessageParser {
   constructor(private getUnifiedSymbol: (marketId: string) => string) {}
 
   isOrderBookMessage(data: any): boolean {
@@ -35,7 +35,7 @@ class BybitMessageParser implements WebSocketMessageParser {
   }
 }
 
-export class BybitWebSocketClient extends BaseWebSocketClient {
+export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
   protected readonly messageParser: BybitMessageParser
 

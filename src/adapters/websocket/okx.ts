@@ -1,12 +1,12 @@
 import { WebsocketClient } from 'okx-api'
-import { BaseWebSocketClient } from './base'
-import { WebSocketConfig, WebSocketMessageParser, StreamBatch } from './types'
+import { BasePublicWebSocketClient } from './base'
+import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './types'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
 
 const EXCHANGE_NAME = 'okx'
 
-class OkxMessageParser implements WebSocketMessageParser {
+class OkxMessageParser implements PublicWebSocketMessageParser {
   constructor(private getUnifiedSymbol: (marketId: string) => string) {}
 
   isOrderBookMessage(data: any): boolean {
@@ -35,7 +35,7 @@ class OkxMessageParser implements WebSocketMessageParser {
   }
 }
 
-export class OkxWebSocketClient extends BaseWebSocketClient {
+export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
   protected readonly messageParser: OkxMessageParser
 
