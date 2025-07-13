@@ -130,11 +130,11 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
             const contractSize = markets[symbol]?.contractSize || 1
             // Calculate real position size: contracts * contractSize
             const size = contracts * contractSize
-            
+
             positions.push({
               id: position.posId,
               symbol: symbol,
-              side: parseFloat(position.pos) > 0 ? 'LONG' : 'SHORT',
+              side: position.posSide.toUpperCase(),
               size: size,
               entryPrice: parseFloat(position.avgPx) || 0,
               leverage: parseFloat(position.lever) || 1,

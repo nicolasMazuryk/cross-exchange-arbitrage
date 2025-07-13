@@ -80,7 +80,7 @@ export class Orchestrator extends EventEmitter {
       await this.initializeCoreServices()
 
       // Stage 3: Initialize WebSocket clients
-      // await this.initializePublicWebSocketClients()
+      await this.initializePublicWebSocketClients()
 
       // Stage 4: Initialize account sync service
       await this.initializeAccountSyncService()
@@ -180,22 +180,22 @@ export class Orchestrator extends EventEmitter {
           taker: config.exchanges.bybit.fees.taker
         }
       },
-      // {
-      //   name: 'okx',
-      //   isHealthy: true,
-      //   feeModel: {
-      //     maker: config.exchanges.okx.fees.maker,
-      //     taker: config.exchanges.okx.fees.taker
-      //   }
-      // },
-      // {
-      //   name: 'bitget',
-      //   isHealthy: true,
-      //   feeModel: {
-      //     maker: config.exchanges.bitget.fees.maker,
-      //     taker: config.exchanges.bitget.fees.taker
-      //   }
-      // }
+      {
+        name: 'okx',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.okx.fees.maker,
+          taker: config.exchanges.okx.fees.taker
+        }
+      },
+      {
+        name: 'bitget',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.bitget.fees.maker,
+          taker: config.exchanges.bitget.fees.taker
+        }
+      }
     ]
 
     const blacklistPairs = config.arbitrage.blacklistPairs || []
@@ -337,41 +337,41 @@ export class Orchestrator extends EventEmitter {
           apiSecret: config.exchanges.bybit.apiSecret,
         } as ExchangeConfig
       },
-      // {
-      //   exchangeId: 'okx',
-      //   wsConfig: {
-      //     apiKey: config.exchanges.okx.apiKey,
-      //     apiSecret: config.exchanges.okx.apiSecret,
-      //     apiPass: config.exchanges.okx.apiPass,
-      //     maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
-      //     reconnectInterval: config.exchanges.okx.reconnectInterval,
-      //   } as WebSocketConfig,
-      //   restConfig: {
-      //     apiKey: config.exchanges.okx.apiKey,
-      //     apiSecret: config.exchanges.okx.apiSecret,
-      //     apiPass: config.exchanges.okx.apiPass,
-      //   } as ExchangeConfig
-      // },
-      // {
-      //   exchangeId: 'bitget',
-      //   wsConfig: {
-      //     apiKey: config.exchanges.bitget.apiKey,
-      //     apiSecret: config.exchanges.bitget.apiSecret,
-      //     apiPass: config.exchanges.bitget.apiPass,
-      //     maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
-      //     reconnectInterval: config.exchanges.bitget.reconnectInterval,
-      //   } as WebSocketConfig,
-      //   restConfig: {
-      //     apiKey: config.exchanges.bitget.apiKey,
-      //     apiSecret: config.exchanges.bitget.apiSecret,
-      //     apiPass: config.exchanges.bitget.apiPass,
-      //     options: {
-      //       defaultType: 'swap', // Use USDT Futures
-      //       defaultSubType: 'linear', // USDT linear contracts
-      //       defaultSettleType: 'linear' // Linear settlement
-      //     }
-      //   } as ExchangeConfig
-      // }
+      {
+        exchangeId: 'okx',
+        wsConfig: {
+          apiKey: config.exchanges.okx.apiKey,
+          apiSecret: config.exchanges.okx.apiSecret,
+          apiPass: config.exchanges.okx.apiPass,
+          maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.okx.reconnectInterval,
+        } as WebSocketConfig,
+        restConfig: {
+          apiKey: config.exchanges.okx.apiKey,
+          apiSecret: config.exchanges.okx.apiSecret,
+          apiPass: config.exchanges.okx.apiPass,
+        } as ExchangeConfig
+      },
+      {
+        exchangeId: 'bitget',
+        wsConfig: {
+          apiKey: config.exchanges.bitget.apiKey,
+          apiSecret: config.exchanges.bitget.apiSecret,
+          apiPass: config.exchanges.bitget.apiPass,
+          maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.bitget.reconnectInterval,
+        } as WebSocketConfig,
+        restConfig: {
+          apiKey: config.exchanges.bitget.apiKey,
+          apiSecret: config.exchanges.bitget.apiSecret,
+          apiPass: config.exchanges.bitget.apiPass,
+          options: {
+            defaultType: 'swap', // Use USDT Futures
+            defaultSubType: 'linear', // USDT linear contracts
+            defaultSettleType: 'linear' // Linear settlement
+          }
+        } as ExchangeConfig
+      }
     ]
 
     await this.accountSyncService.initialize(exchangeAccountConfigs)
@@ -507,12 +507,54 @@ export class Orchestrator extends EventEmitter {
   isServiceInitialized(): boolean {
     return this.isInitialized
   }
+
+  async testOrderCreation(): Promise<void> {
+    const exchangeServices = this.getExchangeServices()
+    
+    for (const [exchangeId, services] of exchangeServices.entries()) {
+      
+      try {
+        const testSymbol = 'LUNC/USDT:USDT'
+
+        const openOrder = await services.rest.createOrder(
+          testSymbol,
+          'LIMIT',
+          'BUY',
+          200000,
+          0.0000625,
+          false,
+          new Date().getTime().toString()
+        )
+        await new Promise(resolve => setTimeout(resolve, 10000))
+
+        // await services.rest.cancelOrder(openOrder.id, testSymbol)
+        
+        const closeOrder = await services.rest.createOrder(
+          testSymbol,
+          'MARKET',
+          'BUY',
+          250000,
+          0.0000625,
+          true,
+          new Date().getTime().toString()
+        )
+        
+      } catch (error) {
+        logger.error(`❌ [${exchangeId}] Order creation test failed:`, error)
+        continue
+      }
+    }
+  }
 }
 
 // Factory function for easy initialization
 export async function createOrchestrator(): Promise<Orchestrator> {
   const orchestrator = new Orchestrator()
   await orchestrator.initialize()
+
+  // Temporary test order placement
+  // await orchestrator.testOrderCreation()
+
   return orchestrator
 }
 

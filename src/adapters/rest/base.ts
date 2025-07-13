@@ -26,7 +26,7 @@ export abstract class BaseExchange implements RestClientInterface {
     try {
       return await this.exchange.loadMarkets()
     } catch (error) {
-      logger.error(`Error fetching markets for ${this.exchangeId}:`, error)
+      logger.error(`[${this.exchangeId}] Error fetching markets:`, error)
       throw error
     }
   }
@@ -80,16 +80,24 @@ export abstract class BaseExchange implements RestClientInterface {
       
       return usdtPerpetualMarkets
     } catch (error) {
-      logger.error('Error fetching USDT perpetual pairs:', error)
+      logger.error(`[${this.exchangeId}] Error fetching USDT perpetual pairs:`, error)
       throw error
     }
   }
 
-  async createOrder(symbol: string, type: string, side: string, amount: number, price?: number): Promise<Order> {
+  async createOrder(symbol: string, type: string, side: string, amount: number, price?: number, reduceOnly?: boolean, clientOrderId?: string): Promise<Order> {
     try {
-      return (await this.exchange.createOrder(symbol, type, side, amount, price)) as Order
+      const params = {
+        reduceOnly: reduceOnly,
+        clientOrderId: clientOrderId,
+        // TODO: exchange specific required params
+        // positionSide: 'long' // OKX only
+        hedged: true, // Bitget only
+      }
+
+      return (await this.exchange.createOrder(symbol, type.toLowerCase(), side.toLowerCase(), amount, price, params)) as Order
     } catch (error) {
-      logger.error(`Error creating order for ${symbol} on ${this.exchangeId}:`, error)
+      logger.error(`[${this.exchangeId}] Error creating order for ${symbol}:`, error)
       throw error
     }
   }
@@ -98,16 +106,7 @@ export abstract class BaseExchange implements RestClientInterface {
     try {
       return (await this.exchange.cancelOrder(id, symbol)) as Order
     } catch (error) {
-      logger.error(`Error canceling order ${id} for ${symbol} on ${this.exchangeId}:`, error)
-      throw error
-    }
-  }
-
-  async fetchBalance(): Promise<Balances> {
-    try {
-      return await this.exchange.fetchBalance()
-    } catch (error) {
-      logger.error(`Error fetching balance on ${this.exchangeId}:`, error)
+      logger.error(`[${this.exchangeId}] Error canceling order ${id} for ${symbol}:`, error)
       throw error
     }
   }

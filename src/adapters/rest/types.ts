@@ -18,7 +18,6 @@ export interface RestClientInterface {
   cancelOrder(id: string, symbol: string): Promise<Order>
 
   // Account
-  fetchBalance(): Promise<Balances>
   fetchBalancesSnapshot?(): Promise<BalanceInfo[]>
   fetchPositionsSnapshot?(): Promise<PositionInfo[]>
   fetchOrdersSnapshot?(symbol?: string): Promise<OrderInfo[]>
