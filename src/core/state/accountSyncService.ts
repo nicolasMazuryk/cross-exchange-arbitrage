@@ -89,6 +89,8 @@ export class AccountSyncService extends EventEmitter {
         throw new Error(`Unsupported exchange: ${config.exchangeId}`)
     }
 
+    await restClient.loadMarkets()
+
     this.restClients.set(config.exchangeId, restClient)
     logger.info(`[${config.exchangeId}] REST client initialized`)
   }

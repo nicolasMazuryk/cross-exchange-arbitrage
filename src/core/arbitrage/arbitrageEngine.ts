@@ -284,7 +284,7 @@ export class ArbitrageEngine extends EventEmitter {
       // logger.info('Top 5 arbitrage opportunities:', sortedOpportunities)
     }
 
-    return opportunities
+    return sortedOpportunities
   }
 
   private checkDirection(

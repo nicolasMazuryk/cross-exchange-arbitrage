@@ -79,14 +79,11 @@ export class Orchestrator extends EventEmitter {
       // Stage 2: Initialize core services
       await this.initializeCoreServices()
 
-      // Stage 3: Initialize WebSocket clients
-      await this.initializePublicWebSocketClients()
-
-      // Stage 4: Initialize account sync service
+      // Stage 3: Initialize account sync service
       await this.initializeAccountSyncService()
 
-      // Stage 5: Connect services and start data flow
-      await this.connectServices()
+      // Stage 4: Initialize WebSocket clients
+      await this.initializePublicWebSocketClients()
 
       // Stage 6: Setup graceful shutdown
       this.setupGracefulShutdown()
@@ -215,90 +212,6 @@ export class Orchestrator extends EventEmitter {
     logger.info('✅ Core services initialized')
   }
 
-  private async initializePublicWebSocketClients(): Promise<void> {
-    logger.info('📡 Initializing WebSocket clients...')
-
-    // Fetch trading markets for all exchanges
-    const marketPromises = Array.from(this.exchangeServices.entries()).map(
-      async ([exchangeId, services]) => {
-        try {
-          const markets = await services.rest.getTradingMarkets()
-
-          logger.info(`[${exchangeId}] Found ${Object.keys(markets).length} USDT perpetual futures markets`)
-          return { exchangeId, markets }
-        } catch (error) {
-          logger.error(`❌ [${exchangeId}] Failed to fetch markets:`, error)
-          throw error
-        }
-      }
-    )
-
-    const exchangeMarkets = await Promise.all(marketPromises)
-    const marketsMap = new Map(exchangeMarkets.map(({ exchangeId, markets }) => [exchangeId, markets]))
-
-    // Initialize WebSocket clients
-    const wsClients = [
-      // {
-      //   id: 'binance',
-      //   client: new BinancePublicWebSocketClient({
-      //     apiKey: config.exchanges.binance.apiKey,
-      //     apiSecret: config.exchanges.binance.apiSecret,
-      //     maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
-      //     reconnectInterval: config.exchanges.binance.reconnectInterval,
-      //   })
-      // },
-      {
-        id: 'bybit',
-        client: new BybitPublicWebSocketClient({
-          apiKey: config.exchanges.bybit.apiKey,
-          apiSecret: config.exchanges.bybit.apiSecret,
-          maxStreamsPerConnection: config.exchanges.bybit.maxStreamsPerConnection,
-          reconnectInterval: config.exchanges.bybit.reconnectInterval,
-        })
-      },
-      {
-        id: 'okx',
-        client: new OkxPublicWebSocketClient({
-          apiKey: config.exchanges.okx.apiKey,
-          apiSecret: config.exchanges.okx.apiSecret,
-          apiPass: config.exchanges.okx.apiPass,
-          maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
-          reconnectInterval: config.exchanges.okx.reconnectInterval,
-        })
-      },
-      {
-        id: 'bitget',
-        client: new BitgetPublicWebSocketClient({
-          apiKey: config.exchanges.bitget.apiKey,
-          apiSecret: config.exchanges.bitget.apiSecret,
-          apiPass: config.exchanges.bitget.apiPass,
-          maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
-          reconnectInterval: config.exchanges.bitget.reconnectInterval,
-        })
-      }
-    ]
-
-    // Initialize and connect WebSocket clients
-    await Promise.all(
-      wsClients.map(async ({ id, client }) => {
-        try {
-          const markets = marketsMap.get(id) || []
-          await client.initialize(markets)
-          
-          const services = this.exchangeServices.get(id)!
-          services.ws = client
-          
-          logger.info(`✅ [${id}] WebSocket client initialized`)
-        } catch (error) {
-          logger.error(`❌ [${id}] Failed to initialize WebSocket client:`, error)
-          throw error
-        }
-      })
-    )
-
-    logger.info('✅ All WebSocket clients initialized')
-  }
-
   private async initializeAccountSyncService(): Promise<void> {
     logger.info('🔄 Initializing Account Sync Service...')
 
@@ -378,10 +291,86 @@ export class Orchestrator extends EventEmitter {
     logger.info('✅ Account Sync Service initialized')
   }
 
-  private async connectServices(): Promise<void> {
-    logger.info('🔗 Connecting services...')
+  private async initializePublicWebSocketClients(): Promise<void> {
+    logger.info('📡 Initializing WebSocket clients...')
 
-    // Connect WebSocket updates to orderbook manager
+    // Fetch trading markets for all exchanges
+    const exchangeMarkets = Array.from(this.exchangeServices.entries()).map(
+      ([exchangeId, services]) => {
+        try {
+          const markets = services.rest.getTradingMarkets()
+
+          logger.info(`[${exchangeId}] Found ${Object.keys(markets).length} USDT perpetual futures markets`)
+          return { exchangeId, markets }
+        } catch (error) {
+          logger.error(`❌ [${exchangeId}] Failed to fetch markets:`, error)
+          throw error
+        }
+      }
+    )
+    const marketsMap = new Map(exchangeMarkets.map(({ exchangeId, markets }) => [exchangeId, markets]))
+
+    // Initialize WebSocket clients
+    const wsClients = [
+      // {
+      //   id: 'binance',
+      //   client: new BinancePublicWebSocketClient({
+      //     apiKey: config.exchanges.binance.apiKey,
+      //     apiSecret: config.exchanges.binance.apiSecret,
+      //     maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
+      //     reconnectInterval: config.exchanges.binance.reconnectInterval,
+      //   })
+      // },
+      {
+        id: 'bybit',
+        client: new BybitPublicWebSocketClient({
+          apiKey: config.exchanges.bybit.apiKey,
+          apiSecret: config.exchanges.bybit.apiSecret,
+          maxStreamsPerConnection: config.exchanges.bybit.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.bybit.reconnectInterval,
+        })
+      },
+      {
+        id: 'okx',
+        client: new OkxPublicWebSocketClient({
+          apiKey: config.exchanges.okx.apiKey,
+          apiSecret: config.exchanges.okx.apiSecret,
+          apiPass: config.exchanges.okx.apiPass,
+          maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.okx.reconnectInterval,
+        })
+      },
+      {
+        id: 'bitget',
+        client: new BitgetPublicWebSocketClient({
+          apiKey: config.exchanges.bitget.apiKey,
+          apiSecret: config.exchanges.bitget.apiSecret,
+          apiPass: config.exchanges.bitget.apiPass,
+          maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.bitget.reconnectInterval,
+        })
+      }
+    ]
+
+    // Initialize and connect WebSocket clients
+    await Promise.all(
+      wsClients.map(async ({ id, client }) => {
+        try {
+          const markets = marketsMap.get(id) || []
+          await client.initialize(markets)
+          
+          const services = this.exchangeServices.get(id)!
+          services.ws = client
+          
+          logger.info(`✅ [${id}] WebSocket client initialized`)
+        } catch (error) {
+          logger.error(`❌ [${id}] Failed to initialize WebSocket client:`, error)
+          throw error
+        }
+      })
+    )
+
+    // Connect WebSocket clients to orderbook manager
     if (this.orderbookManager) {
       for (const [exchangeId, services] of this.exchangeServices.entries()) {
         if (services.ws) {
@@ -393,7 +382,7 @@ export class Orchestrator extends EventEmitter {
       }
     }
 
-    logger.info('✅ Services connected')
+    logger.info('✅ All WebSocket clients initialized and connected')
   }
 
   private setupGracefulShutdown(): void {
