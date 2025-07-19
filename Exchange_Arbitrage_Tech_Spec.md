@@ -23,8 +23,9 @@ This document details the technical implementation of the exchange-arbitrage hig
 3. **Arbitrage Engine**  
 4. **Trade Execution Engine**  
 5. **Trade Monitor**  
-6. **Config & Secrets Manager**  
-7. **Logger & Metrics Layer**
+6. **Risk Manager**  
+7. **Config & Secrets Manager**  
+8. **Logger & Metrics Layer**
 
 ---
 
@@ -138,7 +139,7 @@ interface OrderBook {
 - `src/core/trading/tradeMonitor.ts`
 
 **Exit Conditions:**
-- TP/SL reached
+- Target reached
 - Reverse arbitrage opportunity appears
 - Max hold time exceeded
 

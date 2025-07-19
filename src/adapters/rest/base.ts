@@ -91,8 +91,8 @@ export abstract class BaseExchange implements RestClientInterface {
         reduceOnly: reduceOnly,
         clientOrderId: clientOrderId,
         // TODO: exchange specific required params
-        // positionSide: 'long' // OKX only
-        hedged: true, // Bitget only
+        positionSide: 'long' // OKX only
+        // hedged: true, // Bitget only
       }
 
       return (await this.exchange.createOrder(symbol, type.toLowerCase(), side.toLowerCase(), amount, price, params)) as Order

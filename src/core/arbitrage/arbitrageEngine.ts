@@ -23,13 +23,14 @@ interface OpportunityScore {
   confidence: number
 }
 
-interface ArbitrageOpportunity {
+export interface ArbitrageOpportunity {
   pair: string
   buyExchange: string
   sellExchange: string
   buyPrice: number
   sellPrice: number
   fillableVolume: number
+  volumeUSDT: number
   confidenceScore: number
   estimatedProfit: number
   estimatedProfitPercent: number
@@ -337,6 +338,9 @@ export class ArbitrageEngine extends EventEmitter {
     if (profitEstimate.confidence < this.minConfidenceScore) return
 
     // === OPPORTUNITY CREATION ===
+    // Calculate volumeUSDT as the maximum between buy and sell sides
+    const volumeUSDT = Math.max(volume * buyPrice, volume * sellPrice)
+    
     opportunities.push({
       pair,
       buyExchange,
@@ -344,6 +348,7 @@ export class ArbitrageEngine extends EventEmitter {
       buyPrice,
       sellPrice,
       fillableVolume: volume,
+      volumeUSDT,
       confidenceScore: profitEstimate.confidence,
       estimatedProfit: profitEstimate.estimatedProfit,
       estimatedProfitPercent: profitEstimate.estimatedProfitPercent

@@ -6,6 +6,8 @@ import logger from '../../utils/logger'
 import { OrderbookManager } from '../orderbook/orderbookManager'
 import { ArbitrageEngine } from '../arbitrage/arbitrageEngine'
 import { AccountSyncService } from '../state/accountSyncService'
+import { TradeExecutor } from '../trading/tradeExecutor'
+import { TradeMonitor } from '../trading/tradeMonitor'
 
 // REST adapters
 import {
@@ -50,6 +52,8 @@ export class Orchestrator extends EventEmitter {
   private orderbookManager?: OrderbookManager
   private arbitrageEngine?: ArbitrageEngine
   private accountSyncService?: AccountSyncService
+  private tradeExecutor?: TradeExecutor
+  private tradeMonitor?: TradeMonitor
 
   // Exchange services
   private exchangeServices: Map<string, ExchangeServices> = new Map()
@@ -82,7 +86,10 @@ export class Orchestrator extends EventEmitter {
       // Stage 3: Initialize account sync service
       await this.initializeAccountSyncService()
 
-      // Stage 4: Initialize WebSocket clients
+      // Stage 4: Initialize trading services
+      await this.initializeTradingServices()
+
+      // Stage 5: Initialize WebSocket clients
       await this.initializePublicWebSocketClients()
 
       // Stage 6: Setup graceful shutdown
@@ -205,11 +212,139 @@ export class Orchestrator extends EventEmitter {
     // Listen for arbitrage opportunities
     this.arbitrageEngine.on('opportunities', (opportunities) => {
       this.emit('arbitrageOpportunities', opportunities)
-      // TODO: Pass opportunities to trade execution engine
+      // Process opportunities with trading services
+      if (this.tradeExecutor) {
+        this.processArbitrageOpportunities(opportunities)
+      }
     })
 
     logger.info('✅ Arbitrage Engine initialized')
     logger.info('✅ Core services initialized')
+  }
+
+  private async initializeTradingServices(): Promise<void> {
+    logger.info('💰 Initializing trading services...')
+
+    if (!this.accountSyncService || !this.orderbookManager) {
+      throw new Error('Account sync service and orderbook manager must be initialized before trading services')
+    }
+
+    // Get REST clients map
+    const restClients = new Map()
+    for (const [exchangeId, services] of this.exchangeServices.entries()) {
+      if (services.rest) {
+        restClients.set(exchangeId, services.rest)
+      }
+    }
+
+    // Initialize Trade Executor
+    this.tradeExecutor = new TradeExecutor(
+      this.accountSyncService.getAccountStateManager(),
+      restClients
+    )
+
+    // Initialize Trade Monitor
+    this.tradeMonitor = new TradeMonitor(
+      this.accountSyncService.getAccountStateManager(),
+      restClients,
+      this.orderbookManager,
+      config.trading.monitor
+    )
+
+    // Set up event listeners for trading
+    this.setupTradingEventListeners()
+
+    // Start the trade monitor
+    this.tradeMonitor.start()
+
+    logger.info('✅ Trading services initialized')
+  }
+
+  private setupTradingEventListeners(): void {
+    if (!this.tradeExecutor || !this.tradeMonitor) {
+      logger.warn('Trading services not available for event setup')
+      return
+    }
+
+    // Trade execution events
+    this.tradeExecutor.on('tradeCompleted', (result) => {
+      this.emit('tradeCompleted', result)
+      logger.info(`Trade completed: ${result.id}`, {
+        success: result.success,
+        pnl: result.pnl,
+        latencyMs: result.latencyMs
+      })
+    })
+
+    // Trade monitoring events
+    this.tradeMonitor.on('tradeAdded', (trade) => {
+      this.emit('tradeAdded', trade)
+      logger.info(`Trade added to monitoring: ${trade.id}`, {
+        pair: trade.pair,
+        volume: trade.volume
+      })
+    })
+
+    this.tradeMonitor.on('tradeClosed', (trade) => {
+      this.emit('tradeClosed', trade)
+      logger.info(`Trade closed: ${trade.id}`, {
+        exitReason: trade.exitReason,
+        pnl: trade.pnl
+      })
+    })
+
+    this.tradeMonitor.on('tradeError', ({ trade, error }) => {
+      this.emit('tradeError', { trade, error })
+      logger.error(`Trade error: ${trade.id}`, {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }
+
+  private async processArbitrageOpportunities(opportunities: any[]): Promise<void> {
+    if (!this.tradeExecutor || !this.tradeMonitor) {
+      logger.warn('Trading services not available for opportunity processing')
+      return
+    }
+
+    logger.info(`Processing ${opportunities.length} arbitrage opportunities`)
+
+    for (const opportunity of opportunities) {
+      try {
+        // Convert opportunity to trade parameters
+        const tradeParams = {
+          pair: opportunity.pair,
+          buyExchange: opportunity.buyExchange,
+          sellExchange: opportunity.sellExchange,
+          volume: opportunity.fillableVolume,
+          volumeUSDT: opportunity.volumeUSDT,
+          expectedProfitPercent: opportunity.estimatedProfitPercent,
+          confidenceScore: opportunity.confidenceScore,
+          timestamp: Date.now()
+        }
+
+        // Execute the trade
+        const result = await this.tradeExecutor.executeTrade(tradeParams)
+
+        if (result.success) {
+          // Add successful trade to monitoring
+          this.tradeMonitor.addTrade(result)
+          
+          logger.info(`Trade executed successfully: ${result.id}`, {
+            latencyMs: result.latencyMs
+          })
+        } else {
+          logger.warn(`Trade execution failed: ${result.id}`, {
+            error: result.errorDetails?.message
+          })
+        }
+      } catch (error) {
+        logger.error(`Failed to process opportunity`, {
+          opportunity,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
   }
 
   private async initializeAccountSyncService(): Promise<void> {
@@ -491,6 +626,14 @@ export class Orchestrator extends EventEmitter {
 
   getExchangeServices(): Map<string, ExchangeServices> {
     return this.exchangeServices
+  }
+
+  getTradeExecutor(): TradeExecutor | undefined {
+    return this.tradeExecutor
+  }
+
+  getTradeMonitor(): TradeMonitor | undefined {
+    return this.tradeMonitor
   }
 
   isServiceInitialized(): boolean {

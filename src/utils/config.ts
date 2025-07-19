@@ -42,6 +42,13 @@ interface ArbitrageConfig {
 
 interface TradingConfig {
   orderAmount: number
+  minBalanceBuffer: number
+  positionLimitMultiplier: number
+  monitor: {
+    maxHoldTimeMs: number
+    convergenceBufferPercent: number
+    checkIntervalMs: number
+  }
 }
 
 interface AccountSyncConfig {
@@ -124,7 +131,10 @@ const config: Config = {
     orderAmountTolerance: yamlConfig?.arbitrage?.orderAmountTolerance
   },
   trading: {
-    orderAmount: yamlConfig?.trading?.orderAmount
+    orderAmount: yamlConfig?.trading?.orderAmount,
+    minBalanceBuffer: yamlConfig?.trading?.minBalanceBuffer,
+    positionLimitMultiplier: yamlConfig?.trading?.positionLimitMultiplier,
+    monitor: yamlConfig?.trading?.monitor
   },
   accountSync: {
     maxStateAgeMs: yamlConfig?.accountSync?.maxStateAgeMs,
