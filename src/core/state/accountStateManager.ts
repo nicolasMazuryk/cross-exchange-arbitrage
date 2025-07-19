@@ -189,6 +189,11 @@ export class AccountStateManager extends EventEmitter {
     return orders.find(o => o.id === orderId) || null
   }
 
+  getOrderByClientOrderId(exchange: string, clientOrderId: string): OrderInfo | null {
+    const orders = this.getOrders(exchange)
+    return orders.find(o => o.clientOrderId === clientOrderId) || null
+  }
+
   getActiveOrders(exchange: string): OrderInfo[] {
     const orders = this.getOrders(exchange)
     return orders.filter(o => o.status === 'NEW' || o.status === 'PARTIALLY_FILLED')

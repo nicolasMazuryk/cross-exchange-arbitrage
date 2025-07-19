@@ -5,12 +5,16 @@ import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exc
 import logger from '../../utils/logger'
 import { getPositionSide, positionId } from '../../utils/utils'
 
+const EXCHANGE_NAME = 'bybit'
 const CCXT_EXCHANGE_NAME = 'bybit'
 
 export class BybitExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
     super(CCXT_EXCHANGE_NAME, config)
   }
+
+  // Note: Bybit doesn't require exchange-specific parameters for order creation
+  // The base implementation will be used
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
     // TODO: review response structure and normalize it for all assets
@@ -73,6 +77,7 @@ export class BybitExchange extends BaseExchange {
         orderInfos.push({
           id: order.id || '',
           clientOrderId: order.clientOrderId || '',
+          exchange: EXCHANGE_NAME,
           symbol: order.symbol || '',
           orderSide: order.side!.toUpperCase() as OrderSide,
           positionSide: getPositionSide(order.side!.toUpperCase() as OrderSide, order.reduceOnly!),

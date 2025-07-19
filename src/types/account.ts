@@ -21,11 +21,13 @@ export interface PositionInfo {
 export interface OrderInfo {
   id: string
   clientOrderId: string
+  exchange: string
   symbol: string
   orderSide: OrderSide
   positionSide: PositionSide
   type: OrderType
   price: number
+  expectedPrice?: number
   averagePrice: number
   quantity: number
   status: OrderStatus

@@ -133,6 +133,7 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
           id: order.orderId,
           clientOrderId: order.clientOid,
           symbol: convertExchangeSymbolToUnifiedSymbol(order.instId, MarketType.FUTURES, 'USDT'),
+          exchange: EXCHANGE_NAME,
           orderSide: getOrderSide(order.posSide, order.tradeSide),
           positionSide: order.posSide.toUpperCase() as PositionSide,
           type: order.orderType.toUpperCase() as OrderType,

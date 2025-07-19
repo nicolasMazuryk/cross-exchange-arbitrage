@@ -132,6 +132,7 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
         id: data.o.c,
         clientOrderId: data.o.c,
         symbol: data.o.s,
+        exchange: EXCHANGE_NAME,
         orderSide: data.o.S.toUpperCase() as OrderSide,
         positionSide: data.o.ps.toUpperCase() as PositionSide,
         type: data.o.o.toUpperCase() as OrderType,

@@ -279,7 +279,7 @@ export class ArbitrageEngine extends EventEmitter {
     const sortedOpportunities = opportunities
       .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
       // .slice(0, 5)
-      .filter(opportunity => opportunity.estimatedProfit > 0)
+      .filter(opportunity => opportunity.estimatedProfitPercent > -0.05)
 
     if (sortedOpportunities.length > 0) {
       // logger.info('Top 5 arbitrage opportunities:', sortedOpportunities)

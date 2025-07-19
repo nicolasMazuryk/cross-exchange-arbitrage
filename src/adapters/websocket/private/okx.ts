@@ -163,6 +163,7 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
             id: order.ordId,
             clientOrderId: order.clOrdId,
             symbol: symbol,
+            exchange: EXCHANGE_NAME,
             orderSide: order.side.toUpperCase() as OrderSide,
             positionSide: order.posSide.toUpperCase() as PositionSide,
             type: order.ordType.toUpperCase() as OrderType,

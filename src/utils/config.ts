@@ -44,6 +44,7 @@ interface TradingConfig {
   orderAmount: number
   minBalanceBuffer: number
   positionLimitMultiplier: number
+  orderConfirmationTimeoutMs: number
   monitor: {
     maxHoldTimeMs: number
     convergenceBufferPercent: number
@@ -134,6 +135,7 @@ const config: Config = {
     orderAmount: yamlConfig?.trading?.orderAmount,
     minBalanceBuffer: yamlConfig?.trading?.minBalanceBuffer,
     positionLimitMultiplier: yamlConfig?.trading?.positionLimitMultiplier,
+    orderConfirmationTimeoutMs: yamlConfig?.trading?.orderConfirmationTimeoutMs,
     monitor: yamlConfig?.trading?.monitor
   },
   accountSync: {

@@ -1,5 +1,5 @@
-import ccxt, { Exchange, Market, Order, Balances, Dictionary } from 'ccxt'
-import { ExchangeConfig, RestClientInterface } from './types'
+import ccxt, { Exchange, Market, Order, Dictionary } from 'ccxt'
+import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
 import logger from '../../utils/logger'
 
 export abstract class BaseExchange implements RestClientInterface {
@@ -87,19 +87,34 @@ export abstract class BaseExchange implements RestClientInterface {
 
   async createOrder(symbol: string, type: string, side: string, amount: number, price?: number, reduceOnly?: boolean, clientOrderId?: string): Promise<Order> {
     try {
-      const params = {
-        reduceOnly: reduceOnly,
-        clientOrderId: clientOrderId,
-        // TODO: exchange specific required params
-        positionSide: 'long' // OKX only
-        // hedged: true, // Bitget only
+      const baseParams: ExchangeOrderParams = {
+        reduceOnly,
+        clientOrderId
       }
 
-      return (await this.exchange.createOrder(symbol, type.toLowerCase(), side.toLowerCase(), amount, price, params)) as Order
+      // Get exchange-specific parameters
+      const exchangeParams = this.getExchangeOrderParams(symbol, type, side, amount, price, baseParams)
+      
+      return (await this.exchange.createOrder(symbol, type.toLowerCase(), side.toLowerCase(), amount, price, exchangeParams)) as Order
     } catch (error) {
       logger.error(`[${this.exchangeId}] Error creating order for ${symbol}:`, error)
       throw error
     }
+  }
+
+  /**
+   * Override this method in exchange-specific implementations to provide
+   * exchange-specific order parameters
+   */
+  protected getExchangeOrderParams(
+    symbol: string, 
+    type: string, 
+    side: string, 
+    amount: number, 
+    price?: number, 
+    baseParams: ExchangeOrderParams = {}
+  ): ExchangeOrderParams {
+    return baseParams
   }
 
   async cancelOrder(id: string, symbol: string): Promise<Order> {

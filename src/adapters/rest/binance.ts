@@ -4,6 +4,7 @@ import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import logger from '../../utils/logger'
 
+const EXCHANGE_NAME = 'binance'
 const CCXT_EXCHANGE_NAME = 'binanceusdm'
 
 export class BinanceExchange extends BaseExchange {
@@ -11,12 +12,15 @@ export class BinanceExchange extends BaseExchange {
     super(CCXT_EXCHANGE_NAME, config)
   }
 
+  // Note: Binance doesn't require exchange-specific parameters for order creation
+  // The base implementation will be used
+
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
     try {
       const balances = await this.exchange.fetchBalance()
       const balanceInfos: BalanceInfo[] = []
 
-      const { availableBalance, totalWalletBalance, totalUnrealizedProfit } = balances.info
+      const { availableBalance, totalWalletBalance } = balances.info
       balanceInfos.push({
         asset: 'USDT',
         total: parseFloat(totalWalletBalance),
@@ -74,6 +78,7 @@ export class BinanceExchange extends BaseExchange {
         orderInfos.push({
           id: order.id || '',
           clientOrderId: order.clientOrderId || '',
+          exchange: EXCHANGE_NAME,
           symbol: order.symbol || '',
           orderSide: order.side!.toUpperCase() as OrderSide,
           positionSide: order.side!.toUpperCase() as PositionSide,

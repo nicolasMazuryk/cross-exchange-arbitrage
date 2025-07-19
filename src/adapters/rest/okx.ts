@@ -1,15 +1,30 @@
 import { BaseExchange } from './base'
-import { ExchangeConfig } from './types'
+import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide, MarketType } from '../../types/exchange'
 import logger from '../../utils/logger'
-import { convertExchangeSymbolToUnifiedSymbol } from '../../utils/utils'
+import { convertExchangeSymbolToUnifiedSymbol, getPositionSide } from '../../utils/utils'
 
+const EXCHANGE_NAME = 'okx'
 const CCXT_EXCHANGE_NAME = 'okx'
 
 export class OkxExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
     super(CCXT_EXCHANGE_NAME, config)
+  }
+
+  protected getExchangeOrderParams(
+    symbol: string,
+    type: string,
+    side: string,
+    amount: number,
+    price?: number,
+    baseParams: ExchangeOrderParams = {}
+  ): ExchangeOrderParams {
+    return {
+      ...baseParams,
+      positionSide: getPositionSide(side as OrderSide, baseParams.reduceOnly!).toLowerCase()
+    }
   }
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
@@ -70,6 +85,7 @@ export class OkxExchange extends BaseExchange {
         orderInfos.push({
           id: order.id || '',
           clientOrderId: order.clientOrderId || '',
+          exchange: EXCHANGE_NAME,
           symbol: order.symbol || '',
           orderSide: order.side!.toUpperCase() as OrderSide,
           positionSide: order.info.posSide!.toUpperCase() as PositionSide,

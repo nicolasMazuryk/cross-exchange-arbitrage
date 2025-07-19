@@ -1,15 +1,30 @@
 import { BaseExchange } from './base'
-import { ExchangeConfig } from './types'
+import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import logger from '../../utils/logger'
 import { getOrderSide, positionId } from '../../utils/utils'
 
+const EXCHANGE_NAME = 'bitget'
 const CCXT_EXCHANGE_NAME = 'bitget'
 
 export class BitgetExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
     super(CCXT_EXCHANGE_NAME, config)
+  }
+
+  protected getExchangeOrderParams(
+    symbol: string,
+    type: string,
+    side: string,
+    amount: number,
+    price?: number,
+    baseParams: ExchangeOrderParams = {}
+  ): ExchangeOrderParams {
+    return {
+      ...baseParams,
+      hedged: true // Bitget requires hedged parameter
+    }
   }
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
@@ -71,6 +86,7 @@ export class BitgetExchange extends BaseExchange {
         orderInfos.push({
           id: order.id || '',
           clientOrderId: order.clientOrderId || '',
+          exchange: EXCHANGE_NAME,
           symbol: order.symbol || '',
           orderSide: getOrderSide(order.info.posSide, order.info.tradeSide),
           positionSide: order.info.posSide.toUpperCase() as PositionSide,

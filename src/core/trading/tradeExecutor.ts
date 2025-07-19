@@ -1,15 +1,16 @@
 import { EventEmitter } from 'events'
 import { AccountStateManager } from '../state/accountStateManager'
 import { RestClientInterface } from '../../adapters/rest/types'
-import { BalanceInfo, PositionInfo } from '../../types/account'
-import { OrderSide, OrderType, OrderStatus } from '../../types/exchange'
+import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { OrderInfo } from '../../types/account'
+import { OrderbookManager } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
 
 // Generate UUID for trade IDs
 function generateTradeId(): string {
-  return `t_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+  return `T${Date.now().toString().slice(-10)}${Math.random().toString(36).substr(2, 6)}`
 }
 
 // Core interfaces
@@ -24,20 +25,7 @@ export interface TradeParams {
   timestamp: number
 }
 
-export interface OrderInfo {
-  id: string
-  clientOrderId: string
-  symbol: string
-  orderSide: OrderSide
-  positionSide: 'LONG' | 'SHORT'
-  type: OrderType
-  price: number
-  averagePrice: number
-  quantity: number
-  status: OrderStatus
-  timestamp: number
-  date: Date
-}
+
 
 export interface TradeResult {
   id: string
@@ -66,15 +54,18 @@ export interface TradeValidationResult {
 export class TradeExecutor extends EventEmitter {
   private readonly accountStateManager: AccountStateManager
   private readonly restClients: Map<string, RestClientInterface>
+  private readonly orderbookManager: OrderbookManager
   private readonly processingPairs: Set<string> = new Set() // Track pairs being processed
 
   constructor(
     accountStateManager: AccountStateManager,
-    restClients: Map<string, RestClientInterface>
+    restClients: Map<string, RestClientInterface>,
+    orderbookManager: OrderbookManager
   ) {
     super()
     this.accountStateManager = accountStateManager
     this.restClients = restClients
+    this.orderbookManager = orderbookManager
     logger.info('TradeExecutor initialized')
   }
 
@@ -110,21 +101,21 @@ export class TradeExecutor extends EventEmitter {
       }
 
       // Execute the trade pair
-      const result = await this.executeTradePair(tradeId, tradeParams)
+      const entryTradeResult = await this.executeTradePair(tradeId, tradeParams)
       
       const latencyMs = Date.now() - startTime
-      result.latencyMs = latencyMs
+      entryTradeResult.latencyMs = latencyMs
 
       logger.info(`[${tradeId}] Trade execution completed`, {
-        success: result.success,
+        success: entryTradeResult.success,
         latencyMs,
-        executedVolume: result.executedVolume
+        executedVolume: entryTradeResult.executedVolume
       })
 
       // Emit trade result event
-      this.emit('tradeCompleted', result)
+      this.emit('tradeCompleted', entryTradeResult)
       
-      return result
+      return entryTradeResult
 
     } catch (error) {
       logger.error(`[${tradeId}] Trade execution failed`, {
@@ -147,12 +138,12 @@ export class TradeExecutor extends EventEmitter {
     const warnings: string[] = []
 
     // Validate account state freshness
-    if (!this.accountStateManager.isExchangeStateFresh(tradeParams.buyExchange)) {
-      errors.push(`Account state for ${tradeParams.buyExchange} is stale`)
-    }
-    if (!this.accountStateManager.isExchangeStateFresh(tradeParams.sellExchange)) {
-      errors.push(`Account state for ${tradeParams.sellExchange} is stale`)
-    }
+    // if (!this.accountStateManager.isExchangeStateFresh(tradeParams.buyExchange)) {
+    //   errors.push(`Account state for ${tradeParams.buyExchange} is stale`)
+    // }
+    // if (!this.accountStateManager.isExchangeStateFresh(tradeParams.sellExchange)) {
+    //   errors.push(`Account state for ${tradeParams.sellExchange} is stale`)
+    // }
 
     // Calculate required USDT balance using volumeUSDT from opportunity
     // For arbitrage, we need USDT to buy on one exchange and sell on another
@@ -186,10 +177,10 @@ export class TradeExecutor extends EventEmitter {
     const buyPosition = this.accountStateManager.getPosition(tradeParams.buyExchange, tradeParams.pair)
     const sellPosition = this.accountStateManager.getPosition(tradeParams.sellExchange, tradeParams.pair)
     
-    if (buyPosition && Math.abs(buyPosition.size) > config.trading.orderAmount * config.trading.positionLimitMultiplier) {
+    if (buyPosition && Math.abs(buyPosition.size * buyPosition.entryPrice) > config.trading.orderAmount * config.trading.positionLimitMultiplier) {
       warnings.push(`Large position detected on ${tradeParams.buyExchange}: ${buyPosition.size}`)
     }
-    if (sellPosition && Math.abs(sellPosition.size) > config.trading.orderAmount * config.trading.positionLimitMultiplier) {
+    if (sellPosition && Math.abs(sellPosition.size * sellPosition.entryPrice) > config.trading.orderAmount * config.trading.positionLimitMultiplier) {
       warnings.push(`Large position detected on ${tradeParams.sellExchange}: ${sellPosition.size}`)
     }
 
@@ -199,6 +190,25 @@ export class TradeExecutor extends EventEmitter {
       warnings,
       availableBalance: Math.min(buyExchangeBalance, sellExchangeBalance),
       requiredBalance
+    }
+  }
+
+  /**
+   * Get current orderbook prices for a trade
+   */
+  private getCurrentOrderbookPrices(pair: string, buyExchange: string, sellExchange: string): { buyPrice: number, sellPrice: number } {
+    const buyTopOfBook = this.orderbookManager.getTopOfBook(buyExchange, pair)
+    const sellTopOfBook = this.orderbookManager.getTopOfBook(sellExchange, pair)
+    
+    if (!buyTopOfBook || !sellTopOfBook) {
+      throw new Error(`No orderbook data available for ${pair} on ${buyExchange} or ${sellExchange}`)
+    }
+    
+    // For BUY orders, use ask price (we're buying from the ask side)
+    // For SELL orders, use bid price (we're selling to the bid side)
+    return {
+      buyPrice: buyTopOfBook.bestAsk.price,
+      sellPrice: sellTopOfBook.bestBid.price
     }
   }
 
@@ -213,15 +223,20 @@ export class TradeExecutor extends EventEmitter {
       throw new Error('REST clients not available')
     }
 
+    // Get current orderbook prices
+    const currentPrices = this.getCurrentOrderbookPrices(tradeParams.pair, tradeParams.buyExchange, tradeParams.sellExchange)
+
     // Generate unique client order IDs
-    const buyClientOrderId = `${tradeId}_buy_${Date.now()}`
-    const sellClientOrderId = `${tradeId}_sell_${Date.now()}`
+    const buyClientOrderId = `${tradeId}BUY`
+    const sellClientOrderId = `${tradeId}SELL`
 
     logger.debug(`[${tradeId}] Placing orders in parallel`, {
       buyExchange: tradeParams.buyExchange,
       sellExchange: tradeParams.sellExchange,
       pair: tradeParams.pair,
-      volume: tradeParams.volume
+      volume: tradeParams.volume,
+      buyPrice: currentPrices.buyPrice,
+      sellPrice: currentPrices.sellPrice
     })
 
     try {
@@ -232,6 +247,8 @@ export class TradeExecutor extends EventEmitter {
           tradeParams.pair, 
           'BUY', 
           tradeParams.volume, 
+          currentPrices.buyPrice,
+          false,
           buyClientOrderId, 
           tradeParams.buyExchange,
           this.accountStateManager
@@ -241,6 +258,8 @@ export class TradeExecutor extends EventEmitter {
           tradeParams.pair, 
           'SELL', 
           tradeParams.volume, 
+          currentPrices.sellPrice,
+          false,
           sellClientOrderId, 
           tradeParams.sellExchange,
           this.accountStateManager
@@ -251,10 +270,10 @@ export class TradeExecutor extends EventEmitter {
       const buyFeeRate = this.getFeeRate(tradeParams.buyExchange, 'taker')
       const sellFeeRate = this.getFeeRate(tradeParams.sellExchange, 'taker')
       
-      const buyFees = calculateFees(buyOrder, tradeParams.buyExchange, buyFeeRate)
-      const sellFees = calculateFees(sellOrder, tradeParams.sellExchange, sellFeeRate)
-      const buySlippage = calculateSlippage(buyOrder, 'BUY')
-      const sellSlippage = calculateSlippage(sellOrder, 'SELL')
+      const buyFees = calculateFees(buyOrder, buyFeeRate)
+      const sellFees = calculateFees(sellOrder, sellFeeRate)
+      const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
+      const sellSlippage = calculateSlippage(sellOrder, sellOrder.orderSide)
 
       return {
         id: tradeId,
@@ -286,8 +305,8 @@ export class TradeExecutor extends EventEmitter {
     logger.warn(`[${tradeId}] Rolling back failed trade`, { pair: tradeParams.pair })
 
     // Check which legs were filled
-    const buyOrder = this.accountStateManager.getOrder(tradeParams.buyExchange, `${tradeId}_buy`)
-    const sellOrder = this.accountStateManager.getOrder(tradeParams.sellExchange, `${tradeId}_sell`)
+    const buyOrder = this.accountStateManager.getOrderByClientOrderId(tradeParams.buyExchange, `${tradeId}BUY`)
+    const sellOrder = this.accountStateManager.getOrderByClientOrderId(tradeParams.sellExchange, `${tradeId}SELL`)
 
     const cancelPromises: Promise<void>[] = []
     const closePromises: Promise<void>[] = []
@@ -297,15 +316,18 @@ export class TradeExecutor extends EventEmitter {
       if (buyOrder.status === 'FILLED') {
         // Buy leg was filled, need to close the position
         logger.info(`[${tradeId}] Buy leg was filled, closing position`)
-        closePromises.push(
-          buyClient.createOrder(tradeParams.pair, 'MARKET', 'SELL', buyOrder.quantity, undefined, true, `close_${buyOrder.clientOrderId}`)
-            .then(() => {
-              logger.info(`[${tradeId}] Closed buy position`)
-            })
-            .catch(error => {
-              logger.error(`[${tradeId}] Failed to close buy position`, { error })
-            })
-        )
+        const closeBuyPrice = this.orderbookManager.getTopOfBook(tradeParams.buyExchange, tradeParams.pair)?.bestBid.price
+        if (closeBuyPrice) {
+          closePromises.push(
+            buyClient.createOrder(tradeParams.pair, 'MARKET', 'SELL', buyOrder.quantity, closeBuyPrice, true, `${buyOrder.clientOrderId}CLOSE`)
+              .then(() => {
+                logger.info(`[${tradeId}] Closed buy position`)
+              })
+              .catch(error => {
+                logger.error(`[${tradeId}] Failed to close buy position`, { error })
+              })
+          )
+        }
       } else if (buyOrder.status === 'NEW' || buyOrder.status === 'PARTIALLY_FILLED') {
         // Cancel unfilled buy order
         cancelPromises.push(
@@ -325,15 +347,18 @@ export class TradeExecutor extends EventEmitter {
       if (sellOrder.status === 'FILLED') {
         // Sell leg was filled, need to close the position
         logger.info(`[${tradeId}] Sell leg was filled, closing position`)
-        closePromises.push(
-          sellClient.createOrder(tradeParams.pair, 'MARKET', 'BUY', sellOrder.quantity, undefined, true, `close_${sellOrder.clientOrderId}`)
-            .then(() => {
-              logger.info(`[${tradeId}] Closed sell position`)
-            })
-            .catch(error => {
-              logger.error(`[${tradeId}] Failed to close sell position`, { error })
-            })
-        )
+        const closeSellPrice = this.orderbookManager.getTopOfBook(tradeParams.sellExchange, tradeParams.pair)?.bestAsk.price
+        if (closeSellPrice) {
+          closePromises.push(
+            sellClient.createOrder(tradeParams.pair, 'MARKET', 'BUY', sellOrder.quantity, closeSellPrice, true, `${sellOrder.clientOrderId}CLOSE`)
+              .then(() => {
+                logger.info(`[${tradeId}] Closed sell position`)
+              })
+              .catch(error => {
+                logger.error(`[${tradeId}] Failed to close sell position`, { error })
+              })
+          )
+        }
       } else if (sellOrder.status === 'NEW' || sellOrder.status === 'PARTIALLY_FILLED') {
         // Cancel unfilled sell order
         cancelPromises.push(

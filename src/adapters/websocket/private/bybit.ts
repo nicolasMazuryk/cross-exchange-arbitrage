@@ -128,6 +128,7 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
             id: order.orderId,
             clientOrderId: order.orderLinkId,
             symbol: convertExchangeSymbolToUnifiedSymbol(order.symbol, MarketType.FUTURES, 'USDT'),
+            exchange: EXCHANGE_NAME,
             orderSide: order.side.toUpperCase() as OrderSide,
             positionSide: getPositionSide(order.side!.toUpperCase() as OrderSide, order.reduceOnly!),
             type: order.orderType.toUpperCase() as OrderType,

@@ -29,5 +29,5 @@ export const getOrderSide = (posSide: string, tradeSide: string): OrderSide => {
 export const getPositionSide = (orderSide: OrderSide, reduceOnly: boolean): PositionSide => {
   if (orderSide === 'BUY') return reduceOnly ? 'SHORT' as PositionSide : 'LONG' as PositionSide
   if (orderSide === 'SELL') return reduceOnly ? 'LONG' as PositionSide : 'SHORT' as PositionSide
-  return 'LONG' as PositionSide
+  throw new Error(`Can't get position side for orderSide: ${orderSide} and reduceOnly: ${reduceOnly}`)
 }

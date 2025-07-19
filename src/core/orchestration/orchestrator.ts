@@ -240,7 +240,8 @@ export class Orchestrator extends EventEmitter {
     // Initialize Trade Executor
     this.tradeExecutor = new TradeExecutor(
       this.accountSyncService.getAccountStateManager(),
-      restClients
+      restClients,
+      this.orderbookManager
     )
 
     // Initialize Trade Monitor
@@ -383,6 +384,11 @@ export class Orchestrator extends EventEmitter {
         restConfig: {
           apiKey: config.exchanges.bybit.apiKey,
           apiSecret: config.exchanges.bybit.apiSecret,
+          options: {
+            defaultType: 'swap', // Use USDT Futures
+            defaultSubType: 'linear', // USDT linear contracts
+            defaultSettleType: 'linear' // Linear settlement
+          }
         } as ExchangeConfig
       },
       {
@@ -398,6 +404,11 @@ export class Orchestrator extends EventEmitter {
           apiKey: config.exchanges.okx.apiKey,
           apiSecret: config.exchanges.okx.apiSecret,
           apiPass: config.exchanges.okx.apiPass,
+          options: {
+            defaultType: 'swap', // Use USDT Futures
+            defaultSubType: 'linear', // USDT linear contracts
+            defaultSettleType: 'linear' // Linear settlement
+          }
         } as ExchangeConfig
       },
       {

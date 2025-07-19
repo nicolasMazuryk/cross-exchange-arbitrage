@@ -1,8 +1,9 @@
 import { RestClientInterface } from '../../adapters/rest/types'
 import { AccountStateManager } from '../state/accountStateManager'
-import { OrderSide, OrderStatus } from '../../types/exchange'
+import { OrderSide } from '../../types/exchange'
 import { OrderInfo } from '../../types/account'
 import logger from '../../utils/logger'
+import config from '../../utils/config'
 
 /**
  * Place order and monitor for confirmation via account state
@@ -12,57 +13,40 @@ export async function placeOrderAndMonitor(
   symbol: string,
   side: OrderSide,
   amount: number,
+  price: number,
+  isReduceOnly: boolean,
   clientOrderId: string,
   exchange: string,
   accountStateManager: AccountStateManager
 ): Promise<OrderInfo> {
   // Place the order
-  const order = await client.createOrder(symbol, 'MARKET', side, amount, undefined, false, clientOrderId)
+  const order = await client.createOrder(symbol, 'MARKET', side, amount, price, isReduceOnly, clientOrderId)
   
-  // Convert to our OrderInfo format
-  const orderInfo: OrderInfo = {
-    id: order.id,
-    clientOrderId,
-    symbol: order.symbol,
-    orderSide: side,
-    positionSide: side === 'BUY' ? 'LONG' : 'SHORT',
-    type: 'MARKET',
-    price: order.price || 0,
-    averagePrice: order.average || 0,
-    quantity: order.amount,
-    status: order.status as OrderStatus,
-    timestamp: order.timestamp,
-    date: new Date(order.timestamp)
-  }
+  const orderInfo = await monitorOrderConfirmation(order.id, exchange, accountStateManager)
 
-  // Monitor for order confirmation via account state
-  await monitorOrderConfirmation(orderInfo, exchange, accountStateManager)
+  orderInfo.expectedPrice = price
+  orderInfo.exchange = exchange
 
   return orderInfo
 }
 
 /**
- * Monitor order confirmation via account state manager
+ * Monitor order confirmation via account state manager and populate complete OrderInfo
  */
 export async function monitorOrderConfirmation(
-  orderInfo: OrderInfo, 
+  orderId: string,
   exchange: string, 
   accountStateManager: AccountStateManager,
-  timeoutMs: number = 10000
-): Promise<void> {
+): Promise<OrderInfo> {
   const startTime = Date.now()
   
-  while (Date.now() - startTime < timeoutMs) {
+  while (Date.now() - startTime < config.trading.orderConfirmationTimeoutMs) {
     // Check if order is in account state
-    const accountOrder = accountStateManager.getOrder(exchange, orderInfo.id)
+    const accountOrder = accountStateManager.getOrder(exchange, orderId)
     
     if (accountOrder && accountOrder.status === 'FILLED') {
-      // Update order info with confirmed data
-      orderInfo.status = 'FILLED'
-      orderInfo.averagePrice = accountOrder.averagePrice
-      orderInfo.quantity = accountOrder.quantity
-      logger.debug(`Order ${orderInfo.id} confirmed as FILLED`)
-      return
+      logger.debug(`Order ${orderId} confirmed as FILLED`)
+      return accountOrder
     }
     
     // Wait before next check
@@ -70,26 +54,26 @@ export async function monitorOrderConfirmation(
   }
   
   // If we reach here, order confirmation timed out
-  logger.warn(`Order ${orderInfo.id} confirmation timed out`)
-  throw new Error(`Order confirmation timeout for ${orderInfo.id}`)
+  logger.warn(`Order ${orderId} confirmation timed out`)
+  throw new Error(`Order confirmation timeout for ${orderId}`)
 }
 
 /**
  * Calculate slippage for an order with proper direction awareness
  */
 export function calculateSlippage(orderInfo: OrderInfo, side: OrderSide): number {
-  if (orderInfo.price === 0 || orderInfo.averagePrice === 0) return 0
+  if (!orderInfo.expectedPrice || orderInfo.expectedPrice === 0 || orderInfo.averagePrice === 0) return 0
   
   let slippagePercent: number
   
   if (side === 'BUY') {
     // For BUY orders: buying into the ask side
     // Positive slippage means we paid more than expected (bad)
-    slippagePercent = (orderInfo.averagePrice - orderInfo.price) / orderInfo.price
+    slippagePercent = (orderInfo.averagePrice - orderInfo.expectedPrice) / orderInfo.expectedPrice
   } else {
     // For SELL orders: selling into the bid side
     // Positive slippage means we paid more than expected (bad)
-    slippagePercent = (orderInfo.price - orderInfo.averagePrice) / orderInfo.averagePrice
+    slippagePercent = (orderInfo.expectedPrice - orderInfo.averagePrice) / orderInfo.averagePrice
   }
   
   const slippageValue = orderInfo.averagePrice * orderInfo.quantity * slippagePercent
@@ -100,7 +84,7 @@ export function calculateSlippage(orderInfo: OrderInfo, side: OrderSide): number
 /**
  * Calculate fees for an order
  */
-export function calculateFees(orderInfo: OrderInfo, exchangeId: string, feeRate: number): number {
+export function calculateFees(orderInfo: OrderInfo, feeRate: number): number {
   return orderInfo.averagePrice * orderInfo.quantity * feeRate
 }
 

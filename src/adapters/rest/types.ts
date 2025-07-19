@@ -1,4 +1,4 @@
-import { Market, Order, Balances, Dictionary } from 'ccxt'
+import { Market, Order, Dictionary } from 'ccxt'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 
 export interface ExchangeConfig {
@@ -6,6 +6,12 @@ export interface ExchangeConfig {
   apiSecret: string
   apiPass?: string
   options?: Record<string, any>
+}
+
+export interface ExchangeOrderParams {
+  reduceOnly?: boolean
+  clientOrderId?: string
+  [key: string]: any // Allow for exchange-specific parameters
 }
 
 export interface RestClientInterface {
