@@ -56,11 +56,11 @@ trackedPairs:
 trading:
   orderAmount: 10  # in USDT, default order size for arbitrage opportunities
   minBalanceBuffer: 0.1  # 10% buffer for balance validation
-  positionLimitMultiplier: 5  # multiplier for position size limits
+  positionLimitMultiplier: 1  # multiplier for position size limits
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   monitor:
     maxHoldTimeMs: 1000 * 60 * 60 * 24  # 24 hours max hold time
-    convergenceBufferPercent: 0.05  # 0.05% convergence buffer
+    convergenceBufferPercent: 0.3  # 0.05% convergence buffer
     checkIntervalMs: 5000  # 5 second check interval
 
 arbitrage:
@@ -69,8 +69,9 @@ arbitrage:
   maxMarketSpread: 0.003  # maximum market spread width within an exchange (0.3%)
   maxCrossMarketSpread: 0.03  # maximum cross-market spread between exchanges (3%)
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  minProfitThreshold: 0.002  # 0.2%
-  orderAmountTolerance: 0.90  # minimum order amount tolerance (90% of order amount)
+  minProfitThreshold: 0.000  # 0.2%
+  orderAmountToleranceMin: 0.90  # minimum order amount tolerance (90% of order amount)
+  orderAmountToleranceMax: 1.30  # maximum order amount tolerance (130% of order amount)
 
 accountSync:
   maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)

@@ -8,6 +8,7 @@ import { ArbitrageEngine } from '../arbitrage/arbitrageEngine'
 import { AccountSyncService } from '../state/accountSyncService'
 import { TradeExecutor } from '../trading/tradeExecutor'
 import { TradeMonitor } from '../trading/tradeMonitor'
+import { MarketMetadataService } from '../markets/marketMetadataService'
 
 // REST adapters
 import {
@@ -42,6 +43,7 @@ interface ExchangeServices {
   rest: any
   ws?: any
   accountWs?: any
+  marketMetadata: MarketMetadataService
 }
 
 export class Orchestrator extends EventEmitter {
@@ -147,8 +149,17 @@ export class Orchestrator extends EventEmitter {
       exchanges.map(async ({ id, client }) => {
         try {
           await client.loadMarkets()
-          this.exchangeServices.set(id, { rest: client })
-          logger.info(`✅ [${id}] REST client initialized`)
+          
+          // Initialize market metadata service
+          const markets = Object.values((client as any).exchange.markets || {})
+          const marketMetadataService = new MarketMetadataService(id, markets as any[])
+          
+          this.exchangeServices.set(id, { 
+            rest: client, 
+            marketMetadata: marketMetadataService 
+          })
+          
+          logger.info(`✅ [${id}] REST client initialized with ${marketMetadataService.getAvailableSymbols().length} markets`)
         } catch (error) {
           logger.error(`❌ [${id}] Failed to initialize REST client:`, error)
           throw error
@@ -202,11 +213,20 @@ export class Orchestrator extends EventEmitter {
       }
     ]
 
+    // Create market metadata services map
+    const marketMetadataServices = new Map<string, MarketMetadataService>()
+    for (const [exchangeId, services] of this.exchangeServices.entries()) {
+      if (services.marketMetadata) {
+        marketMetadataServices.set(exchangeId, services.marketMetadata)
+      }
+    }
+
     const blacklistPairs = config.arbitrage.blacklistPairs || []
     this.arbitrageEngine = new ArbitrageEngine(
       this.orderbookManager,
       blacklistPairs,
-      exchangeConfigs
+      exchangeConfigs,
+      marketMetadataServices
     )
 
     // Listen for arbitrage opportunities
@@ -231,9 +251,13 @@ export class Orchestrator extends EventEmitter {
 
     // Get REST clients map
     const restClients = new Map()
+    const marketMetadataServices = new Map<string, MarketMetadataService>()
     for (const [exchangeId, services] of this.exchangeServices.entries()) {
       if (services.rest) {
         restClients.set(exchangeId, services.rest)
+      }
+      if (services.marketMetadata) {
+        marketMetadataServices.set(exchangeId, services.marketMetadata)
       }
     }
 
@@ -241,7 +265,8 @@ export class Orchestrator extends EventEmitter {
     this.tradeExecutor = new TradeExecutor(
       this.accountSyncService.getAccountStateManager(),
       restClients,
-      this.orderbookManager
+      this.orderbookManager,
+      marketMetadataServices
     )
 
     // Initialize Trade Monitor
@@ -249,6 +274,7 @@ export class Orchestrator extends EventEmitter {
       this.accountSyncService.getAccountStateManager(),
       restClients,
       this.orderbookManager,
+      marketMetadataServices,
       config.trading.monitor
     )
 
@@ -314,13 +340,7 @@ export class Orchestrator extends EventEmitter {
       try {
         // Convert opportunity to trade parameters
         const tradeParams = {
-          pair: opportunity.pair,
-          buyExchange: opportunity.buyExchange,
-          sellExchange: opportunity.sellExchange,
-          volume: opportunity.fillableVolume,
-          volumeUSDT: opportunity.volumeUSDT,
-          expectedProfitPercent: opportunity.estimatedProfitPercent,
-          confidenceScore: opportunity.confidenceScore,
+          opportunity,
           timestamp: Date.now()
         }
 
@@ -655,29 +675,30 @@ export class Orchestrator extends EventEmitter {
     const exchangeServices = this.getExchangeServices()
     
     for (const [exchangeId, services] of exchangeServices.entries()) {
-      
+      if (exchangeId !== 'bybit') continue
+
       try {
-        const testSymbol = 'LUNC/USDT:USDT'
+        const testSymbol = '1000PEPE/USDT:USDT'
 
         const openOrder = await services.rest.createOrder(
           testSymbol,
           'LIMIT',
           'BUY',
-          200000,
-          0.0000625,
+          100,
+          0.012700,
           false,
           new Date().getTime().toString()
         )
-        await new Promise(resolve => setTimeout(resolve, 10000))
+        await new Promise(resolve => setTimeout(resolve, 20000))
 
         // await services.rest.cancelOrder(openOrder.id, testSymbol)
         
         const closeOrder = await services.rest.createOrder(
           testSymbol,
           'MARKET',
-          'BUY',
-          250000,
-          0.0000625,
+          'SELL',
+          100,
+          0.012700,
           true,
           new Date().getTime().toString()
         )

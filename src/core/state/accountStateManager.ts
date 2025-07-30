@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { BalanceInfo, PositionInfo, OrderInfo, AccountState, AccountStateUpdate } from '../../types/account'
-import { OrderStatus } from '../../types/exchange'
+import { OrderStatus, PositionSide } from '../../types/exchange'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
 
@@ -179,9 +179,9 @@ export class AccountStateManager extends EventEmitter {
     return balance?.available || 0
   }
 
-  getPosition(exchange: string, symbol: string): PositionInfo | null {
+  getPosition(exchange: string, symbol: string, side: PositionSide): PositionInfo | null {
     const positions = this.getPositions(exchange)
-    return positions.find(p => p.symbol === symbol) || null
+    return positions.find(p => p.symbol === symbol && p.side === side) || null
   }
 
   getOrder(exchange: string, orderId: string): OrderInfo | null {

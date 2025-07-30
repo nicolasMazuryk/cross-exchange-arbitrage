@@ -2,19 +2,18 @@ import { EventEmitter } from 'events'
 import { TradeResult } from './tradeExecutor'
 import { AccountStateManager } from '../state/accountStateManager'
 import { RestClientInterface } from '../../adapters/rest/types'
+import { MarketMetadataService } from '../markets/marketMetadataService'
 import { OrderInfo } from '../../types/account'
 import { OrderbookManager, TopOfBook } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
+import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
 
 // Core interfaces
 export interface TrackedTrade {
   id: string
-  pair: string
-  buyExchange: string
-  sellExchange: string
-  volume: number
+  opportunity: ArbitrageOpportunity
   entryTimestamp: number
   status: 'open' | 'closed' | 'error'
   entryTrade: TradeResult
@@ -53,6 +52,7 @@ export class TradeMonitor extends EventEmitter {
   private readonly accountStateManager: AccountStateManager
   private readonly restClients: Map<string, RestClientInterface>
   private readonly orderbookManager: OrderbookManager
+  private readonly marketMetadataServices: Map<string, MarketMetadataService>
   private readonly trackedTrades: Map<string, TrackedTrade> = new Map()
   private readonly config: MonitorConfig
   private checkInterval: NodeJS.Timeout | null = null
@@ -62,12 +62,14 @@ export class TradeMonitor extends EventEmitter {
     accountStateManager: AccountStateManager,
     restClients: Map<string, RestClientInterface>,
     orderbookManager: OrderbookManager,
+    marketMetadataServices: Map<string, MarketMetadataService>,
     config: MonitorConfig
   ) {
     super()
     this.accountStateManager = accountStateManager
     this.restClients = restClients
     this.orderbookManager = orderbookManager
+    this.marketMetadataServices = marketMetadataServices
     this.config = config
 
     logger.info('TradeMonitor initialized', { config: this.config })
@@ -110,10 +112,7 @@ export class TradeMonitor extends EventEmitter {
 
     const trackedTrade: TrackedTrade = {
       id: tradeResult.id,
-      pair: tradeResult.buyOrder.symbol,
-      buyExchange: tradeResult.buyOrder.exchange,
-      sellExchange: tradeResult.sellOrder.exchange,
-      volume: tradeResult.executedVolume,
+      opportunity: tradeResult.opportunity,
       entryTimestamp: Math.min(tradeResult.buyOrder.timestamp, tradeResult.sellOrder.timestamp),
       status: 'open',
       entryTrade: tradeResult,
@@ -135,10 +134,8 @@ export class TradeMonitor extends EventEmitter {
     this.trackedTrades.set(tradeResult.id, trackedTrade)
     
     logger.info(`[${tradeResult.id}] Trade added to monitoring`, {
-      pair: trackedTrade.pair,
-      buyExchange: trackedTrade.buyExchange,
-      sellExchange: trackedTrade.sellExchange,
-      volume: trackedTrade.volume
+      id: trackedTrade.id,
+      entryTrade: trackedTrade.entryTrade,
     })
 
     this.emit('tradeAdded', trackedTrade)
@@ -222,9 +219,9 @@ export class TradeMonitor extends EventEmitter {
     }
 
     // Get current orderbook prices
-    const currentPrices = this.getCurrentOrderbookPrices(trade.pair, trade.buyExchange, trade.sellExchange)
-    if (!currentPrices) {
-      logger.debug(`[${trade.id}] No orderbook data available for price check`)
+    const currentPrices = this.getCurrentOrderbookPrices(trade.opportunity)
+    if (!currentPrices.buyPrice || !currentPrices.sellPrice) {
+      logger.warn(`[${trade.id}] No orderbook data available for price check`)
       return
     }
 
@@ -248,21 +245,33 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
-   * Get current orderbook prices for a trade
+   * Get current orderbook prices for a trade with normalization
    */
-  private getCurrentOrderbookPrices(pair: string, buyExchange: string, sellExchange: string): { buyPrice: number, sellPrice: number } {
-    const buyTopOfBook = this.orderbookManager.getTopOfBook(buyExchange, pair)
-    const sellTopOfBook = this.orderbookManager.getTopOfBook(sellExchange, pair)
+  private getCurrentOrderbookPrices(opportunity: ArbitrageOpportunity): { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number } {
+    const buyTopOfBook = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)
+    const sellTopOfBook = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)
     
     if (!buyTopOfBook || !sellTopOfBook) {
-      throw new Error(`No orderbook data available for ${pair} on ${buyExchange} or ${sellExchange}`)
+      throw new Error(`No orderbook data available for ${opportunity.buyExchange} ${opportunity.buyExchangeSymbol} or ${opportunity.sellExchange} ${opportunity.sellExchangeSymbol}`)
     }
     
-    // For BUY orders, use ask price (we're buying from the ask side)
-    // For SELL orders, use bid price (we're selling to the bid side)
+    // Get market metadata services for normalization
+    const buyMetadataService = this.marketMetadataServices.get(opportunity.buyExchange)
+    const sellMetadataService = this.marketMetadataServices.get(opportunity.sellExchange)
+    
+    if (!buyMetadataService || !sellMetadataService) {
+      throw new Error('Market metadata services not available')
+    }
+    
+    // Normalize prices to base scale for comparison
+    const normalizedBuyPrice = buyMetadataService.normalizePrice(buyTopOfBook.bestBid.price, opportunity.buyExchangeSymbol)
+    const normalizedSellPrice = sellMetadataService.normalizePrice(sellTopOfBook.bestAsk.price, opportunity.sellExchangeSymbol)
+    
     return {
       buyPrice: buyTopOfBook.bestBid.price,
-      sellPrice: sellTopOfBook.bestAsk.price
+      sellPrice: sellTopOfBook.bestAsk.price,
+      normalizedBuyPrice,
+      normalizedSellPrice
     }
   }
 
@@ -271,21 +280,21 @@ export class TradeMonitor extends EventEmitter {
    */
   private checkConvergenceCondition(
     trade: TrackedTrade, 
-    currentPrices: { buyPrice: number, sellPrice: number }
+    currentPrices: { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number }
   ): { shouldExit: boolean, convergencePercent: number, reason: string } {
     // For arbitrage trades, we need to consider the exit prices:
     // - If we bought initially, we need to sell at the bid price
     // - If we sold initially, we need to buy at the ask price
     
-    const exitBuyPrice = currentPrices.sellPrice  // To close a short position
-    const exitSellPrice = currentPrices.buyPrice // To close a long position
+    const exitExchangeBuyPrice = currentPrices.normalizedBuyPrice
+    const exitExchangeSellPrice = currentPrices.normalizedSellPrice
     
     // Calculate the price difference between entry and exit
-    const buyExitDifference = Math.abs(exitSellPrice - trade.entryTrade.buyOrder!.averagePrice)
-    const sellExitDifference = Math.abs(exitBuyPrice - trade.entryTrade.sellOrder!.averagePrice)
+    const buyExitDifference = Math.abs(exitExchangeBuyPrice - trade.entryTrade.buyOrder!.averagePrice)
+    const sellExitDifference = Math.abs(exitExchangeSellPrice - trade.entryTrade.sellOrder!.averagePrice)
     
     // Calculate convergence as percentage
-    const convergencePercent = ((exitSellPrice - exitBuyPrice) / exitBuyPrice) * 100
+    const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
 
     if (convergencePercent <= this.config.convergenceBufferPercent) {
       return {
@@ -305,27 +314,27 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Update PnL calculations using current market prices
    */
-  private updatePnLCalculations(trade: TrackedTrade, currentPrices: { buyPrice: number, sellPrice: number }): void {
+  private updatePnLCalculations(trade: TrackedTrade, currentPrices: { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number }): void {
     // Calculate exit prices
-    const exitBuyPrice = currentPrices.sellPrice  // To close a short position
-    const exitSellPrice = currentPrices.buyPrice // To close a long position
+    // const exitBuyExchangePrice = currentPrices.buyPrice  // To close a long position
+    // const exitSellExchangePrice = currentPrices.sellPrice // To close a short position
     
     // Calculate profit: ((Entry Price A - Exit Price A) × Volume) - ((Entry Price B - Exit Price B) × Volume)
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
     const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
-    const buyExchangeExitPrice = exitSellPrice // Exit price for the buy leg
-    const sellExchangeExitPrice = exitBuyPrice  // Exit price for the sell leg
+    const buyExchangeExitPrice = currentPrices.buyPrice // Exit price for the buy leg
+    const sellExchangeExitPrice = currentPrices.sellPrice  // Exit price for the sell leg
     
-    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.volume
-    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.volume
+    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
+    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
     trade.profit = buyLegProfit + sellLegProfit
 
     // Calculate estimated exit costs
-    const buyFeeRate = this.getFeeRate(trade.buyExchange, 'taker')
-    const sellFeeRate = this.getFeeRate(trade.sellExchange, 'taker')
+    const buyFeeRate = this.getFeeRate(trade.opportunity.buyExchange, 'taker')
+    const sellFeeRate = this.getFeeRate(trade.opportunity.sellExchange, 'taker')
     
-    const exitBuyFees = calculateFees({ averagePrice: exitBuyPrice, quantity: trade.volume } as OrderInfo, buyFeeRate)
-    const exitSellFees = calculateFees({ averagePrice: exitSellPrice, quantity: trade.volume } as OrderInfo, sellFeeRate)
+    const exitBuyFees = calculateFees({ averagePrice: buyExchangeExitPrice, quantity: trade.entryTrade.buyOrder!.quantity } as OrderInfo, buyFeeRate)
+    const exitSellFees = calculateFees({ averagePrice: sellExchangeExitPrice, quantity: trade.entryTrade.sellOrder!.quantity } as OrderInfo, sellFeeRate)
     
     trade.costs.exitFees = exitBuyFees + exitSellFees
     trade.costs.exitSlippage = 0 // Exit slippage is 0 for open positions (estimated exit)
@@ -335,7 +344,7 @@ export class TradeMonitor extends EventEmitter {
     trade.pnl = trade.profit - trade.costs.total
 
     // Calculate percentages
-    const totalTradeValue = (buyExchangeEntryPrice + sellExchangeEntryPrice) * trade.volume / 2
+    const totalTradeValue = (trade.opportunity.normalizedBuyPrice + trade.opportunity.normalizedSellPrice) * trade.opportunity.normalizedVolume / 2
     trade.costsPercent = (trade.costs.total / totalTradeValue) * 100
     trade.profitPercent = (trade.profit / totalTradeValue) * 100
     trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
@@ -349,38 +358,38 @@ export class TradeMonitor extends EventEmitter {
 
     try {
       // Execute reverse trades in parallel
-      const buyClient = this.restClients.get(trade.sellExchange)
-      const sellClient = this.restClients.get(trade.buyExchange)
+      const buyClient = this.restClients.get(trade.opportunity.buyExchange)
+      const sellClient = this.restClients.get(trade.opportunity.sellExchange)
 
       if (!buyClient || !sellClient) {
         throw new Error('REST clients not available for exit')
       }
 
       // Get current orderbook prices for exit
-      const currentPrices = this.getCurrentOrderbookPrices(trade.pair, trade.sellExchange, trade.buyExchange)
+      const currentPrices = this.getCurrentOrderbookPrices(trade.opportunity)
 
       // Place exit orders in parallel
       const [buyOrder, sellOrder] = await Promise.all([
         placeOrderAndMonitor(
           buyClient, 
-          trade.pair, 
-          'BUY', 
-          trade.volume, 
+          trade.opportunity.buyExchangeSymbol, 
+          'SELL', 
+          trade.opportunity.buyExchangeVolume, 
           currentPrices.buyPrice,
           true,
           `${trade.id}EXITBUY`,
-          trade.sellExchange,
+          trade.opportunity.buyExchange,
           this.accountStateManager
         ),
         placeOrderAndMonitor(
           sellClient, 
-          trade.pair, 
-          'SELL', 
-          trade.volume, 
+          trade.opportunity.sellExchangeSymbol, 
+          'BUY', 
+          trade.opportunity.sellExchangeVolume, 
           currentPrices.sellPrice,
           true,
           `${trade.id}EXITSELL`,
-          trade.buyExchange,
+          trade.opportunity.sellExchange,
           this.accountStateManager
         )
       ])
@@ -391,7 +400,7 @@ export class TradeMonitor extends EventEmitter {
         success: true,
         buyOrder,
         sellOrder,
-        executedVolume: trade.volume,
+        opportunity: trade.opportunity,
         fees: this.calculateExitFees(buyOrder, sellOrder, trade),
         slippage: this.calculateExitSlippage(buyOrder, sellOrder),
         latencyMs: 0
@@ -431,8 +440,8 @@ export class TradeMonitor extends EventEmitter {
    * Calculate exit fees for the exit trade
    */
   private calculateExitFees(buyOrder: OrderInfo, sellOrder: OrderInfo, trade: TrackedTrade): number {
-    const buyFeeRate = this.getFeeRate(trade.sellExchange, 'taker')
-    const sellFeeRate = this.getFeeRate(trade.buyExchange, 'taker')
+    const buyFeeRate = this.getFeeRate(trade.opportunity.buyExchange, 'taker')
+    const sellFeeRate = this.getFeeRate(trade.opportunity.sellExchange, 'taker')
     
     const buyFees = calculateFees(buyOrder, buyFeeRate)
     const sellFees = calculateFees(sellOrder, sellFeeRate)
@@ -444,8 +453,8 @@ export class TradeMonitor extends EventEmitter {
    * Calculate exit slippage for the exit trade
    */
   private calculateExitSlippage(buyOrder: OrderInfo, sellOrder: OrderInfo): number {
-    const buySlippage = calculateSlippage(buyOrder, 'BUY')
-    const sellSlippage = calculateSlippage(sellOrder, 'SELL')
+    const buySlippage = calculateSlippage(buyOrder, 'SELL')
+    const sellSlippage = calculateSlippage(sellOrder, 'BUY')
     
     return buySlippage + sellSlippage
   }
@@ -462,18 +471,18 @@ export class TradeMonitor extends EventEmitter {
     // Calculate profit with actual exit prices
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
     const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
-    const buyExchangeExitPrice = exitTrade.sellOrder!.averagePrice // Exit price for the buy leg
-    const sellExchangeExitPrice = exitTrade.buyOrder!.averagePrice  // Exit price for the sell leg
+    const buyExchangeExitPrice = exitTrade.buyOrder!.averagePrice // Exit price for the buy leg
+    const sellExchangeExitPrice = exitTrade.sellOrder!.averagePrice  // Exit price for the sell leg
     
-    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.volume
-    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.volume
+    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
+    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
     trade.profit = buyLegProfit + sellLegProfit
 
     // Calculate final PnL: Profit - Costs
     trade.pnl = trade.profit - trade.costs.total
 
     // Calculate percentages
-    const totalTradeValue = (buyExchangeEntryPrice + sellExchangeEntryPrice) * trade.volume / 2
+    const totalTradeValue = (trade.opportunity.normalizedBuyPrice + trade.opportunity.normalizedSellPrice) * trade.opportunity.normalizedVolume / 2
     trade.costsPercent = (trade.costs.total / totalTradeValue) * 100
     trade.profitPercent = (trade.profit / totalTradeValue) * 100
     trade.pnlPercent = (trade.pnl / totalTradeValue) * 100

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
 import { OrderbookManager, OrderBook, TopOfBook, OrderBookLevel } from '../orderbook/orderbookManager'
+import { MarketMetadataService } from '../markets/marketMetadataService'
 import { ExchangeMeta } from '../../types/exchange'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
@@ -12,8 +13,8 @@ interface FeeModel {
 
 interface DepthSimulationResult {
   avgExecutionPrice: number
+  avgNormalizedExecutionPrice: number
   slippagePercent: number
-  fillableVolume: number
 }
 
 interface OpportunityScore {
@@ -24,12 +25,16 @@ interface OpportunityScore {
 }
 
 export interface ArbitrageOpportunity {
-  pair: string
+  normalizedPair: string
+  buyExchangeSymbol: string
+  sellExchangeSymbol: string
   buyExchange: string
   sellExchange: string
-  buyPrice: number
-  sellPrice: number
-  fillableVolume: number
+  normalizedBuyPrice: number
+  normalizedSellPrice: number
+  normalizedVolume: number
+  buyExchangeVolume: number
+  sellExchangeVolume: number
   volumeUSDT: number
   confidenceScore: number
   estimatedProfit: number
@@ -41,23 +46,27 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly exchangeConfigs: Map<string, ExchangeMeta>
   private readonly feeModels: Map<string, FeeModel>
   private readonly orderbookManager: OrderbookManager
+  private readonly marketMetadataServices: Map<string, MarketMetadataService>
   private readonly orderAmount: number
   private readonly minProfitThreshold: number
   private readonly minConfidenceScore: number
   private readonly maxMarketSpread: number
   private readonly maxCrossMarketSpread: number
   private readonly maxOrderbookAge: number
-  private readonly orderAmountTolerance: number
+  private readonly orderAmountToleranceMin: number
+  private readonly orderAmountToleranceMax: number
 
   constructor(
     orderbookManager: OrderbookManager,
     blacklistPairs: string[],
-    exchangeConfigs: ExchangeMeta[]
+    exchangeConfigs: ExchangeMeta[],
+    marketMetadataServices: Map<string, MarketMetadataService>
   ) {
     super()
     this.orderbookManager = orderbookManager
     this.blacklistPairs = blacklistPairs
     this.exchangeConfigs = new Map(exchangeConfigs.map(config => [config.name, config]))
+    this.marketMetadataServices = marketMetadataServices
     this.feeModels = new Map()
     this.orderAmount = config.trading.orderAmount
     this.minProfitThreshold = config.arbitrage.minProfitThreshold
@@ -65,7 +74,8 @@ export class ArbitrageEngine extends EventEmitter {
     this.maxMarketSpread = config.arbitrage.maxMarketSpread
     this.maxCrossMarketSpread = config.arbitrage.maxCrossMarketSpread
     this.maxOrderbookAge = config.arbitrage.maxOrderbookAge
-    this.orderAmountTolerance = config.arbitrage.orderAmountTolerance
+    this.orderAmountToleranceMin = config.arbitrage.orderAmountToleranceMin
+    this.orderAmountToleranceMax = config.arbitrage.orderAmountToleranceMax
     this.initializeModels()
     this.setupEventListeners()
   }
@@ -89,35 +99,38 @@ export class ArbitrageEngine extends EventEmitter {
 
   private simulateSlippage(
     orderbookSide: OrderBookLevel[],
-    targetUsdAmount: number,
-    isBuy: boolean
+    exchangeVolume: number,
+    isBuy: boolean,
+    exchange: string,
+    exchangeSymbol: string,
+    metadataService: MarketMetadataService
   ): DepthSimulationResult {
-    let remainingAmount = targetUsdAmount
-    let totalVolume = 0
+    let remainingVolume = exchangeVolume
     let weightedPrice = 0
     const basePrice = orderbookSide[0].price
 
     for (const level of orderbookSide) {
-      const levelValue = level.price * level.quantity
-      const fillAmount = Math.min(remainingAmount, levelValue)
-      const fillVolume = fillAmount / level.price
+      const fillVolume = Math.min(remainingVolume, level.quantity)
 
       weightedPrice += level.price * fillVolume
-      totalVolume += fillVolume
-      remainingAmount -= fillAmount
+      remainingVolume -= fillVolume
 
-      if (remainingAmount <= 0) break
+      if (remainingVolume <= 0) break
     }
 
-    const avgExecutionPrice = weightedPrice / totalVolume
+    if (remainingVolume > 0) {
+      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: ${remainingVolume} > ${exchangeVolume}`)
+    }
+
+    const avgExecutionPrice = weightedPrice / exchangeVolume
     const slippagePercent = isBuy
       ? (avgExecutionPrice - basePrice) / basePrice
       : (basePrice - avgExecutionPrice) / basePrice
 
     return {
       avgExecutionPrice,
+      avgNormalizedExecutionPrice: metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol),
       slippagePercent,
-      fillableVolume: totalVolume
     }
   }
 
@@ -147,13 +160,19 @@ export class ArbitrageEngine extends EventEmitter {
   }
 
   private estimateProfit(
-    buyPrice: number,
-    sellPrice: number,
-    volume: number,
+    normalizedBuyPrice: number,
+    normalizedSellPrice: number,
+    normalizedVolume: number,
+    buyExchangeVolume: number,
+    sellExchangeVolume: number,
     buyExchange: string,
     sellExchange: string,
+    buyExchangeSymbol: string,
+    sellExchangeSymbol: string,
     buyBook: OrderBook,
     sellBook: OrderBook,
+    buyMetadataService: MarketMetadataService,
+    sellMetadataService: MarketMetadataService,
     entryBuySimulation: DepthSimulationResult,
     entrySellSimulation: DepthSimulationResult,
     exitBuySimulation: DepthSimulationResult,
@@ -169,18 +188,18 @@ export class ArbitrageEngine extends EventEmitter {
     // === COST BREAKDOWN ===
     
     // 1. TRADING FEES (Entry + Exit)
-    const entryBuyFeeCosts = entryBuySimulation.avgExecutionPrice * volume * buyFeeModel.taker
-    const entrySellFeeCosts = entrySellSimulation.avgExecutionPrice * volume * sellFeeModel.taker
-    const exitBuyFeeCosts = exitBuySimulation.avgExecutionPrice * volume * buyFeeModel.taker
-    const exitSellFeeCosts = exitSellSimulation.avgExecutionPrice * volume * sellFeeModel.taker
+    const entryBuyFeeCosts = entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * buyFeeModel.taker
+    const entrySellFeeCosts = entrySellSimulation.avgNormalizedExecutionPrice * normalizedVolume * sellFeeModel.taker
+    const exitBuyFeeCosts = exitBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * buyFeeModel.taker
+    const exitSellFeeCosts = exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * sellFeeModel.taker
     
     const totalTradingFeesCosts = entryBuyFeeCosts + entrySellFeeCosts + exitBuyFeeCosts + exitSellFeeCosts
     
     // 2. SLIPPAGE COSTS (Entry + Exit)
-    const entryBuySlippageCosts = entryBuySimulation.avgExecutionPrice * volume * entryBuySimulation.slippagePercent
-    const entrySellSlippageCosts = entrySellSimulation.avgExecutionPrice * volume * entrySellSimulation.slippagePercent
-    const exitBuySlippageCosts = exitBuySimulation.avgExecutionPrice * volume * exitBuySimulation.slippagePercent
-    const exitSellSlippageCosts = exitSellSimulation.avgExecutionPrice * volume * exitSellSimulation.slippagePercent
+    const entryBuySlippageCosts = entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * entryBuySimulation.slippagePercent
+    const entrySellSlippageCosts = entrySellSimulation.avgNormalizedExecutionPrice * normalizedVolume * entrySellSimulation.slippagePercent
+    const exitBuySlippageCosts = exitBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * exitBuySimulation.slippagePercent
+    const exitSellSlippageCosts = exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * exitSellSimulation.slippagePercent
     
     const totalSlippageCosts = entryBuySlippageCosts + entrySellSlippageCosts + exitBuySlippageCosts + exitSellSlippageCosts
     
@@ -188,17 +207,17 @@ export class ArbitrageEngine extends EventEmitter {
     const buyMarketSpread = (buyBook.asks[0].price - buyBook.bids[0].price) / buyBook.bids[0].price
     const sellMarketSpread = (sellBook.asks[0].price - sellBook.bids[0].price) / sellBook.bids[0].price
     
-    const buyMarketSpreadCosts = volume * buyBook.bids[0].price * buyMarketSpread
-    const sellMarketSpreadCosts = volume * sellBook.asks[0].price * sellMarketSpread
+    const buyMarketSpreadCosts = normalizedVolume * buyMetadataService.normalizePrice(buyBook.bids[0].price, buyExchangeSymbol) * buyMarketSpread
+    const sellMarketSpreadCosts = normalizedVolume * sellMetadataService.normalizePrice(sellBook.asks[0].price, sellExchangeSymbol) * sellMarketSpread
     
     const totalSpreadCosts = buyMarketSpreadCosts + sellMarketSpreadCosts
     
     // === NET PROFIT CALCULATION ===
-    const totalProfit = (sellPrice - buyPrice) * volume
+    const totalProfit = (normalizedSellPrice - normalizedBuyPrice) * normalizedVolume
     const totalCosts = totalTradingFeesCosts + totalSlippageCosts + totalSpreadCosts
     const netProfit = totalProfit - totalCosts
     
-    const positionAmount = entryBuySimulation.avgExecutionPrice * volume
+    const positionAmount = entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume
 
     const profitPercent = totalProfit / positionAmount * 100
     const costsPercent = totalCosts / positionAmount * 100
@@ -207,8 +226,8 @@ export class ArbitrageEngine extends EventEmitter {
     const latencyPenalty = this.calculateLatencyPenalty(buyBook, sellBook)
     
     const confidence = Math.min(
-      this.calculateConfidenceScore(buyBook, buyExchange, volume, buyMarketSpread),
-      this.calculateConfidenceScore(sellBook, sellExchange, volume, sellMarketSpread)
+      this.calculateConfidenceScore(buyBook, buyExchange, normalizedVolume, buyMarketSpread),
+      this.calculateConfidenceScore(sellBook, sellExchange, normalizedVolume, sellMarketSpread)
     )
 
     return {
@@ -241,34 +260,50 @@ export class ArbitrageEngine extends EventEmitter {
     const exchanges = Array.from(allOrderbooks.keys())
     const commonPairs = this.getCommonPairs(allOrderbooks)
 
-    for (const pair of commonPairs) {
-      if (this.blacklistPairs.includes(pair)) continue
+    for (const normalizedPair of commonPairs) {
+      if (this.blacklistPairs.includes(normalizedPair)) continue
 
       for (let i = 0; i < exchanges.length; i++) {
         for (let j = i + 1; j < exchanges.length; j++) {
-          const exchA = exchanges[i]
-          const exchB = exchanges[j]
+          const exchangeA = exchanges[i]
+          const exchangeB = exchanges[j]
 
-          const bookA = allOrderbooks.get(exchA)?.get(pair)
-          const bookB = allOrderbooks.get(exchB)?.get(pair)
+          // Get metadata services for denormalization
+          const metadataServiceA = this.marketMetadataServices.get(exchangeA)
+          const metadataServiceB = this.marketMetadataServices.get(exchangeB)
 
-          if (!bookA || !bookB) continue
+          // Denormalize symbols for each exchange
+          const exchangeSymbolA = metadataServiceA?.denormalizeSymbol(normalizedPair)
+          const exchangeSymbolB = metadataServiceB?.denormalizeSymbol(normalizedPair)
+
+          const orderbookA = allOrderbooks.get(exchangeA)?.get(exchangeSymbolA!)
+          const orderbookB = allOrderbooks.get(exchangeB)?.get(exchangeSymbolB!)
+
+          if (!orderbookA || !orderbookB) continue
 
           // Check both directions
           this.checkDirection(
-            pair,
-            exchA,
-            exchB,
-            bookA,
-            bookB,
+            normalizedPair,
+            exchangeA,
+            exchangeB,
+            orderbookA,
+            orderbookB,
+            exchangeSymbolA!,
+            exchangeSymbolB!,
+            metadataServiceA!,
+            metadataServiceB!,
             opportunities
           )
           this.checkDirection(
-            pair,
-            exchB,
-            exchA,
-            bookB,
-            bookA,
+            normalizedPair,
+            exchangeB,
+            exchangeA,
+            orderbookB,
+            orderbookA,
+            exchangeSymbolB!,
+            exchangeSymbolA!,
+            metadataServiceB!,
+            metadataServiceA!,
             opportunities
           )
         }
@@ -279,7 +314,7 @@ export class ArbitrageEngine extends EventEmitter {
     const sortedOpportunities = opportunities
       .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
       // .slice(0, 5)
-      .filter(opportunity => opportunity.estimatedProfitPercent > -0.05)
+      .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
 
     if (sortedOpportunities.length > 0) {
       // logger.info('Top 5 arbitrage opportunities:', sortedOpportunities)
@@ -289,45 +324,123 @@ export class ArbitrageEngine extends EventEmitter {
   }
 
   private checkDirection(
-    pair: string,
+    normalizedPair: string,
     buyExchange: string,
     sellExchange: string,
     buyBook: OrderBook,
     sellBook: OrderBook,
+    buyExchangeSymbol: string,
+    sellExchangeSymbol: string,
+    buyMetadataService: MarketMetadataService,
+    sellMetadataService: MarketMetadataService,
     opportunities: ArbitrageOpportunity[]
   ): void {
+    // === PRICE NORMALIZATION ===
+    // Use the new normalization functions to handle price scales and contract sizes
+    const normalizedBuyPrice = buyMetadataService.normalizePrice(buyBook.asks[0].price, buyExchangeSymbol)
+    const normalizedSellPrice = sellMetadataService.normalizePrice(sellBook.bids[0].price, sellExchangeSymbol)
+    
     // === INITIAL VALIDATION ===
-    const buyPrice = buyBook.asks[0].price
-    const sellPrice = sellBook.bids[0].price
-    const crossMarketSpread = (sellPrice - buyPrice) / buyPrice
+    const crossMarketSpread = (normalizedSellPrice - normalizedBuyPrice) / normalizedBuyPrice
 
-    if (crossMarketSpread <= this.minProfitThreshold || crossMarketSpread > this.maxCrossMarketSpread) return
+    if (crossMarketSpread < this.minProfitThreshold || crossMarketSpread > this.maxCrossMarketSpread) return
 
     // === VOLUME CALCULATION ===
-    // Simulate slippage for both entry legs
-    const entryBuySimulation = this.simulateSlippage(buyBook.asks, this.orderAmount, true)
-    const entrySellSimulation = this.simulateSlippage(sellBook.bids, this.orderAmount, false)
+    // Calculate target normalized volume (base asset volume) based on order amount
+    const targetNormalizedVolume = this.orderAmount / normalizedBuyPrice
 
-    // Use the minimum fillable volume between buy and sell legs
-    const volume = Math.min(entryBuySimulation.fillableVolume, entrySellSimulation.fillableVolume)
+    // Convert normalized volume to exchange-specific contract amounts
+    const buyExchangeVolume = buyMetadataService.denormalizeAmount(targetNormalizedVolume, buyExchangeSymbol)
+    const sellExchangeVolume = sellMetadataService.denormalizeAmount(targetNormalizedVolume, sellExchangeSymbol)
+    
+    // Verify that both exchanges will have the same normalized volume
+    const buyNormalizedVolume = buyMetadataService.normalizeAmount(buyExchangeVolume, buyExchangeSymbol)
+    const sellNormalizedVolume = sellMetadataService.normalizeAmount(sellExchangeVolume, sellExchangeSymbol)
+    
+    // Use the smaller of the two to ensure both exchanges can handle the volume
+    const minNormalizedVolume = Math.min(buyNormalizedVolume, sellNormalizedVolume)
+    const maxNormalizedVolume = Math.max(buyNormalizedVolume, sellNormalizedVolume)
+    
+    // Recalculate exchange-specific volumes based on the actual normalized volume
+    const minActualBuyExchangeVolume = buyMetadataService.denormalizeAmount(minNormalizedVolume, buyExchangeSymbol)
+    const minActualSellExchangeVolume = sellMetadataService.denormalizeAmount(minNormalizedVolume, sellExchangeSymbol)
+    const minActualBuyNormalizedVolume = buyMetadataService.normalizeAmount(minActualBuyExchangeVolume, buyExchangeSymbol)
+    const minActualSellNormalizedVolume = sellMetadataService.normalizeAmount(minActualSellExchangeVolume, sellExchangeSymbol)
+    
+    const maxActualBuyExchangeVolume = buyMetadataService.denormalizeAmount(maxNormalizedVolume, buyExchangeSymbol)
+    const maxActualSellExchangeVolume = sellMetadataService.denormalizeAmount(maxNormalizedVolume, sellExchangeSymbol)
+    const maxActualBuyNormalizedVolume = buyMetadataService.normalizeAmount(maxActualBuyExchangeVolume, buyExchangeSymbol)
+    const maxActualSellNormalizedVolume = sellMetadataService.normalizeAmount(maxActualSellExchangeVolume, sellExchangeSymbol)
 
-    // Validate minimum order amount
-    if (volume * buyPrice < this.orderAmount * this.orderAmountTolerance) return
+    // === VOLUME VALIDATION ===
+    // Declare variables that will be set based on validation
+    let finalNormalizedVolume: number
+    let finalBuyExchangeVolume: number
+    let finalSellExchangeVolume: number
+    
+    // Check if min normalized volumes are equal
+    if (Math.abs(minActualBuyNormalizedVolume - minActualSellNormalizedVolume) < 1e-10) {
+      // Use min volumes
+      finalNormalizedVolume = minNormalizedVolume
+      finalBuyExchangeVolume = minActualBuyExchangeVolume
+      finalSellExchangeVolume = minActualSellExchangeVolume
+    } else if (Math.abs(maxActualBuyNormalizedVolume - maxActualSellNormalizedVolume) < 1e-10) {
+      // Use max volumes
+      finalNormalizedVolume = maxNormalizedVolume
+      finalBuyExchangeVolume = maxActualBuyExchangeVolume
+      finalSellExchangeVolume = maxActualSellExchangeVolume
+    } else {
+      // Neither min nor max volumes are equal - this indicates a problem with normalization
+      logger.warn(`Volume normalization failed for ${normalizedPair}: min volumes (${minActualBuyNormalizedVolume}, ${minActualSellNormalizedVolume}) and max volumes (${maxActualBuyNormalizedVolume}, ${maxActualSellNormalizedVolume}) are not equal`)
+      return
+    }
+    
+    // Validate minimum contract amounts
+    const buyMetadata = buyMetadataService.getMetadata(buyExchangeSymbol)
+    const sellMetadata = sellMetadataService.getMetadata(sellExchangeSymbol)
+    
+    if (buyMetadata && finalBuyExchangeVolume < buyMetadata.minAmount!) {
+      logger.warn(`[${buyExchange}] Buy volume ${finalBuyExchangeVolume} below minimum ${buyMetadata.minAmount} for ${buyExchangeSymbol}`)
+      return
+    }
+    
+    if (sellMetadata && finalSellExchangeVolume < sellMetadata.minAmount!) {
+      logger.warn(`[${sellExchange}] Sell volume ${finalSellExchangeVolume} below minimum ${sellMetadata.minAmount} for ${sellExchangeSymbol}`)
+      return
+    }
+
+    // Validate order amount tolerance using normalized price
+    const orderAmountValue = finalNormalizedVolume * normalizedBuyPrice
+    if (orderAmountValue < this.orderAmount * this.orderAmountToleranceMin || orderAmountValue > this.orderAmount * this.orderAmountToleranceMax) {
+      logger.warn(`[${buyExchange}] Normalized volume is outside order amount tolerance range ${orderAmountValue} not in [${this.orderAmount * this.orderAmountToleranceMin}, ${this.orderAmount * this.orderAmountToleranceMax}] for ${buyExchangeSymbol}`)
+      return
+    }
+
+// TODO: OKX PEPE should be multiplied by contractSize
+    // Simulate slippage for both entry legs using the actual exchange-specific volumes
+    const entryBuySimulation = this.simulateSlippage(buyBook.asks, finalBuyExchangeVolume, true, buyExchange, buyExchangeSymbol, buyMetadataService)
+    const entrySellSimulation = this.simulateSlippage(sellBook.bids, finalSellExchangeVolume, false, sellExchange, sellExchangeSymbol, sellMetadataService)
 
     // === EXIT SLIPPAGE SIMULATION ===
-    // Simulate exit slippage for both exchanges
-    const exitBuySimulation = this.simulateSlippage(buyBook.bids, this.orderAmount, false)
-    const exitSellSimulation = this.simulateSlippage(sellBook.asks, this.orderAmount, true)
+    // Simulate exit slippage for both exchanges using the actual exchange-specific volumes
+    const exitBuySimulation = this.simulateSlippage(buyBook.bids, finalBuyExchangeVolume, false, buyExchange, buyExchangeSymbol, buyMetadataService)
+    const exitSellSimulation = this.simulateSlippage(sellBook.asks, finalSellExchangeVolume, true, sellExchange, sellExchangeSymbol, sellMetadataService)
 
     // === PROFIT ESTIMATION ===
     const profitEstimate = this.estimateProfit(
-      buyPrice,
-      sellPrice,
-      volume,
+      normalizedBuyPrice,
+      normalizedSellPrice,
+      finalNormalizedVolume,
+      finalBuyExchangeVolume,
+      finalSellExchangeVolume,
       buyExchange,
       sellExchange,
+      buyExchangeSymbol,
+      sellExchangeSymbol,
       buyBook,
       sellBook,
+      buyMetadataService,
+      sellMetadataService,
       entryBuySimulation,
       entrySellSimulation,
       exitBuySimulation,
@@ -339,15 +452,19 @@ export class ArbitrageEngine extends EventEmitter {
 
     // === OPPORTUNITY CREATION ===
     // Calculate volumeUSDT as the maximum between buy and sell sides
-    const volumeUSDT = Math.max(volume * buyPrice, volume * sellPrice)
+    const volumeUSDT = Math.max(finalNormalizedVolume * normalizedBuyPrice, finalNormalizedVolume * normalizedSellPrice)
     
     opportunities.push({
-      pair,
+      normalizedPair,
+      buyExchangeSymbol,
+      sellExchangeSymbol,
       buyExchange,
       sellExchange,
-      buyPrice,
-      sellPrice,
-      fillableVolume: volume,
+      normalizedBuyPrice,
+      normalizedSellPrice,
+      normalizedVolume: finalNormalizedVolume,
+      buyExchangeVolume: finalBuyExchangeVolume,
+      sellExchangeVolume: finalSellExchangeVolume,
       volumeUSDT,
       confidenceScore: profitEstimate.confidence,
       estimatedProfit: profitEstimate.estimatedProfit,
@@ -356,11 +473,22 @@ export class ArbitrageEngine extends EventEmitter {
   }
 
   private getCommonPairs(orderbooks: Map<string, Map<string, OrderBook>>): string[] {
-    const pairSets = Array.from(orderbooks.values()).map(exchange => 
-      new Set(exchange.keys())
-    )
+    // Get normalized symbols for each exchange
+    const normalizedPairSets = Array.from(orderbooks.entries()).map(([exchangeId, orderbook]) => {
+      const metadataService = this.marketMetadataServices.get(exchangeId)
+      if (!metadataService) return new Set<string>()
+      
+      // Convert exchange-specific symbols to normalized symbols
+      const normalizedPairs = new Set<string>()
+      for (const symbol of orderbook.keys()) {
+        const normalizedSymbol = metadataService.normalizeSymbol(symbol)
+        normalizedPairs.add(normalizedSymbol)
+      }
+      return normalizedPairs
+    })
     
-    return Array.from(pairSets.reduce((common, pairs) => {
+    // Find common normalized symbols across all exchanges
+    return Array.from(normalizedPairSets.reduce((common, pairs) => {
       if (common.size === 0) return pairs
       return new Set([...common].filter(pair => pairs.has(pair)))
     }, new Set<string>()))

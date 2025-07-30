@@ -27,7 +27,7 @@ const tradeParams: TradeParams = {
   sellExchange: 'bybit',
   volume: 100,
   side: 'buy',
-  expectedProfitPercent: 0.5,
+  estimatedProfitPercent: 0.5,
   confidenceScore: 0.8,
   timestamp: Date.now()
 }
@@ -92,9 +92,9 @@ arbitrageEngine.on('opportunities', async (opportunities) => {
       pair: opportunity.pair,
       buyExchange: opportunity.buyExchange,
       sellExchange: opportunity.sellExchange,
-      volume: opportunity.fillableVolume,
+      volume: opportunity.normalizedVolume,
       volumeUSDT: opportunity.volumeUSDT,
-      expectedProfitPercent: opportunity.estimatedProfitPercent,
+      estimatedProfitPercent: opportunity.estimatedProfitPercent,
       confidenceScore: opportunity.confidenceScore,
       timestamp: Date.now()
     }

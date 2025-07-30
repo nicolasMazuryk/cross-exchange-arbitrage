@@ -69,13 +69,15 @@ export abstract class BaseExchange implements RestClientInterface {
             !market.inverse &&
             market.active
           )
-          // .filter(([symbol, market]) => 
-          //   symbol.startsWith('SAHARA') || 
-          //   // symbol.startsWith('SOL') || 
-          //   // symbol.startsWith('GOAT') || 
-          //   // symbol.startsWith('DOGS') ||
-          //   symbol.startsWith('PENGU')
-          // )
+          .filter(([symbol, market]) => 
+            // symbol.startsWith('SAHARA') || 
+            // symbol.startsWith('SOL') || 
+            // symbol.startsWith('GOAT') || 
+            // symbol.startsWith('DOGS') ||
+            symbol.includes('PEPE')
+            // symbol.includes('ACH')
+            // market.contractSize !== 1
+          )
       )
       
       return usdtPerpetualMarkets

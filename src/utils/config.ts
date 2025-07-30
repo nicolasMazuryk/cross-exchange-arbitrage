@@ -37,7 +37,8 @@ interface ArbitrageConfig {
   maxCrossMarketSpread: number
   maxOrderbookAge: number
   minProfitThreshold: number
-  orderAmountTolerance: number
+  orderAmountToleranceMin: number
+  orderAmountToleranceMax: number
 }
 
 interface TradingConfig {
@@ -129,7 +130,8 @@ const config: Config = {
     maxCrossMarketSpread: yamlConfig?.arbitrage?.maxCrossMarketSpread,
     maxOrderbookAge: yamlConfig?.arbitrage?.maxOrderbookAge,
     minProfitThreshold: yamlConfig?.arbitrage?.minProfitThreshold,
-    orderAmountTolerance: yamlConfig?.arbitrage?.orderAmountTolerance
+    orderAmountToleranceMin: yamlConfig?.arbitrage?.orderAmountToleranceMin,
+    orderAmountToleranceMax: yamlConfig?.arbitrage?.orderAmountToleranceMax
   },
   trading: {
     orderAmount: yamlConfig?.trading?.orderAmount,
