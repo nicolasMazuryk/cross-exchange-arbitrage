@@ -90,16 +90,6 @@ export class OrderbookManager extends EventEmitter {
         (symbolTopOfBook.bestBid.price !== bestBid.price || symbolTopOfBook.bestAsk.price !== bestAsk.price)
       ) {
         this.emit('topOfBookUpdate', newTopOfBook)
-
-        if (this.trackedPairs.has(symbol)) {
-          logger.info(`Top of book update for ${exchange}:${symbol}:`, {
-            bestBid: bestBid.price,
-            bestBidQty: bestBid.quantity,
-            bestAsk: bestAsk.price,
-            bestAskQty: bestAsk.quantity,
-            spread,
-          })
-        }
       }
     }
   }

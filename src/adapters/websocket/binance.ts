@@ -66,7 +66,7 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('reply', (data: any) => {
-      logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
+      // logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
     })
 
     batch.client.on('reconnecting', (data: any) => {

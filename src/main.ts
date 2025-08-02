@@ -8,10 +8,9 @@ async function main() {
     // Create and initialize the orchestrator with default configuration
     const orchestrator = await createOrchestrator()
     
-    orchestrator.on('arbitrageOpportunities', (opportunities) => {
-      logger.info('💰 Arbitrage opportunities detected:', opportunities)
+    // orchestrator.on('arbitrageOpportunities', (opportunities) => {
       // TODO: Handle arbitrage opportunities
-    })
+    // })
     
     orchestrator.on('accountUpdate', (update) => {
       logger.debug('📊 Account state update:', update)

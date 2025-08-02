@@ -75,19 +75,9 @@ export class TradeExecutor extends EventEmitter {
     const { opportunity } = tradeParams
     const tradeId = generateTradeId()
     const startTime = Date.now()
-    
-    // Check if pair is already being processed
-    if (this.processingPairs.has(opportunity.normalizedPair)) {
-      logger.warn(`[${tradeId}] Skipping trade - pair ${opportunity.normalizedPair} already being processed`)
-      return this.createErrorResult(opportunity, tradeId, 'pre-check', `Pair ${opportunity.normalizedPair} already being processed`)
-    }
 
     // Lock the pair for processing
     this.processingPairs.add(opportunity.normalizedPair)
-    
-    logger.info(`[${tradeId}] Starting trade execution`, {
-      opportunity,
-    })
 
     try {
       // Pre-trade validation
@@ -95,6 +85,8 @@ export class TradeExecutor extends EventEmitter {
       if (!validation.isValid) {
         return this.createErrorResult(opportunity, tradeId, 'pre-check', [...validation.errors, ...validation.warnings].join('; '))
       }
+
+      logger.info(`💰 [${tradeId}] Starting trade execution`, { opportunity })
 
       // Execute the trade pair
       const entryTradeResult = await this.executeTradePair(tradeId, tradeParams)

@@ -60,18 +60,18 @@ trading:
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   monitor:
     maxHoldTimeMs: 1000 * 60 * 60 * 24  # 24 hours max hold time
-    convergenceBufferPercent: 0.3  # 0.05% convergence buffer
+    convergenceBufferPercent: 0.01  # 0.05% convergence buffer
     checkIntervalMs: 5000  # 5 second check interval
 
 arbitrage:
   blacklistPairs: []  # pairs to exclude from arbitrage
   minConfidenceScore: 0.7  # minimum confidence score for opportunities
   maxMarketSpread: 0.003  # maximum market spread width within an exchange (0.3%)
-  maxCrossMarketSpread: 0.03  # maximum cross-market spread between exchanges (3%)
+  maxCrossMarketSpread: 0.10  # maximum cross-market spread between exchanges (10%)
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  minProfitThreshold: 0.000  # 0.2%
-  orderAmountToleranceMin: 0.90  # minimum order amount tolerance (90% of order amount)
-  orderAmountToleranceMax: 1.30  # maximum order amount tolerance (130% of order amount)
+  minProfitThreshold: 0.0015  # 0.15%
+  orderAmountToleranceMin: 0.60  # minimum order amount tolerance (60% of order amount)
+  orderAmountToleranceMax: 1.40  # maximum order amount tolerance (140% of order amount)
 
 accountSync:
   maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)

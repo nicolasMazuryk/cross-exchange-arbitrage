@@ -231,7 +231,7 @@ export class Orchestrator extends EventEmitter {
 
     // Listen for arbitrage opportunities
     this.arbitrageEngine.on('opportunities', (opportunities) => {
-      this.emit('arbitrageOpportunities', opportunities)
+      // this.emit('arbitrageOpportunities', opportunities)
       // Process opportunities with trading services
       if (this.tradeExecutor) {
         this.processArbitrageOpportunities(opportunities)
@@ -314,10 +314,10 @@ export class Orchestrator extends EventEmitter {
 
     this.tradeMonitor.on('tradeClosed', (trade) => {
       this.emit('tradeClosed', trade)
-      logger.info(`Trade closed: ${trade.id}`, {
-        exitReason: trade.exitReason,
-        pnl: trade.pnl
-      })
+      // logger.info(`Trade closed: ${trade.id}`, {
+      //   exitReason: trade.exitReason,
+      //   pnlPercent: trade.pnlPercent
+      // })
     })
 
     this.tradeMonitor.on('tradeError', ({ trade, error }) => {
@@ -334,7 +334,7 @@ export class Orchestrator extends EventEmitter {
       return
     }
 
-    logger.info(`Processing ${opportunities.length} arbitrage opportunities`)
+    // logger.info(`Processing ${opportunities.length} arbitrage opportunities`)
 
     for (const opportunity of opportunities) {
       try {
@@ -342,6 +342,12 @@ export class Orchestrator extends EventEmitter {
         const tradeParams = {
           opportunity,
           timestamp: Date.now()
+        }
+        
+        // Check if pair is already being processed
+        if (this.tradeExecutor.isPairProcessing(opportunity.normalizedPair)) {
+          // logger.warn(`Skipping trade - pair ${opportunity.normalizedPair} already being processed`)
+          continue
         }
 
         // Execute the trade
@@ -355,9 +361,9 @@ export class Orchestrator extends EventEmitter {
             latencyMs: result.latencyMs
           })
         } else {
-          logger.warn(`Trade execution failed: ${result.id}`, {
-            error: result.errorDetails?.message
-          })
+          // logger.warn(`Trade execution failed: ${result.id}`, {
+          //   error: result.errorDetails?.message
+          // })
         }
       } catch (error) {
         logger.error(`Failed to process opportunity`, {

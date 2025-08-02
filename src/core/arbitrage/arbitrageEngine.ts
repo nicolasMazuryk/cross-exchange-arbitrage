@@ -83,7 +83,7 @@ export class ArbitrageEngine extends EventEmitter {
   private setupEventListeners(): void {
     // Listen for top of book updates
     this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
-      this.scanOpportunities()
+      this.scanOpportunities(topOfBook)
     })
   }
 
@@ -119,7 +119,7 @@ export class ArbitrageEngine extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
-      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: ${remainingVolume} > ${exchangeVolume}`)
+      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: ${remainingVolume} ($${remainingVolume * basePrice}) > ${exchangeVolume} ($${exchangeVolume * basePrice})`)
     }
 
     const avgExecutionPrice = weightedPrice / exchangeVolume
@@ -242,10 +242,11 @@ export class ArbitrageEngine extends EventEmitter {
     // TODO: exchange execution latency score
     return 0
   }
-
-  private scanOpportunities(): void {
+// Optimized: scan only the updated symbol across all exchanges to improve latency and CPU usage
+  private scanOpportunities(topOfBook: TopOfBook): void {
     const allOrderbooks = this.orderbookManager.getAllOrderbooks()
-    const opportunities = this.scanOrderbooks(allOrderbooks)
+    // const opportunities = this.scanAllOrderbooks(allOrderbooks)
+    const opportunities = this.scanOrderbooksForSymbol(topOfBook.symbol, allOrderbooks)
 
     if (opportunities.length > 0) {
       // Emit opportunities for trade execution
@@ -253,7 +254,88 @@ export class ArbitrageEngine extends EventEmitter {
     }
   }
 
-  private scanOrderbooks(
+  private scanOrderbooksForSymbol(symbol: string, allOrderbooks: Map<string, Map<string, OrderBook>>): ArbitrageOpportunity[] {
+    const opportunities: ArbitrageOpportunity[] = []
+    const exchanges = Array.from(allOrderbooks.keys())
+    
+    // Normalize the symbol to find the normalized pair
+    let normalizedPair: string | null = null
+    let exchangeSymbols = new Map<string, string>()
+
+    // Find the normalized pair and exchange-specific symbols
+    for (const exchange of exchanges) {
+      const metadataService = this.marketMetadataServices.get(exchange)
+      if (!metadataService) continue
+
+      const normalizedSymbol = metadataService.normalizeSymbol(symbol)
+      if (normalizedSymbol) {
+        normalizedPair = normalizedSymbol
+        exchangeSymbols.set(exchange, symbol)
+      }
+    }
+
+    if (!normalizedPair || this.blacklistPairs.includes(normalizedPair)) return []
+
+    // Check all exchange pairs for this specific symbol
+    for (let i = 0; i < exchanges.length; i++) {
+      for (let j = i + 1; j < exchanges.length; j++) {
+        const exchangeA = exchanges[i]
+        const exchangeB = exchanges[j]
+
+        const exchangeSymbolA = exchangeSymbols.get(exchangeA)
+        const exchangeSymbolB = exchangeSymbols.get(exchangeB)
+
+        if (!exchangeSymbolA || !exchangeSymbolB) continue
+
+        const orderbookA = allOrderbooks.get(exchangeA)?.get(exchangeSymbolA)
+        const orderbookB = allOrderbooks.get(exchangeB)?.get(exchangeSymbolB)
+
+        if (!orderbookA || !orderbookB) continue
+
+        // Get metadata services for denormalization
+        const metadataServiceA = this.marketMetadataServices.get(exchangeA)
+        const metadataServiceB = this.marketMetadataServices.get(exchangeB)
+
+        if (!metadataServiceA || !metadataServiceB) continue
+
+        // Check both directions
+        this.checkDirection(
+          normalizedPair,
+          exchangeA,
+          exchangeB,
+          orderbookA,
+          orderbookB,
+          exchangeSymbolA,
+          exchangeSymbolB,
+          metadataServiceA,
+          metadataServiceB,
+          opportunities
+        )
+        this.checkDirection(
+          normalizedPair,
+          exchangeB,
+          exchangeA,
+          orderbookB,
+          orderbookA,
+          exchangeSymbolB,
+          exchangeSymbolA,
+          metadataServiceB,
+          metadataServiceA,
+          opportunities
+        )
+      }
+    }
+
+    // Sort by estimated profit and filter by minimum threshold
+    const sortedOpportunities = opportunities
+      .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
+      .filter(opportunity => opportunity.estimatedProfitPercent >= this.minProfitThreshold * 100)
+      // .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
+
+    return sortedOpportunities
+  }
+// Legacy/Outdated
+  private scanAllOrderbooks(
     allOrderbooks: Map<string, Map<string, OrderBook>>
   ): ArbitrageOpportunity[] {
     const opportunities: ArbitrageOpportunity[] = []
@@ -314,11 +396,8 @@ export class ArbitrageEngine extends EventEmitter {
     const sortedOpportunities = opportunities
       .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
       // .slice(0, 5)
-      .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
-
-    if (sortedOpportunities.length > 0) {
-      // logger.info('Top 5 arbitrage opportunities:', sortedOpportunities)
-    }
+      // .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
+      .filter(opportunity => opportunity.estimatedProfitPercent >= this.minProfitThreshold * 100)
 
     return sortedOpportunities
   }

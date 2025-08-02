@@ -67,7 +67,7 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('response', (data: any) => {
-        logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
+        // logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
     })
   
     batch.client.on('reconnect', (data: any) => {

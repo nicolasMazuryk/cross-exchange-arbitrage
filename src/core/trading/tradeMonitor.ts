@@ -21,17 +21,21 @@ export interface TrackedTrade {
   exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
   lastUpdateTimestamp: number
   // PnL calculations
-  costs: {
-    entryFees: number
-    entrySlippage: number
-    exitFees: number
-    exitSlippage: number
+  fees: {
+    entry: number
+    exit: number
+    total: number
+  }
+  slippage: {
+    entry: number
+    exit: number
     total: number
   }
   profit: number
   pnl: number
   // Percentage calculations
-  costsPercent: number
+  feesPercent: number
+  slippagePercent: number
   profitPercent: number
   pnlPercent: number
 }
@@ -117,16 +121,20 @@ export class TradeMonitor extends EventEmitter {
       status: 'open',
       entryTrade: tradeResult,
       lastUpdateTimestamp: Date.now(),
-      costs: {
-        entryFees: tradeResult.fees,
-        entrySlippage: tradeResult.slippage,
-        exitFees: 0, // Will be calculated when position is open
-        exitSlippage: 0, // Will be calculated when position is open
-        total: tradeResult.fees + tradeResult.slippage
+      fees: {
+        entry: tradeResult.fees,
+        exit: 0, // Will be calculated when position is closed
+        total: tradeResult.fees
+      },
+      slippage: {
+        entry: tradeResult.slippage,
+        exit: 0, // Will be calculated when position is closed
+        total: tradeResult.slippage
       },
       profit: 0, // Will be calculated based on current or actual exit prices
-      pnl: 0, // Will be calculated as profit - costs
-      costsPercent: 0,
+      pnl: 0, // Will be calculated as profit - fees
+      feesPercent: 0,
+      slippagePercent: 0,
       profitPercent: 0,
       pnlPercent: 0
     }
@@ -336,16 +344,19 @@ export class TradeMonitor extends EventEmitter {
     const exitBuyFees = calculateFees({ averagePrice: buyExchangeExitPrice, quantity: trade.entryTrade.buyOrder!.quantity } as OrderInfo, buyFeeRate)
     const exitSellFees = calculateFees({ averagePrice: sellExchangeExitPrice, quantity: trade.entryTrade.sellOrder!.quantity } as OrderInfo, sellFeeRate)
     
-    trade.costs.exitFees = exitBuyFees + exitSellFees
-    trade.costs.exitSlippage = 0 // Exit slippage is 0 for open positions (estimated exit)
-    trade.costs.total = trade.costs.entryFees + trade.costs.entrySlippage + trade.costs.exitFees + trade.costs.exitSlippage
+    trade.fees.exit = exitBuyFees + exitSellFees
+    trade.slippage.exit = 0 // Exit slippage is 0 for open positions (estimated exit)
+    trade.fees.total = trade.fees.entry + trade.fees.exit
+    trade.slippage.total = trade.slippage.entry + trade.slippage.exit
 
-    // Calculate total PnL: Profit - Costs
-    trade.pnl = trade.profit - trade.costs.total
+    // Calculate total PnL: Profit - Fees
+    // Note: Slippage costs already included in averagePrices
+    trade.pnl = trade.profit - trade.fees.total
 
     // Calculate percentages
     const totalTradeValue = (trade.opportunity.normalizedBuyPrice + trade.opportunity.normalizedSellPrice) * trade.opportunity.normalizedVolume / 2
-    trade.costsPercent = (trade.costs.total / totalTradeValue) * 100
+    trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
+    trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
     trade.profitPercent = (trade.profit / totalTradeValue) * 100
     trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
   }
@@ -416,10 +427,10 @@ export class TradeMonitor extends EventEmitter {
 
       logger.info(`[${trade.id}] Exit trade completed`, {
         exitReason,
-        pnl: trade.pnl,
-        profit: trade.profit,
-        costs: trade.costs,
-        pnlPercent: trade.pnlPercent
+        pnlPercent: trade.pnlPercent,
+        profitPercent: trade.profitPercent,
+        feesPercent: trade.feesPercent,
+        slippagePercent: trade.slippagePercent,
       })
 
       this.emit('tradeClosed', trade)
@@ -464,9 +475,10 @@ export class TradeMonitor extends EventEmitter {
    */
   private updatePnLWithActualExit(trade: TrackedTrade, exitTrade: TradeResult): void {
     // Update costs with actual exit data
-    trade.costs.exitFees = exitTrade.fees
-    trade.costs.exitSlippage = exitTrade.slippage
-    trade.costs.total = trade.costs.entryFees + trade.costs.entrySlippage + trade.costs.exitFees + trade.costs.exitSlippage
+    trade.fees.exit = exitTrade.fees
+    trade.slippage.exit = exitTrade.slippage
+    trade.fees.total = trade.fees.entry + trade.fees.exit
+    trade.slippage.total = trade.slippage.entry + trade.slippage.exit
 
     // Calculate profit with actual exit prices
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
@@ -479,11 +491,12 @@ export class TradeMonitor extends EventEmitter {
     trade.profit = buyLegProfit + sellLegProfit
 
     // Calculate final PnL: Profit - Costs
-    trade.pnl = trade.profit - trade.costs.total
+    trade.pnl = trade.profit - trade.fees.total
 
     // Calculate percentages
     const totalTradeValue = (trade.opportunity.normalizedBuyPrice + trade.opportunity.normalizedSellPrice) * trade.opportunity.normalizedVolume / 2
-    trade.costsPercent = (trade.costs.total / totalTradeValue) * 100
+    trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
+    trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
     trade.profitPercent = (trade.profit / totalTradeValue) * 100
     trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
   }
@@ -535,10 +548,12 @@ export class TradeMonitor extends EventEmitter {
     totalPnL: number
     avgPnL: number
     totalProfit: number
-    totalCosts: number
+    totalFees: number
+    totalSlippage: number
     avgPnLPercent: number
     avgProfitPercent: number
-    avgCostsPercent: number
+    avgFeesPercent: number
+    avgSlippagePercent: number
   } {
     const trades = this.getTrackedTrades()
     const openTrades = trades.filter(t => t.status === 'open')
@@ -547,11 +562,13 @@ export class TradeMonitor extends EventEmitter {
 
     const totalPnL = trades.reduce((sum, trade) => sum + trade.pnl, 0)
     const totalProfit = trades.reduce((sum, trade) => sum + trade.profit, 0)
-    const totalCosts = trades.reduce((sum, trade) => sum + trade.costs.total, 0)
+    const totalFees = trades.reduce((sum, trade) => sum + trade.fees.total, 0)
+    const totalSlippage = trades.reduce((sum, trade) => sum + trade.slippage.total, 0)
     const avgPnL = trades.length > 0 ? totalPnL / trades.length : 0
     const avgPnLPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.pnlPercent, 0) / trades.length : 0
     const avgProfitPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.profitPercent, 0) / trades.length : 0
-    const avgCostsPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.costsPercent, 0) / trades.length : 0
+    const avgFeesPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.feesPercent, 0) / trades.length : 0
+    const avgSlippagePercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.slippagePercent, 0) / trades.length : 0
 
     return {
       totalTrades: trades.length,
@@ -561,10 +578,12 @@ export class TradeMonitor extends EventEmitter {
       totalPnL,
       avgPnL,
       totalProfit,
-      totalCosts,
+      totalFees,
+      totalSlippage,
       avgPnLPercent,
       avgProfitPercent,
-      avgCostsPercent
+      avgFeesPercent,
+      avgSlippagePercent
     }
   }
 } 
