@@ -39,6 +39,9 @@ interface ArbitrageConfig {
   minProfitThreshold: number
   orderAmountToleranceMin: number
   orderAmountToleranceMax: number
+  minPersistenceMs: number
+  minConsecutiveSnapshots: number
+  candidateCleanupMs: number
 }
 
 interface TradingConfig {
@@ -131,7 +134,10 @@ const config: Config = {
     maxOrderbookAge: yamlConfig?.arbitrage?.maxOrderbookAge,
     minProfitThreshold: yamlConfig?.arbitrage?.minProfitThreshold,
     orderAmountToleranceMin: yamlConfig?.arbitrage?.orderAmountToleranceMin,
-    orderAmountToleranceMax: yamlConfig?.arbitrage?.orderAmountToleranceMax
+    orderAmountToleranceMax: yamlConfig?.arbitrage?.orderAmountToleranceMax,
+    minPersistenceMs: yamlConfig?.arbitrage?.minPersistenceMs,
+    minConsecutiveSnapshots: yamlConfig?.arbitrage?.minConsecutiveSnapshots,
+    candidateCleanupMs: yamlConfig?.arbitrage?.candidateCleanupMs
   },
   trading: {
     orderAmount: yamlConfig?.trading?.orderAmount,

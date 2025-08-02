@@ -24,6 +24,29 @@ interface OpportunityScore {
   confidence: number
 }
 
+// Temporal Persistence Validation interfaces
+interface ArbitrageCandidate {
+  normalizedPair: string
+  buyExchange: string
+  sellExchange: string
+  buyExchangeSymbol: string
+  sellExchangeSymbol: string
+  firstDetectedAt: number
+  lastDetectedAt: number
+  buyExchangeConsecutiveSnapshots: number
+  sellExchangeConsecutiveSnapshots: number
+  avgBuyNormalizedExecutionPrice: number
+  avgSellNormalizedExecutionPrice: number
+  estimatedProfitPercent: number
+  spread: number
+}
+
+interface PersistenceValidationResult {
+  isValid: boolean
+  reason?: string
+  candidate?: ArbitrageCandidate
+}
+
 export interface ArbitrageOpportunity {
   normalizedPair: string
   buyExchangeSymbol: string
@@ -55,6 +78,12 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly maxOrderbookAge: number
   private readonly orderAmountToleranceMin: number
   private readonly orderAmountToleranceMax: number
+  // Temporal Persistence Validation
+  private readonly minPersistenceMs: number
+  private readonly minConsecutiveSnapshots: number
+  private readonly candidateCleanupMs: number
+  private readonly candidates: Map<string, ArbitrageCandidate>
+  private lastCleanupTime: number
 
   constructor(
     orderbookManager: OrderbookManager,
@@ -76,6 +105,12 @@ export class ArbitrageEngine extends EventEmitter {
     this.maxOrderbookAge = config.arbitrage.maxOrderbookAge
     this.orderAmountToleranceMin = config.arbitrage.orderAmountToleranceMin
     this.orderAmountToleranceMax = config.arbitrage.orderAmountToleranceMax
+    // Temporal Persistence Validation
+    this.minPersistenceMs = config.arbitrage.minPersistenceMs
+    this.minConsecutiveSnapshots = config.arbitrage.minConsecutiveSnapshots
+    this.candidateCleanupMs = config.arbitrage.candidateCleanupMs
+    this.candidates = new Map()
+    this.lastCleanupTime = Date.now()
     this.initializeModels()
     this.setupEventListeners()
   }
@@ -242,11 +277,127 @@ export class ArbitrageEngine extends EventEmitter {
     // TODO: exchange execution latency score
     return 0
   }
+
+  // Temporal Persistence Validation Methods
+  private generateCandidateKey(
+    normalizedPair: string,
+    buyExchange: string,
+    sellExchange: string
+  ): string {
+    return `${normalizedPair}::${buyExchange}::${sellExchange}`
+  }
+
+  private cleanupStaleCandidates(): void {
+    const now = Date.now()
+    if (now - this.lastCleanupTime < this.candidateCleanupMs) return
+
+    const staleThreshold = now - this.candidateCleanupMs
+    const keysToRemove: string[] = []
+
+    for (const [key, candidate] of this.candidates) {
+      if (candidate.lastDetectedAt < staleThreshold) {
+        keysToRemove.push(key)
+      }
+    }
+
+    for (const key of keysToRemove) {
+      this.candidates.delete(key)
+      logger.debug(`Cleaned up stale candidate: ${key}`)
+    }
+
+    this.lastCleanupTime = now
+  }
+
+  private validatePersistence(
+    normalizedPair: string,
+    buyExchange: string,
+    sellExchange: string,
+    avgBuyNormalizedExecutionPrice: number,
+    avgSellNormalizedExecutionPrice: number,
+    estimatedProfitPercent: number,
+    spread: number,
+    updatingExchange: string
+  ): PersistenceValidationResult {
+    const candidateKey = this.generateCandidateKey(normalizedPair, buyExchange, sellExchange)
+    const now = Date.now()
+
+    // Clean up stale candidates
+    this.cleanupStaleCandidates()
+
+    // Check if this is a new candidate or existing one
+    const existingCandidate = this.candidates.get(candidateKey)
+
+    if (!existingCandidate) {
+      // New candidate - create and track
+      const newCandidate: ArbitrageCandidate = {
+        normalizedPair,
+        buyExchange,
+        sellExchange,
+        buyExchangeSymbol: '', // Will be set in the calling method
+        sellExchangeSymbol: '', // Will be set in the calling method
+        firstDetectedAt: now,
+        lastDetectedAt: now,
+        buyExchangeConsecutiveSnapshots: updatingExchange === buyExchange ? 1 : 0,
+        sellExchangeConsecutiveSnapshots: updatingExchange === sellExchange ? 1 : 0,
+        avgBuyNormalizedExecutionPrice,
+        avgSellNormalizedExecutionPrice,
+        estimatedProfitPercent,
+        spread
+      }
+      this.candidates.set(candidateKey, newCandidate)
+      
+      logger.debug(`New arbitrage candidate detected: ${candidateKey}, spread: ${(spread * 100).toFixed(3)}%, profit: ${estimatedProfitPercent.toFixed(3)}%`)
+      return { isValid: false, reason: 'New candidate - waiting for persistence', candidate: newCandidate }
+    }
+
+    // Existing candidate - check if spread is still valid using execution prices
+    const spreadChange = (spread - existingCandidate.spread) / existingCandidate.spread
+    const buyPriceChange = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
+    const sellPriceChange = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
+
+    // If spread decreased significantly, reset the candidate
+    if (spreadChange < -0.2 || buyPriceChange > 0.01 || sellPriceChange > 0.01) { // 20% spread decrease or 1% price change
+      logger.debug(`Candidate ${candidateKey} spread decreased or price changed significantly, resetting`)
+      this.candidates.delete(candidateKey)
+      return { isValid: false, reason: 'Spread decreased or price changed significantly' }
+    }
+
+    // Update existing candidate
+    existingCandidate.lastDetectedAt = now
+    
+    // Update snapshots based on which exchange is updating
+    if (updatingExchange === buyExchange) {
+      existingCandidate.buyExchangeConsecutiveSnapshots++
+    } else if (updatingExchange === sellExchange) {
+      existingCandidate.sellExchangeConsecutiveSnapshots++
+    }
+    
+    existingCandidate.avgBuyNormalizedExecutionPrice = avgBuyNormalizedExecutionPrice
+    existingCandidate.avgSellNormalizedExecutionPrice = avgSellNormalizedExecutionPrice
+    existingCandidate.estimatedProfitPercent = estimatedProfitPercent
+    existingCandidate.spread = spread
+
+    // Check persistence conditions
+    const persistenceDuration = existingCandidate.lastDetectedAt - existingCandidate.firstDetectedAt
+    const hasMinDuration = persistenceDuration >= this.minPersistenceMs
+    const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
+
+    if (hasMinDuration || hasMinSnapshots) {
+      logger.info(`Arbitrage opportunity validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(spread * 100).toFixed(3)}%, profit: ${estimatedProfitPercent.toFixed(3)}%`)
+      this.candidates.delete(candidateKey) // Remove after validation
+      return { isValid: true, candidate: existingCandidate }
+    }
+
+    logger.debug(`Candidate ${candidateKey} still building persistence: duration=${persistenceDuration}ms, buySnapshots=${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots=${existingCandidate.sellExchangeConsecutiveSnapshots}`)
+    return { isValid: false, reason: 'Building persistence', candidate: existingCandidate }
+  }
+
+
 // Optimized: scan only the updated symbol across all exchanges to improve latency and CPU usage
   private scanOpportunities(topOfBook: TopOfBook): void {
     const allOrderbooks = this.orderbookManager.getAllOrderbooks()
     // const opportunities = this.scanAllOrderbooks(allOrderbooks)
-    const opportunities = this.scanOrderbooksForSymbol(topOfBook.symbol, allOrderbooks)
+    const opportunities = this.scanOrderbooksForSymbol(topOfBook.exchange, topOfBook.symbol, allOrderbooks)
 
     if (opportunities.length > 0) {
       // Emit opportunities for trade execution
@@ -254,7 +405,7 @@ export class ArbitrageEngine extends EventEmitter {
     }
   }
 
-  private scanOrderbooksForSymbol(symbol: string, allOrderbooks: Map<string, Map<string, OrderBook>>): ArbitrageOpportunity[] {
+  private scanOrderbooksForSymbol(updatingExchange: string, symbol: string, allOrderbooks: Map<string, Map<string, OrderBook>>): ArbitrageOpportunity[] {
     const opportunities: ArbitrageOpportunity[] = []
     const exchanges = Array.from(allOrderbooks.keys())
     
@@ -309,7 +460,8 @@ export class ArbitrageEngine extends EventEmitter {
           exchangeSymbolB,
           metadataServiceA,
           metadataServiceB,
-          opportunities
+          opportunities,
+          updatingExchange
         )
         this.checkDirection(
           normalizedPair,
@@ -321,7 +473,8 @@ export class ArbitrageEngine extends EventEmitter {
           exchangeSymbolA,
           metadataServiceB,
           metadataServiceA,
-          opportunities
+          opportunities,
+          updatingExchange
         )
       }
     }
@@ -412,7 +565,8 @@ export class ArbitrageEngine extends EventEmitter {
     sellExchangeSymbol: string,
     buyMetadataService: MarketMetadataService,
     sellMetadataService: MarketMetadataService,
-    opportunities: ArbitrageOpportunity[]
+    opportunities: ArbitrageOpportunity[],
+    updatingExchange?: string
   ): void {
     // === PRICE NORMALIZATION ===
     // Use the new normalization functions to handle price scales and contract sizes
@@ -421,8 +575,14 @@ export class ArbitrageEngine extends EventEmitter {
     
     // === INITIAL VALIDATION ===
     const crossMarketSpread = (normalizedSellPrice - normalizedBuyPrice) / normalizedBuyPrice
+    // Minimum required spread is minProfitThreshold plus round-trip taker fees
+    const buyFee = this.feeModels.get(buyExchange)?.taker ?? 0
+    const sellFee = this.feeModels.get(sellExchange)?.taker ?? 0
 
-    if (crossMarketSpread < this.minProfitThreshold || crossMarketSpread > this.maxCrossMarketSpread) return
+    const minRequiredSpread = this.minProfitThreshold + ((buyFee + sellFee) * 2)
+    
+    if (crossMarketSpread < minRequiredSpread) return
+    if (crossMarketSpread > this.maxCrossMarketSpread) return
 
     // === VOLUME CALCULATION ===
     // Calculate target normalized volume (base asset volume) based on order amount
@@ -452,7 +612,6 @@ export class ArbitrageEngine extends EventEmitter {
     const maxActualSellNormalizedVolume = sellMetadataService.normalizeAmount(maxActualSellExchangeVolume, sellExchangeSymbol)
 
     // === VOLUME VALIDATION ===
-    // Declare variables that will be set based on validation
     let finalNormalizedVolume: number
     let finalBuyExchangeVolume: number
     let finalSellExchangeVolume: number
@@ -495,7 +654,6 @@ export class ArbitrageEngine extends EventEmitter {
       return
     }
 
-// TODO: OKX PEPE should be multiplied by contractSize
     // Simulate slippage for both entry legs using the actual exchange-specific volumes
     const entryBuySimulation = this.simulateSlippage(buyBook.asks, finalBuyExchangeVolume, true, buyExchange, buyExchangeSymbol, buyMetadataService)
     const entrySellSimulation = this.simulateSlippage(sellBook.bids, finalSellExchangeVolume, false, sellExchange, sellExchangeSymbol, sellMetadataService)
@@ -531,24 +689,43 @@ export class ArbitrageEngine extends EventEmitter {
 
     // === OPPORTUNITY CREATION ===
     // Calculate volumeUSDT as the maximum between buy and sell sides
-    const volumeUSDT = Math.max(finalNormalizedVolume * normalizedBuyPrice, finalNormalizedVolume * normalizedSellPrice)
+    const volumeUSDT = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
     
-    opportunities.push({
+    // Use the validated opportunity from the persistence check
+    const persistenceResult = this.validatePersistence(
       normalizedPair,
-      buyExchangeSymbol,
-      sellExchangeSymbol,
       buyExchange,
       sellExchange,
-      normalizedBuyPrice,
-      normalizedSellPrice,
-      normalizedVolume: finalNormalizedVolume,
-      buyExchangeVolume: finalBuyExchangeVolume,
-      sellExchangeVolume: finalSellExchangeVolume,
-      volumeUSDT,
-      confidenceScore: profitEstimate.confidence,
-      estimatedProfit: profitEstimate.estimatedProfit,
-      estimatedProfitPercent: profitEstimate.estimatedProfitPercent
-    })
+      entryBuySimulation.avgNormalizedExecutionPrice,
+      entrySellSimulation.avgNormalizedExecutionPrice,
+      profitEstimate.estimatedProfitPercent,
+      crossMarketSpread,
+      updatingExchange || buyExchange // Use provided updating exchange or default to buy exchange
+    )
+
+    if (!persistenceResult.isValid) {
+      return // Opportunity hasn't met persistence requirements yet
+    }
+
+    if (persistenceResult.isValid) {
+      // Create the final opportunity object
+      opportunities.push({
+        normalizedPair,
+        buyExchangeSymbol,
+        sellExchangeSymbol,
+        buyExchange,
+        sellExchange,
+        normalizedBuyPrice,
+        normalizedSellPrice,
+        normalizedVolume: finalNormalizedVolume,
+        buyExchangeVolume: finalBuyExchangeVolume,
+        sellExchangeVolume: finalSellExchangeVolume,
+        volumeUSDT,
+        confidenceScore: profitEstimate.confidence,
+        estimatedProfit: profitEstimate.estimatedProfit,
+        estimatedProfitPercent: profitEstimate.estimatedProfitPercent
+      })
+    }
   }
 
   private getCommonPairs(orderbooks: Map<string, Map<string, OrderBook>>): string[] {
