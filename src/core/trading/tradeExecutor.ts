@@ -224,8 +224,8 @@ export class TradeExecutor extends EventEmitter {
       throw new Error(`Market metadata services for ${opportunity.buyExchange} or ${opportunity.sellExchange} not available`)
     }
 
-    const buyPrice = buyMetadataService.denormalizePrice(opportunity.normalizedBuyPrice, opportunity.buyExchangeSymbol)
-    const sellPrice = sellMetadataService.denormalizePrice(opportunity.normalizedSellPrice, opportunity.sellExchangeSymbol)
+    const buyPrice = buyMetadataService.denormalizePrice(opportunity.avgBuyNormalizedExecutionPrice, opportunity.buyExchangeSymbol)
+    const sellPrice = sellMetadataService.denormalizePrice(opportunity.avgSellNormalizedExecutionPrice, opportunity.sellExchangeSymbol)
 
     // Get current orderbook prices
     // const currentPrices = this.getCurrentOrderbookPrices(opportunity)

@@ -53,8 +53,8 @@ export interface ArbitrageOpportunity {
   sellExchangeSymbol: string
   buyExchange: string
   sellExchange: string
-  normalizedBuyPrice: number
-  normalizedSellPrice: number
+  avgBuyNormalizedExecutionPrice: number
+  avgSellNormalizedExecutionPrice: number
   normalizedVolume: number
   buyExchangeVolume: number
   sellExchangeVolume: number
@@ -154,7 +154,7 @@ export class ArbitrageEngine extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
-      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: ${remainingVolume} ($${remainingVolume * basePrice}) > ${exchangeVolume} ($${exchangeVolume * basePrice})`)
+      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: Remaining Requested Volume ${remainingVolume} ($${remainingVolume * basePrice}) - Order Volume ${exchangeVolume} ($${exchangeVolume * basePrice})`)
     }
 
     const avgExecutionPrice = weightedPrice / exchangeVolume
@@ -355,11 +355,15 @@ export class ArbitrageEngine extends EventEmitter {
     const buyPriceChange = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
     const sellPriceChange = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
 
-    // If spread decreased significantly, reset the candidate
-    if (spreadChange < -0.2 || buyPriceChange > 0.01 || sellPriceChange > 0.01) { // 20% spread decrease or 1% price change
-      logger.debug(`Candidate ${candidateKey} spread decreased or price changed significantly, resetting`)
+    if (spreadChange < -0.2) {
+      logger.info(`Candidate ${candidateKey} spread decreased, resetting`)
       this.candidates.delete(candidateKey)
-      return { isValid: false, reason: 'Spread decreased or price changed significantly' }
+      return { isValid: false, reason: 'Spread decreased significantly' }
+    }
+    if (buyPriceChange > 0.01 || sellPriceChange > 0.01) {
+      logger.info(`Candidate ${candidateKey} price changed, resetting`)
+      this.candidates.delete(candidateKey)
+      return { isValid: false, reason: 'Price changed significantly' }
     }
 
     // Update existing candidate
@@ -382,7 +386,7 @@ export class ArbitrageEngine extends EventEmitter {
     const hasMinDuration = persistenceDuration >= this.minPersistenceMs
     const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
 
-    if (hasMinDuration || hasMinSnapshots) {
+    if (hasMinDuration && hasMinSnapshots) {
       logger.info(`Arbitrage opportunity validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(spread * 100).toFixed(3)}%, profit: ${estimatedProfitPercent.toFixed(3)}%`)
       this.candidates.delete(candidateKey) // Remove after validation
       return { isValid: true, candidate: existingCandidate }
@@ -684,12 +688,11 @@ export class ArbitrageEngine extends EventEmitter {
       exitSellSimulation
     )
 
+    // === PROFIT VALIDATION ===
+    if (profitEstimate.estimatedProfitPercent < 0) return
+
     // === CONFIDENCE VALIDATION ===
     if (profitEstimate.confidence < this.minConfidenceScore) return
-
-    // === OPPORTUNITY CREATION ===
-    // Calculate volumeUSDT as the maximum between buy and sell sides
-    const volumeUSDT = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
     
     // Use the validated opportunity from the persistence check
     const persistenceResult = this.validatePersistence(
@@ -707,6 +710,10 @@ export class ArbitrageEngine extends EventEmitter {
       return // Opportunity hasn't met persistence requirements yet
     }
 
+    // === OPPORTUNITY CREATION ===
+    // Calculate volumeUSDT as the maximum between buy and sell sides
+    const volumeUSDT = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
+
     if (persistenceResult.isValid) {
       // Create the final opportunity object
       opportunities.push({
@@ -715,8 +722,8 @@ export class ArbitrageEngine extends EventEmitter {
         sellExchangeSymbol,
         buyExchange,
         sellExchange,
-        normalizedBuyPrice,
-        normalizedSellPrice,
+        avgBuyNormalizedExecutionPrice: entryBuySimulation.avgNormalizedExecutionPrice,
+        avgSellNormalizedExecutionPrice: entrySellSimulation.avgNormalizedExecutionPrice,
         normalizedVolume: finalNormalizedVolume,
         buyExchangeVolume: finalBuyExchangeVolume,
         sellExchangeVolume: finalSellExchangeVolume,

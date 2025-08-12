@@ -9,18 +9,22 @@
   "scripts": {
     "start": "ts-node src/main.ts",
     "dev": "ts-node-dev --respawn src/main.ts",
+    "dev:mcp": "ts-node-dev --respawn src/main.ts 2>&1 | tee /tmp/stdout_pipe",
     "build": "tsc",
     "test": "jest",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },
   "dependencies": {
+    "@hyperdrive-eng/mcp-nodejs-debugger": "^0.2.2",
     "binance": "^2.15.21",
     "bitget-api": "^2.3.5",
     "bybit-api": "^4.1.10",
     "ccxt": "^4.4.88",
     "dotenv": "^16.4.5",
     "okx-api": "^2.0.5",
+    "pm-mcp": "^0.5.0",
+    "stdout-mcp-server": "^1.0.6",
     "winston": "^3.17.0",
     "ws": "^8.18.2",
     "yaml": "^2.4.0"

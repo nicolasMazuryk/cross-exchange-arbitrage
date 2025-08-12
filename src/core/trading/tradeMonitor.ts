@@ -354,7 +354,7 @@ export class TradeMonitor extends EventEmitter {
     trade.pnl = trade.profit - trade.fees.total
 
     // Calculate percentages
-    const totalTradeValue = (trade.opportunity.normalizedBuyPrice + trade.opportunity.normalizedSellPrice) * trade.opportunity.normalizedVolume / 2
+    const totalTradeValue = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
     trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
     trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
     trade.profitPercent = (trade.profit / totalTradeValue) * 100
@@ -494,7 +494,7 @@ export class TradeMonitor extends EventEmitter {
     trade.pnl = trade.profit - trade.fees.total
 
     // Calculate percentages
-    const totalTradeValue = (trade.opportunity.normalizedBuyPrice + trade.opportunity.normalizedSellPrice) * trade.opportunity.normalizedVolume / 2
+    const totalTradeValue = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
     trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
     trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
     trade.profitPercent = (trade.profit / totalTradeValue) * 100
