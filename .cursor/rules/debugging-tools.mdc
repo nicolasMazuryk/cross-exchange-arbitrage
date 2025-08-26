@@ -1,0 +1,24 @@
+---
+name: Enable Node.js Debugger & Log Access for Debugging
+description: This rule informs Cursor AI that it has access to advanced debugging capabilities    via a Node.js MCP debugger and direct log file tailing.   It should use these tools when debugging application issues.
+alwaysApply: false
+when: debugging application behavior, runtime errors, or unexpected logic flow
+then: |
+  You can use the following debugging resources:
+  
+  1. **Node.js Debugger (MCP Server)**  
+     - Tool: `nodejs-debugger` MCP server  
+     - Docs: https://www.npmjs.com/package/@hyperdrive-eng/mcp-nodejs-debugger  
+     - Capabilities: Set breakpoints, step through code, inspect variables during runtime.
+
+  2. **Real-time Application Logs**  
+     You can access logs by tailing the following files (last 100 lines as an example):  
+     - `logs/combined.log` — General combined logs  
+     - `logs/error.log` — Error-specific logs  
+     Example:  
+     ```bash
+     tail -n 100 logs/combined.log
+     tail -n 100 logs/error.log
+     ```
+
+  Use the Node.js debugger for step-by-step code inspection and use logs for historical and contextual debugging.
