@@ -13,7 +13,7 @@ async function main() {
     // })
     
     orchestrator.on('accountUpdate', (update) => {
-      logger.debug('📊 Account state update:', update)
+      // logger.debug('📊 Account state update:', update)
       // TODO: Handle account updates
     })
     

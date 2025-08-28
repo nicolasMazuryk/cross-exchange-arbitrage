@@ -703,7 +703,7 @@ export class ArbitrageEngine extends EventEmitter {
       entrySellSimulation.avgNormalizedExecutionPrice,
       profitEstimate.estimatedProfitPercent,
       crossMarketSpread,
-      updatingExchange || buyExchange // Use provided updating exchange or default to buy exchange
+      updatingExchange! // Use provided updating exchange or default to buy exchange
     )
 
     if (!persistenceResult.isValid) {

@@ -70,7 +70,7 @@ export class AccountStateManager extends EventEmitter {
 
     state.lastUpdate.balances = Date.now()
 
-    logger.debug(`[${exchange}] Updated balances: ${balances.length} assets`)
+    // logger.debug(`[${exchange}] Updated balances: ${balances.length} assets`)
     this.emit('stateUpdate', { exchange, type: 'balance', data: state.balances, timestamp: Date.now() })
   }
 
