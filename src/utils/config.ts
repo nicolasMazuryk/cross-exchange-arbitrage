@@ -53,6 +53,9 @@ interface TradingConfig {
     maxHoldTimeMs: number
     convergenceBufferPercent: number
     checkIntervalMs: number
+    exitMinPersistenceMs: number
+    exitMinConsecutiveSnapshots: number
+    exitCandidateCleanupMs: number
   }
 }
 

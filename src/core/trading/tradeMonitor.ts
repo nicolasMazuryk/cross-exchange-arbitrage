@@ -4,11 +4,18 @@ import { AccountStateManager } from '../state/accountStateManager'
 import { RestClientInterface } from '../../adapters/rest/types'
 import { MarketMetadataService } from '../markets/marketMetadataService'
 import { OrderInfo } from '../../types/account'
-import { OrderbookManager, TopOfBook } from '../orderbook/orderbookManager'
+import { OrderbookManager, TopOfBook, OrderBook, OrderBookLevel } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
+
+// Import DepthSimulationResult type from arbitrageEngine
+interface DepthSimulationResult {
+  avgExecutionPrice: number
+  avgNormalizedExecutionPrice: number
+  slippagePercent: number
+}
 
 // Core interfaces
 export interface TrackedTrade {
@@ -50,6 +57,43 @@ export interface MonitorConfig {
   maxHoldTimeMs: number
   convergenceBufferPercent: number
   checkIntervalMs: number
+  // Exit Persistence Validation
+  exitMinPersistenceMs: number
+  exitMinConsecutiveSnapshots: number
+  exitCandidateCleanupMs: number
+}
+
+// Exit Slippage Simulation Result
+interface ExitSlippageSimulationResult {
+  avgBuyExecutionPrice: number
+  avgSellExecutionPrice: number
+  avgBuyNormalizedExecutionPrice: number
+  avgSellNormalizedExecutionPrice: number
+  buySlippagePercent: number
+  sellSlippagePercent: number
+  totalSlippagePercent: number
+}
+
+// Exit Persistence Validation interfaces
+interface ExitCandidate {
+  tradeId: string
+  exitType: 'convergence' | 'timeout'
+  firstDetectedAt: number
+  lastDetectedAt: number
+  convergencePercent: number
+  // Simulated exit prices from slippage simulation
+  avgBuyNormalizedExecutionPrice: number
+  avgSellNormalizedExecutionPrice: number
+  pnlPercent: number
+  // Exchange-specific persistence tracking
+  buyExchangeConsecutiveSnapshots: number
+  sellExchangeConsecutiveSnapshots: number
+}
+
+interface ExitPersistenceValidationResult {
+  isValid: boolean
+  reason?: string
+  candidate?: ExitCandidate
 }
 
 export class TradeMonitor extends EventEmitter {
@@ -59,8 +103,12 @@ export class TradeMonitor extends EventEmitter {
   private readonly marketMetadataServices: Map<string, MarketMetadataService>
   private readonly trackedTrades: Map<string, TrackedTrade> = new Map()
   private readonly config: MonitorConfig
-  private checkInterval: NodeJS.Timeout | null = null
   private isRunning = false
+  // Exit Persistence Validation
+  private readonly exitCandidates: Map<string, ExitCandidate> = new Map()
+  private lastExitCleanupTime: number
+  // Race condition prevention
+  private readonly processingTrades: Set<string> = new Set()
 
   constructor(
     accountStateManager: AccountStateManager,
@@ -75,8 +123,256 @@ export class TradeMonitor extends EventEmitter {
     this.orderbookManager = orderbookManager
     this.marketMetadataServices = marketMetadataServices
     this.config = config
+    this.lastExitCleanupTime = Date.now()
 
     logger.info('TradeMonitor initialized', { config: this.config })
+  }
+
+  /**
+   * Update PnL calculations with simulated exit prices
+   */
+  private updatePnLWithSimulatedExit(trade: TrackedTrade, exitSimulation: ExitSlippageSimulationResult): void {
+    // Calculate exit fees for both legs
+    const buyFeeRate = this.getFeeRate(trade.opportunity.buyExchange, 'taker')
+    const sellFeeRate = this.getFeeRate(trade.opportunity.sellExchange, 'taker')
+    
+    const buyExitFees = exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * buyFeeRate
+    const sellExitFees = exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * sellFeeRate
+    
+    // Calculate slippage separately for both buy and sell sides
+    const buySlippage = exitSimulation.buySlippagePercent * exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume
+    const sellSlippage = exitSimulation.sellSlippagePercent * exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume
+    
+    trade.fees.exit = buyExitFees + sellExitFees
+    trade.slippage.exit = buySlippage + sellSlippage
+    trade.fees.total = trade.fees.entry + trade.fees.exit
+    trade.slippage.total = trade.slippage.entry + trade.slippage.exit
+
+    // Calculate profit with simulated exit prices
+    const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
+    const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
+    const buyExchangeExitPrice = exitSimulation.avgBuyNormalizedExecutionPrice // Exit price for the buy leg
+    const sellExchangeExitPrice = exitSimulation.avgSellNormalizedExecutionPrice  // Exit price for the sell leg
+    
+    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
+    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
+    trade.profit = buyLegProfit + sellLegProfit
+
+    // Calculate final PnL: Profit - Costs
+    trade.pnl = trade.profit - trade.fees.total
+
+    // Calculate percentages
+    const totalTradeValue = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
+    trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
+    trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
+    trade.profitPercent = (trade.profit / totalTradeValue) * 100
+    trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
+  }
+
+  /**
+   * Handle timeout exit condition
+   */
+  private async handleTimeoutExit(trade: TrackedTrade, now: number): Promise<void> {
+    const holdTimeMs = now - trade.entryTimestamp
+    
+    const timeoutValidation = this.validateExitPersistence(
+      trade,
+      'timeout',
+      0, // No convergence for timeout
+      0, // No buy price for timeout
+      0, // No sell price for timeout
+      trade.pnlPercent,
+      'timeout' // Indicates this is a timeout update
+    )
+    
+    if (timeoutValidation.isValid) {
+      logger.info(`[${trade.id}] Trade timeout validated`, {
+        holdTimeMs,
+        maxHoldTimeMs: this.config.maxHoldTimeMs
+      })
+      await this.executeExitTrade(trade, 'timeout')
+    } else {
+      logger.debug(`[${trade.id}] Timeout condition building persistence: ${timeoutValidation.reason}`)
+    }
+  }
+
+  /**
+   * Handle convergence exit condition
+   */
+  private async handleConvergenceExit(
+    trade: TrackedTrade, 
+    convergenceResult: { shouldExit: boolean, convergencePercent: number, reason: string },
+    exitSimulation: ExitSlippageSimulationResult,
+    updatingExchange: string
+  ): Promise<void> {
+    const convergenceValidation = this.validateExitPersistence(
+      trade,
+      'convergence',
+      convergenceResult.convergencePercent,
+      exitSimulation.avgBuyNormalizedExecutionPrice,
+      exitSimulation.avgSellNormalizedExecutionPrice,
+      trade.pnlPercent,
+      updatingExchange
+    )
+    
+    if (convergenceValidation.isValid) {
+      logger.info(`[${trade.id}] Exit price convergence validated`, {
+        convergencePercent: convergenceResult.convergencePercent,
+        bufferThreshold: this.config.convergenceBufferPercent,
+        buyPrice: exitSimulation.avgBuyNormalizedExecutionPrice,
+        sellPrice: exitSimulation.avgSellNormalizedExecutionPrice,
+        exitReason: convergenceResult.reason
+      })
+      await this.executeExitTrade(trade, 'convergence')
+    } else {
+      logger.debug(`[${trade.id}] Convergence condition building persistence: ${convergenceValidation.reason}`)
+    }
+  }
+
+  /**
+   * Check convergence condition with simulated exit prices
+   */
+  private checkConvergenceCondition(
+    trade: TrackedTrade, 
+    exitSimulation: ExitSlippageSimulationResult
+  ): { shouldExit: boolean, convergencePercent: number, reason: string } {
+    // For arbitrage trades, we need to consider the exit prices:
+    // - If we bought initially, we need to sell at the bid price
+    // - If we sold initially, we need to buy at the ask price
+    
+    const exitExchangeBuyPrice = exitSimulation.avgBuyNormalizedExecutionPrice
+    const exitExchangeSellPrice = exitSimulation.avgSellNormalizedExecutionPrice
+    
+    // Calculate the price difference between entry and exit
+    const buyExitDifference = Math.abs(exitExchangeBuyPrice - trade.entryTrade.buyOrder!.averagePrice)
+    const sellExitDifference = Math.abs(exitExchangeSellPrice - trade.entryTrade.sellOrder!.averagePrice)
+    
+    // Calculate convergence as percentage
+    const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
+
+    if (convergencePercent <= this.config.convergenceBufferPercent) {
+      return {
+        shouldExit: true,
+        convergencePercent,
+        reason: 'Price convergence within buffer'
+      }
+    }
+
+    return {
+      shouldExit: false,
+      convergencePercent,
+      reason: 'No convergence'
+    }
+  }
+
+  // Exit Persistence Validation Methods
+  private generateExitCandidateKey(tradeId: string, exitType: 'convergence' | 'timeout'): string {
+    return `${tradeId}::${exitType}`
+  }
+
+  private cleanupStaleExitCandidates(): void {
+    const now = Date.now()
+    if (now - this.lastExitCleanupTime < this.config.exitCandidateCleanupMs) return
+
+    const staleThreshold = now - this.config.exitCandidateCleanupMs
+    const keysToRemove: string[] = []
+
+    for (const [key, candidate] of this.exitCandidates) {
+      if (candidate.lastDetectedAt < staleThreshold) {
+        keysToRemove.push(key)
+      }
+    }
+
+    for (const key of keysToRemove) {
+      this.exitCandidates.delete(key)
+      logger.debug(`Cleaned up stale exit candidate: ${key}`)
+    }
+
+    this.lastExitCleanupTime = now
+  }
+
+  private validateExitPersistence(
+    trade: TrackedTrade,
+    exitType: 'convergence' | 'timeout',
+    convergencePercent: number,
+    avgBuyNormalizedExecutionPrice: number,
+    avgSellNormalizedExecutionPrice: number,
+    pnlPercent: number,
+    updatingExchange: string
+  ): ExitPersistenceValidationResult {
+    const candidateKey = this.generateExitCandidateKey(trade.id, exitType)
+    const now = Date.now()
+
+    // Clean up stale candidates
+    this.cleanupStaleExitCandidates()
+
+    // Check if this is a new candidate or existing one
+    const existingCandidate = this.exitCandidates.get(candidateKey)
+
+    if (!existingCandidate) {
+      // New candidate - create and track
+      const newCandidate: ExitCandidate = {
+        tradeId: trade.id,
+        exitType,
+        firstDetectedAt: now,
+        lastDetectedAt: now,
+        convergencePercent,
+        avgBuyNormalizedExecutionPrice,
+        avgSellNormalizedExecutionPrice,
+        pnlPercent,
+        buyExchangeConsecutiveSnapshots: updatingExchange === trade.opportunity.buyExchange ? 1 : 0,
+        sellExchangeConsecutiveSnapshots: updatingExchange === trade.opportunity.sellExchange ? 1 : 0
+      }
+      this.exitCandidates.set(candidateKey, newCandidate)
+      
+      logger.debug(`New exit candidate detected: ${candidateKey}, convergence: ${convergencePercent.toFixed(3)}%, pnl: ${pnlPercent.toFixed(3)}%`)
+      return { isValid: false, reason: 'New exit candidate - waiting for persistence', candidate: newCandidate }
+    }
+
+    // Existing candidate - check if conditions are still valid
+    const convergenceChange = (convergencePercent - existingCandidate.convergencePercent) / existingCandidate.convergencePercent
+    const buyPriceChange = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
+    const sellPriceChange = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
+
+    if (convergenceChange > 0.2) {
+      logger.info(`Candidate ${candidateKey} convergence decreased, resetting`)
+      this.exitCandidates.delete(candidateKey)
+      return { isValid: false, reason: 'Convergence decreased significantly' }
+    }
+    // If prices changed significantly, reset the candidate
+    if (buyPriceChange > 0.01 || sellPriceChange > 0.01) { // 1% price change threshold
+      logger.info(`Exit candidate ${candidateKey} price changed significantly, resetting`)
+      this.exitCandidates.delete(candidateKey)
+      return { isValid: false, reason: 'Price changed significantly' }
+    }
+
+    // Update existing candidate
+    existingCandidate.lastDetectedAt = now
+    existingCandidate.convergencePercent = convergencePercent
+    existingCandidate.avgBuyNormalizedExecutionPrice = avgBuyNormalizedExecutionPrice
+    existingCandidate.avgSellNormalizedExecutionPrice = avgSellNormalizedExecutionPrice
+    existingCandidate.pnlPercent = pnlPercent
+
+    // Update snapshots based on which exchange is updating
+    if (updatingExchange === trade.opportunity.buyExchange) {
+      existingCandidate.buyExchangeConsecutiveSnapshots++
+    } else if (updatingExchange === trade.opportunity.sellExchange) {
+      existingCandidate.sellExchangeConsecutiveSnapshots++
+    }
+
+    // Check persistence conditions - require both exchanges to have sufficient snapshots
+    const persistenceDuration = existingCandidate.lastDetectedAt - existingCandidate.firstDetectedAt
+    const hasMinDuration = persistenceDuration >= this.config.exitMinPersistenceMs
+    const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots
+
+    if (hasMinDuration && hasMinSnapshots) {
+      logger.info(`Exit condition validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, convergence: ${convergencePercent.toFixed(3)}%, pnl: ${pnlPercent.toFixed(3)}%`)
+      this.exitCandidates.delete(candidateKey) // Remove after validation
+      return { isValid: true, candidate: existingCandidate }
+    }
+
+    logger.debug(`Exit candidate ${candidateKey} still building persistence: duration=${persistenceDuration}ms, buySnapshots=${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots=${existingCandidate.sellExchangeConsecutiveSnapshots}`)
+    return { isValid: false, reason: 'Building exit persistence', candidate: existingCandidate }
   }
 
   /**
@@ -89,8 +385,9 @@ export class TradeMonitor extends EventEmitter {
     }
 
     this.isRunning = true
-    this.scheduleNextCheck()
-    logger.info('TradeMonitor started')
+    // Setup real-time orderbook event listeners
+    this.setupOrderbookEventListeners()
+    logger.info('TradeMonitor started with real-time orderbook monitoring')
   }
 
   /**
@@ -98,11 +395,201 @@ export class TradeMonitor extends EventEmitter {
    */
   stop(): void {
     this.isRunning = false
-    if (this.checkInterval) {
-      clearTimeout(this.checkInterval)
-      this.checkInterval = null
-    }
+    // Remove orderbook event listeners
+    this.orderbookManager.removeAllListeners('topOfBookUpdate')
+    // Clear processing trades set
+    this.processingTrades.clear()
     logger.info('TradeMonitor stopped')
+  }
+
+  /**
+   * Setup real-time orderbook event listeners
+   */
+  private setupOrderbookEventListeners(): void {
+    // Listen for top of book updates from orderbook manager
+    this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
+      this.handleOrderbookUpdate(topOfBook)
+    })
+  }
+
+  /**
+   * Handle real-time orderbook updates
+   */
+  private handleOrderbookUpdate(topOfBook: TopOfBook): void {
+    if (!this.isRunning) return
+
+    const { exchange, symbol } = topOfBook
+    
+    // Check if this update affects any open trades
+    const affectedTrades = this.getTradesForSymbol(exchange, symbol)
+    
+    if (affectedTrades.length > 0) {
+      logger.debug(`Orderbook update for ${exchange}:${symbol} affects ${affectedTrades.length} trades`)
+      
+      // Process each affected trade
+      for (const trade of affectedTrades) {
+        // Prevent race conditions by checking if trade is already being processed
+        if (this.processingTrades.has(trade.id)) {
+          logger.debug(`[${trade.id}] Trade already being processed, skipping`)
+          continue
+        }
+
+        try {
+          this.processingTrades.add(trade.id)
+          this.processTradeExitConditions(trade, exchange)
+        } catch (error) {
+          logger.error(`[${trade.id}] Error processing trade exit conditions`, {
+            error: error instanceof Error ? error.message : String(error)
+          })
+        } finally {
+          this.processingTrades.delete(trade.id)
+        }
+      }
+    }
+  }
+
+  /**
+   * Get all trades that involve a specific exchange and symbol
+   */
+  private getTradesForSymbol(exchange: string, symbol: string): TrackedTrade[] {
+    const affectedTrades: TrackedTrade[] = []
+    
+    for (const trade of this.trackedTrades.values()) {
+      if (trade.status !== 'open') continue
+      
+      // Check if this trade involves the updated exchange and symbol
+      if ((trade.opportunity.buyExchange === exchange && trade.opportunity.buyExchangeSymbol === symbol) ||
+          (trade.opportunity.sellExchange === exchange && trade.opportunity.sellExchangeSymbol === symbol)) {
+        affectedTrades.push(trade)
+      }
+    }
+    
+    return affectedTrades
+  }
+
+  /**
+   * Process exit conditions for a trade based on real-time orderbook update
+   */
+  private async processTradeExitConditions(trade: TrackedTrade, updatingExchange: string): Promise<void> {
+    const now = Date.now()
+    const holdTimeMs = now - trade.entryTimestamp
+
+    // Check timeout condition first
+    if (holdTimeMs > this.config.maxHoldTimeMs) {
+      await this.handleTimeoutExit(trade, now)
+      return
+    }
+
+    // Simulate exit slippage for current orderbook state
+    const exitSimulation = this.simulateExitSlippage(trade)
+    if (!exitSimulation) {
+      logger.warn(`[${trade.id}] Could not simulate exit slippage`)
+      return
+    }
+
+    // Update PnL calculations with simulated exit prices
+    this.updatePnLWithSimulatedExit(trade, exitSimulation)
+    trade.lastUpdateTimestamp = now
+
+    // Check convergence condition
+    const convergenceResult = this.checkConvergenceCondition(trade, exitSimulation)
+    if (convergenceResult.shouldExit) {
+      await this.handleConvergenceExit(trade, convergenceResult, exitSimulation, updatingExchange)
+    }
+  }
+
+  /**
+   * Simulate exit slippage for a trade
+   */
+  private simulateExitSlippage(trade: TrackedTrade): ExitSlippageSimulationResult | null {
+    try {
+      const buyBook = this.orderbookManager.getOrderbook(trade.opportunity.buyExchange, trade.opportunity.buyExchangeSymbol)
+      const sellBook = this.orderbookManager.getOrderbook(trade.opportunity.sellExchange, trade.opportunity.sellExchangeSymbol)
+      
+      if (!buyBook || !sellBook) {
+        return null
+      }
+
+      const buyMetadataService = this.marketMetadataServices.get(trade.opportunity.buyExchange)
+      const sellMetadataService = this.marketMetadataServices.get(trade.opportunity.sellExchange)
+      
+      if (!buyMetadataService || !sellMetadataService) {
+        return null
+      }
+
+      // Simulate exit slippage for both sides
+      const buyExitSimulation = this.simulateSlippage(
+        buyBook.bids, // We're selling to close the buy position
+        trade.opportunity.buyExchangeVolume,
+        false, // Selling
+        trade.opportunity.buyExchange,
+        trade.opportunity.buyExchangeSymbol,
+        buyMetadataService
+      )
+
+      const sellExitSimulation = this.simulateSlippage(
+        sellBook.asks, // We're buying to close the sell position
+        trade.opportunity.sellExchangeVolume,
+        true, // Buying
+        trade.opportunity.sellExchange,
+        trade.opportunity.sellExchangeSymbol,
+        sellMetadataService
+      )
+
+      return {
+        avgBuyExecutionPrice: buyExitSimulation.avgExecutionPrice,
+        avgSellExecutionPrice: sellExitSimulation.avgExecutionPrice,
+        avgBuyNormalizedExecutionPrice: buyExitSimulation.avgNormalizedExecutionPrice,
+        avgSellNormalizedExecutionPrice: sellExitSimulation.avgNormalizedExecutionPrice,
+        buySlippagePercent: buyExitSimulation.slippagePercent,
+        sellSlippagePercent: sellExitSimulation.slippagePercent,
+        totalSlippagePercent: buyExitSimulation.slippagePercent + sellExitSimulation.slippagePercent
+      }
+    } catch (error) {
+      logger.error(`[${trade.id}] Error simulating exit slippage`, {
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return null
+    }
+  }
+
+  /**
+   * Simulate slippage for a specific orderbook side and volume
+   */
+  private simulateSlippage(
+    orderbookSide: OrderBookLevel[],
+    exchangeVolume: number,
+    isBuy: boolean,
+    exchange: string,
+    exchangeSymbol: string,
+    metadataService: MarketMetadataService
+  ): DepthSimulationResult {
+    let remainingVolume = exchangeVolume
+    let weightedPrice = 0
+    const basePrice = orderbookSide[0].price
+
+    for (const level of orderbookSide) {
+      const fillVolume = Math.min(remainingVolume, level.quantity)
+      weightedPrice += level.price * fillVolume
+      remainingVolume -= fillVolume
+
+      if (remainingVolume <= 0) break
+    }
+
+    if (remainingVolume > 0) {
+      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: Remaining Requested Volume ${remainingVolume} ($${remainingVolume * basePrice}) - Order Volume ${exchangeVolume} ($${exchangeVolume * basePrice})`)
+    }
+
+    const avgExecutionPrice = weightedPrice / exchangeVolume
+    const slippagePercent = isBuy
+      ? (avgExecutionPrice - basePrice) / basePrice
+      : (basePrice - avgExecutionPrice) / basePrice
+
+    return {
+      avgExecutionPrice,
+      avgNormalizedExecutionPrice: metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol),
+      slippagePercent
+    }
   }
 
   /**
@@ -175,6 +662,9 @@ export class TradeMonitor extends EventEmitter {
 
     logger.info(`[${tradeId}] Manually closing trade`, { reason })
 
+    // Clear any pending exit candidates for this trade
+    this.clearExitCandidatesForTrade(tradeId)
+
     try {
       await this.executeExitTrade(trade, reason)
       return true
@@ -187,70 +677,26 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
-   * Check all open trades for exit conditions
+   * Clear exit candidates for a specific trade
    */
-  private async checkExitConditions(): Promise<void> {
-    const openTrades = this.getTrackedTrades().filter(t => t.status === 'open')
-    
-    if (openTrades.length === 0) {
-      return
-    }
-
-    logger.debug(`Checking ${openTrades.length} open trades for exit conditions`)
-
-    for (const trade of openTrades) {
-      try {
-        await this.checkTradeExitConditions(trade)
-      } catch (error) {
-        logger.error(`[${trade.id}] Error checking exit conditions`, {
-          error: error instanceof Error ? error.message : String(error)
-        })
+  private clearExitCandidatesForTrade(tradeId: string): void {
+    const keysToRemove: string[] = []
+    for (const [key, candidate] of this.exitCandidates) {
+      if (candidate.tradeId === tradeId) {
+        keysToRemove.push(key)
       }
     }
+    
+    for (const key of keysToRemove) {
+      this.exitCandidates.delete(key)
+      logger.debug(`Cleared exit candidate: ${key}`)
+    }
+
+    // Also clear from processing trades set to prevent race conditions
+    this.processingTrades.delete(tradeId)
   }
 
-  /**
-   * Check exit conditions for a specific trade based on orderbook prices
-   */
-  private async checkTradeExitConditions(trade: TrackedTrade): Promise<void> {
-    const now = Date.now()
-    const holdTimeMs = now - trade.entryTimestamp
 
-    // Check timeout condition
-    if (holdTimeMs > this.config.maxHoldTimeMs) {
-      logger.info(`[${trade.id}] Trade timeout reached`, {
-        holdTimeMs,
-        maxHoldTimeMs: this.config.maxHoldTimeMs
-      })
-      await this.executeExitTrade(trade, 'timeout')
-      return
-    }
-
-    // Get current orderbook prices
-    const currentPrices = this.getCurrentOrderbookPrices(trade.opportunity)
-    if (!currentPrices.buyPrice || !currentPrices.sellPrice) {
-      logger.warn(`[${trade.id}] No orderbook data available for price check`)
-      return
-    }
-
-    // Update PnL calculations using current market prices
-    this.updatePnLCalculations(trade, currentPrices)
-    trade.lastUpdateTimestamp = now
-
-    // Check convergence condition with exit price consideration
-    const convergenceResult = this.checkConvergenceCondition(trade, currentPrices)
-    if (convergenceResult.shouldExit) {
-      logger.info(`[${trade.id}] Price convergence detected`, {
-        convergencePercent: convergenceResult.convergencePercent,
-        threshold: this.config.convergenceBufferPercent,
-        bidPrice: currentPrices.buyPrice,
-        askPrice: currentPrices.sellPrice,
-        exitReason: convergenceResult.reason
-      })
-      await this.executeExitTrade(trade, 'convergence')
-      return
-    }
-  }
 
   /**
    * Get current orderbook prices for a trade with normalization
@@ -280,42 +726,6 @@ export class TradeMonitor extends EventEmitter {
       sellPrice: sellTopOfBook.bestAsk.price,
       normalizedBuyPrice,
       normalizedSellPrice
-    }
-  }
-
-  /**
-   * Check convergence condition with exit price consideration
-   */
-  private checkConvergenceCondition(
-    trade: TrackedTrade, 
-    currentPrices: { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number }
-  ): { shouldExit: boolean, convergencePercent: number, reason: string } {
-    // For arbitrage trades, we need to consider the exit prices:
-    // - If we bought initially, we need to sell at the bid price
-    // - If we sold initially, we need to buy at the ask price
-    
-    const exitExchangeBuyPrice = currentPrices.normalizedBuyPrice
-    const exitExchangeSellPrice = currentPrices.normalizedSellPrice
-    
-    // Calculate the price difference between entry and exit
-    const buyExitDifference = Math.abs(exitExchangeBuyPrice - trade.entryTrade.buyOrder!.averagePrice)
-    const sellExitDifference = Math.abs(exitExchangeSellPrice - trade.entryTrade.sellOrder!.averagePrice)
-    
-    // Calculate convergence as percentage
-    const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
-
-    if (convergencePercent <= this.config.convergenceBufferPercent) {
-      return {
-        shouldExit: true,
-        convergencePercent,
-        reason: 'Price convergence within buffer'
-      }
-    }
-
-    return {
-      shouldExit: false,
-      convergencePercent,
-      reason: 'No convergence'
     }
   }
 
@@ -425,6 +835,9 @@ export class TradeMonitor extends EventEmitter {
       trade.exitReason = exitReason
       trade.exitTrade = exitTradeResult
 
+      // Clear any pending exit candidates for this trade
+      this.clearExitCandidatesForTrade(trade.id)
+
       logger.info(`[${trade.id}] Exit trade completed`, {
         exitReason,
         pnlPercent: trade.pnlPercent,
@@ -511,31 +924,7 @@ export class TradeMonitor extends EventEmitter {
     return exchangeConfig.fees[feeType]
   }
 
-  /**
-   * Schedule the next check interval
-   */
-  private scheduleNextCheck(): void {
-    if (!this.isRunning) return
 
-    // Clear any existing timeout to prevent memory leaks
-    if (this.checkInterval) {
-      clearTimeout(this.checkInterval)
-    }
-
-    // Schedule the next check
-    this.checkInterval = setTimeout(async () => {
-      try {
-        await this.checkExitConditions()
-      } catch (error) {
-        logger.error('Error during exit conditions check:', error)
-      } finally {
-        // Schedule the next check only if still running
-        if (this.isRunning) {
-          this.scheduleNextCheck()
-        }
-      }
-    }, this.config.checkIntervalMs)
-  }
 
   /**
    * Get monitoring statistics
@@ -554,6 +943,7 @@ export class TradeMonitor extends EventEmitter {
     avgProfitPercent: number
     avgFeesPercent: number
     avgSlippagePercent: number
+    exitCandidates: number
   } {
     const trades = this.getTrackedTrades()
     const openTrades = trades.filter(t => t.status === 'open')
@@ -583,7 +973,8 @@ export class TradeMonitor extends EventEmitter {
       avgPnLPercent,
       avgProfitPercent,
       avgFeesPercent,
-      avgSlippagePercent
+      avgSlippagePercent,
+      exitCandidates: this.exitCandidates.size
     }
   }
 } 

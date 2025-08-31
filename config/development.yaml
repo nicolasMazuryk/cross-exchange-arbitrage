@@ -62,6 +62,10 @@ trading:
     maxHoldTimeMs: 1000 * 60 * 60 * 24  # 24 hours max hold time
     convergenceBufferPercent: 0.00  # 0.05% convergence buffer
     checkIntervalMs: 5000  # 5 second check interval
+    # Exit Persistence Validation
+    exitMinPersistenceMs: 1000  # minimum time window for exit condition persistence (2 seconds)
+    exitMinConsecutiveSnapshots: 3  # minimum consecutive snapshots showing the exit condition
+    exitCandidateCleanupMs: 5000  # cleanup stale exit candidates after 10 seconds
 
 arbitrage:
   blacklistPairs: []  # pairs to exclude from arbitrage
@@ -69,7 +73,7 @@ arbitrage:
   maxMarketSpread: 0.002  # maximum market spread width within an exchange (0.2%)
   maxCrossMarketSpread: 0.10  # maximum cross-market spread between exchanges (10%)
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  minProfitThreshold: 0.0025  # 0.2%
+  minProfitThreshold: 0.003  # 0.2%
   orderAmountToleranceMin: 0.60  # minimum order amount tolerance (60% of order amount)
   orderAmountToleranceMax: 1.40  # maximum order amount tolerance (140% of order amount)
   # Temporal Persistence Validation
