@@ -21,30 +21,38 @@ exchanges:
     fees:
       maker: 0.0002 # 0.02%
       taker: 0.0005 # 0.05%
+    ignoredMarkets: []
   bybit:
     maxStreamsPerConnection: 50 # max 60 streams per connection
     reconnectInterval: 5000
     fees:
       maker: 0.0002 # 0.02%
       taker: 0.00055 # 0.055%
+    ignoredMarkets:
+      - "ETHBTC/USDT:USDT"
+      - "USDC/USDT:USDT"
   okx:
     maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
     reconnectInterval: 5000
     fees:
       maker: 0.0002 # 0.02%
       taker: 0.0005 # 0.05%
+    ignoredMarkets: []
   bitget:
     maxStreamsPerConnection: 500 # max connections per IP - 100; max subscriptions per connection - 1000; max subscription messages per hour - 240 per connection; max messages per second per connection - 10 (includes PING, subs)
     reconnectInterval: 5000
     fees:
       maker: 0.0002 # 0.02%
       taker: 0.0006 # 0.06%
+    ignoredMarkets:
+      - "DegenReborn/USDT:USDT"
   gateio:
     maxStreamsPerConnection: 100
     reconnectInterval: 5000
     fees:
       maker: 0.0002 # 0.02%
       taker: 0.0005 # 0.05%
+    ignoredMarkets: []
 
 trackedPairs:
   - BTCUSDT

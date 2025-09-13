@@ -157,7 +157,8 @@ export class Orchestrator extends EventEmitter {
           
           // Initialize market metadata service
           const markets = Object.values((client as any).exchange.markets || {})
-          const marketMetadataService = new MarketMetadataService(id, markets as any[])
+          const ignoredMarkets = config.exchanges[id as keyof typeof config.exchanges]?.ignoredMarkets || []
+          const marketMetadataService = new MarketMetadataService(id, markets as any[], ignoredMarkets)
           
           this.exchangeServices.set(id, { 
             rest: client, 

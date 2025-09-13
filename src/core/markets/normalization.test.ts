@@ -64,9 +64,9 @@ describe('MarketMetadataService Normalization', () => {
     const bitgetMarkets = [createMockMarket('PEPE/USDT', 1, 1000, 1000)]
     const bybitMarkets = [createMockMarket('1000PEPE/USDT', 1, 100, 100)]
 
-    okxService = new MarketMetadataService('okx', okxMarkets)
-    bitgetService = new MarketMetadataService('bitget', bitgetMarkets)
-    bybitService = new MarketMetadataService('bybit', bybitMarkets)
+    okxService = new MarketMetadataService('okx', okxMarkets, [])
+    bitgetService = new MarketMetadataService('bitget', bitgetMarkets, [])
+    bybitService = new MarketMetadataService('bybit', bybitMarkets, [])
   })
 
   describe('Price Normalization', () => {

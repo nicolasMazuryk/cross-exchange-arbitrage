@@ -62,7 +62,7 @@ describe('MarketMetadataService', () => {
       createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 })
     ]
 
-    service = new MarketMetadataService('binance', mockMarkets)
+    service = new MarketMetadataService('binance', mockMarkets, [])
   })
 
   describe('Symbol Normalization', () => {
@@ -200,6 +200,47 @@ describe('MarketMetadataService', () => {
       const scaledParams = service.getExchangeOrderParams(normalizedAmount, normalizedPrice, '1000PEPE/USDT')
       expect(scaledParams.amount).toBe(1000) // 1000 base units * 1000 priceScale / 1000 contractSize
       expect(scaledParams.price).toBe(0.012825)
+    })
+  })
+
+  describe('Ignored Markets', () => {
+    it('should filter out ignored markets during initialization', () => {
+      const mockMarkets = [
+        createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 }),
+        createMockMarket('ETH/USDT', 1, { price: 2, amount: 0.01 }),
+        createMockMarket('MOG/USDT', 1, { price: 8, amount: 0.1 })
+      ]
+      
+      const ignoredMarkets = ['ETH/USDT', 'MOG/USDT']
+      const serviceWithIgnored = new MarketMetadataService('binance', mockMarkets, ignoredMarkets)
+      
+      // Should only have BTC/USDT available
+      const availableSymbols = serviceWithIgnored.getAvailableSymbols()
+      expect(availableSymbols).toHaveLength(1)
+      expect(availableSymbols).toContain('BTC/USDT')
+      expect(availableSymbols).not.toContain('ETH/USDT')
+      expect(availableSymbols).not.toContain('MOG/USDT')
+      
+      // Should not have symbol mappings for ignored markets
+      const symbolMappings = serviceWithIgnored.getSymbolMappings()
+      expect(symbolMappings.has('BTC/USDT')).toBe(true)
+      expect(symbolMappings.has('ETH/USDT')).toBe(false)
+      expect(symbolMappings.has('MOG/USDT')).toBe(false)
+    })
+
+    it('should work with empty ignored markets list', () => {
+      const mockMarkets = [
+        createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 }),
+        createMockMarket('ETH/USDT', 1, { price: 2, amount: 0.01 })
+      ]
+      
+      const serviceWithEmptyIgnored = new MarketMetadataService('binance', mockMarkets, [])
+      
+      // Should have all markets available
+      const availableSymbols = serviceWithEmptyIgnored.getAvailableSymbols()
+      expect(availableSymbols).toHaveLength(2)
+      expect(availableSymbols).toContain('BTC/USDT')
+      expect(availableSymbols).toContain('ETH/USDT')
     })
   })
 }) 

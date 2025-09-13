@@ -152,7 +152,7 @@ export class BitgetExchange extends BaseExchange {
       // Extract and filter USDT symbols
       const usdtSymbolsFundingData = rawJson.data.listDTOS[0].symbolDTOList
         .filter((item: any) => 
-          item.symbolCode && item.symbolCode.endsWith('USDT') && item.lsfRc !== undefined)
+          item.symbolDisplayName && item.symbolDisplayName.endsWith('USDT') && item.lsfRc !== undefined)
         .map((item: any) => ({
           ...item,
           symbol: `${item.baseSymbol}/USDT:USDT`

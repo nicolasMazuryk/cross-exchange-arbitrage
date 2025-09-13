@@ -417,23 +417,27 @@ export class ArbitrageEngine extends EventEmitter {
     const opportunities: ArbitrageOpportunity[] = []
     const exchanges = Array.from(allOrderbooks.keys())
     
-    // Normalize the symbol to find the normalized pair
-    let normalizedPair: string | null = null
-    let exchangeSymbols = new Map<string, string>()
+    const updatingExchangeMetadataService = this.marketMetadataServices.get(updatingExchange)
+    if (!updatingExchangeMetadataService) return []
+
+    const normalizedSymbol = updatingExchangeMetadataService.normalizeSymbol(symbol)
+    if (!normalizedSymbol) return []
+
+    // Get exchange-specific symbols
+    const exchangeSymbols = new Map<string, string>()
 
     // Find the normalized pair and exchange-specific symbols
     for (const exchange of exchanges) {
       const metadataService = this.marketMetadataServices.get(exchange)
       if (!metadataService) continue
 
-      const normalizedSymbol = metadataService.normalizeSymbol(symbol)
-      if (normalizedSymbol) {
-        normalizedPair = normalizedSymbol
-        exchangeSymbols.set(exchange, symbol)
+      const exchangeSymbol = metadataService.denormalizeSymbol(normalizedSymbol)
+      if (exchangeSymbol) {
+        exchangeSymbols.set(exchange, exchangeSymbol)
       }
     }
 
-    if (!normalizedPair || this.blacklistPairs.includes(normalizedPair)) return []
+    if (!normalizedSymbol || this.blacklistPairs.includes(normalizedSymbol)) return []
 
     // Check all exchange pairs for this specific symbol
     for (let i = 0; i < exchanges.length; i++) {
@@ -459,7 +463,7 @@ export class ArbitrageEngine extends EventEmitter {
 
         // Check both directions
         this.checkDirection(
-          normalizedPair,
+          normalizedSymbol,
           exchangeA,
           exchangeB,
           orderbookA,
@@ -472,7 +476,7 @@ export class ArbitrageEngine extends EventEmitter {
           updatingExchange
         )
         this.checkDirection(
-          normalizedPair,
+          normalizedSymbol,
           exchangeB,
           exchangeA,
           orderbookB,
@@ -507,7 +511,7 @@ export class ArbitrageEngine extends EventEmitter {
     buyMetadataService: MarketMetadataService,
     sellMetadataService: MarketMetadataService,
     opportunities: ArbitrageOpportunity[],
-    updatingExchange?: string
+    updatingExchange: string
   ): void {
     // === PRICE NORMALIZATION ===
     // Use the new normalization functions to handle price scales and contract sizes
@@ -640,7 +644,7 @@ export class ArbitrageEngine extends EventEmitter {
       entrySellSimulation.avgNormalizedExecutionPrice,
       profitEstimate.estimatedProfitPercent,
       crossMarketSpread,
-      updatingExchange! // Use provided updating exchange or default to buy exchange
+      updatingExchange // Use provided updating exchange
     )
 
     if (!persistenceResult.isValid) {

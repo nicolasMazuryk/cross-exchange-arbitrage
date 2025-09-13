@@ -28,6 +28,7 @@ interface ExchangeConfiguration {
   maxStreamsPerConnection: number
   reconnectInterval: number
   fees: FeeConfig
+  ignoredMarkets: string[]
 }
 
 interface ArbitrageConfig {
@@ -101,7 +102,8 @@ const config: Config = {
       fees: {
         maker: yamlConfig?.exchanges?.binance?.fees?.maker,
         taker: yamlConfig?.exchanges?.binance?.fees?.taker
-      }
+      },
+      ignoredMarkets: yamlConfig?.exchanges?.binance?.ignoredMarkets || []
     },
     bybit: {
       apiKey: process.env.BYBIT_API_KEY || '',
@@ -111,7 +113,8 @@ const config: Config = {
       fees: {
         maker: yamlConfig?.exchanges?.bybit?.fees?.maker,
         taker: yamlConfig?.exchanges?.bybit?.fees?.taker
-      }
+      },
+      ignoredMarkets: yamlConfig?.exchanges?.bybit?.ignoredMarkets || []
     },
     okx: {
       apiKey: process.env.OKX_API_KEY || '',
@@ -122,7 +125,8 @@ const config: Config = {
       fees: {
         maker: yamlConfig?.exchanges?.okx?.fees?.maker,
         taker: yamlConfig?.exchanges?.okx?.fees?.taker
-      }
+      },
+      ignoredMarkets: yamlConfig?.exchanges?.okx?.ignoredMarkets || []
     },
     bitget: {
       apiKey: process.env.BITGET_API_KEY || '',
@@ -133,7 +137,8 @@ const config: Config = {
       fees: {
         maker: yamlConfig?.exchanges?.bitget?.fees?.maker,
         taker: yamlConfig?.exchanges?.bitget?.fees?.taker
-      }
+      },
+      ignoredMarkets: yamlConfig?.exchanges?.bitget?.ignoredMarkets || []
     },
   },
   trackedPairs: yamlConfig?.trackedPairs || ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'],

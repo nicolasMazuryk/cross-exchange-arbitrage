@@ -81,6 +81,7 @@ export class FundingService extends EventEmitter {
 
     try {
       await Promise.allSettled(promises)
+
       this.emit('fundingDataUpdated', this.state)
     } catch (error) {
       logger.error('Error in fetchAllFundingRates:', error)
@@ -142,6 +143,36 @@ export class FundingService extends EventEmitter {
     }
 
     return exchangeFunding
+  }
+
+  /**
+   * Compare symbols between funding data and market metadata, returns both data and report
+   */
+  public compareFundingSymbolsWithMarketMetadataSymbols(): {
+    data: Map<string, { fundingOnly: string[], marketOnly: string[], matched: string[] }>,
+    report: string
+  } {
+    const comparison = new Map<string, { fundingOnly: string[], marketOnly: string[], matched: string[] }>()
+    let report = '\n=== Symbol Comparison Report ===\n'
+    
+    for (const [exchangeName, marketMetadataService] of this.marketMetadataServices) {
+      const fundingData = this.state.get(exchangeName)
+      const marketSymbols = marketMetadataService.getAvailableSymbols()
+      const fundingSymbols = fundingData ? Array.from(fundingData.keys()) : []
+      
+      const fundingOnly = fundingSymbols.filter(symbol => !marketSymbols.includes(symbol))
+      const marketOnly = marketSymbols.filter(symbol => !fundingSymbols.includes(symbol))
+      const matched = fundingSymbols.filter(symbol => marketSymbols.includes(symbol))
+      
+      comparison.set(exchangeName, { fundingOnly, marketOnly, matched })
+      
+      report += `\n[${exchangeName}]:\n`
+      report += `  Matched: ${matched.length}, Funding only: ${fundingOnly.length}, Market only: ${marketOnly.length}\n`
+      if (fundingOnly.length > 0) report += `  Funding only: ${fundingOnly.join(', ')}\n`
+      if (marketOnly.length > 0) report += `  Market only: ${marketOnly.join(', ')}\n`
+    }
+    
+    return { data: comparison, report }
   }
 
   /**

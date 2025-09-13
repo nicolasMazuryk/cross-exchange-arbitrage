@@ -17,9 +17,11 @@ export class MarketMetadataService {
   private exchangeId: string
   private markets: Map<string, MarketMetadata> = new Map()
   private symbolMappings: Map<string, string> = new Map()
+  private ignoredMarkets: string[]
 
-  constructor(exchangeId: string, markets: ccxt.Market[]) {
+  constructor(exchangeId: string, markets: ccxt.Market[], ignoredMarkets: string[] = []) {
     this.exchangeId = exchangeId
+    this.ignoredMarkets = ignoredMarkets
     this.initializeMarkets(markets)
   }
 
@@ -32,6 +34,11 @@ export class MarketMetadataService {
       
       // Only process USDT perpetual futures
       if (!this.isValidFuturesMarket(market)) {
+        continue
+      }
+
+      // Check if this market is in the ignored list
+      if (this.ignoredMarkets.includes(market.symbol)) {
         continue
       }
 
