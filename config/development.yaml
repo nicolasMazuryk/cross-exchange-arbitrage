@@ -73,7 +73,7 @@ arbitrage:
   maxMarketSpread: 0.002  # maximum market spread width within an exchange (0.2%)
   maxCrossMarketSpread: 0.10  # maximum cross-market spread between exchanges (10%)
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  minProfitThreshold: 0.003  # 0.2%
+  minProfitThreshold: 0.005  # 0.2%
   orderAmountToleranceMin: 0.60  # minimum order amount tolerance (60% of order amount)
   orderAmountToleranceMax: 1.40  # maximum order amount tolerance (140% of order amount)
   # Temporal Persistence Validation
@@ -84,3 +84,13 @@ arbitrage:
 accountSync:
   maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)
   snapshotIntervalMs: 180000  # interval for periodic snapshots in milliseconds (3 minutes)
+
+funding:
+  fetchIntervalMs: 60000  # fetch funding rates every 60 seconds using browser automation
+  maxDataAgeMs: 120000  # consider funding data stale after 2 minutes
+  minFundingDifferential: 0.002  # minimum funding differential to consider (0.2%)
+  supportedExchanges:
+    - "binance"
+    - "bybit"
+    - "okx"
+    - "bitget"

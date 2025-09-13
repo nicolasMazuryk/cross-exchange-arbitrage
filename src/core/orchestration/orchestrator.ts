@@ -9,6 +9,7 @@ import { AccountSyncService } from '../state/accountSyncService'
 import { TradeExecutor } from '../trading/tradeExecutor'
 import { TradeMonitor } from '../trading/tradeMonitor'
 import { MarketMetadataService } from '../markets/marketMetadataService'
+import { FundingService } from '../funding/fundingService'
 
 // REST adapters
 import {
@@ -56,6 +57,7 @@ export class Orchestrator extends EventEmitter {
   private accountSyncService?: AccountSyncService
   private tradeExecutor?: TradeExecutor
   private tradeMonitor?: TradeMonitor
+  private fundingService?: FundingService
 
   // Exchange services
   private exchangeServices: Map<string, ExchangeServices> = new Map()
@@ -85,16 +87,19 @@ export class Orchestrator extends EventEmitter {
       // Stage 2: Initialize core services
       await this.initializeCoreServices()
 
-      // Stage 3: Initialize account sync service
+      // Stage 3: Initialize funding service
+      await this.initializeFundingService()
+
+      // Stage 4: Initialize account sync service
       await this.initializeAccountSyncService()
 
-      // Stage 4: Initialize trading services
+      // Stage 5: Initialize trading services
       await this.initializeTradingServices()
 
-      // Stage 5: Initialize WebSocket clients
+      // Stage 6: Initialize WebSocket clients
       await this.initializePublicWebSocketClients()
 
-      // Stage 6: Setup graceful shutdown
+      // Stage 7: Setup graceful shutdown
       this.setupGracefulShutdown()
 
       this.isInitialized = true
@@ -112,13 +117,13 @@ export class Orchestrator extends EventEmitter {
     logger.info('🔗 Initializing REST clients...')
 
     const exchanges = [
-      // {
-      //   id: 'binance',
-      //   client: new BinanceExchange({
-      //     apiKey: config.exchanges.binance.apiKey,
-      //     apiSecret: config.exchanges.binance.apiSecret,
-      //   })
-      // },
+      {
+        id: 'binance',
+        client: new BinanceExchange({
+          apiKey: config.exchanges.binance.apiKey,
+          apiSecret: config.exchanges.binance.apiSecret,
+        })
+      },
       {
         id: 'bybit',
         client: new BybitExchange({
@@ -179,14 +184,14 @@ export class Orchestrator extends EventEmitter {
 
     // Initialize Arbitrage Engine
     const exchangeConfigs = [
-      // {
-      //   name: 'binance',
-      //   isHealthy: true,
-      //   feeModel: {
-      //     maker: config.exchanges.binance.fees.maker,
-      //     taker: config.exchanges.binance.fees.taker
-      //   }
-      // },
+      {
+        name: 'binance',
+        isHealthy: true,
+        feeModel: {
+          maker: config.exchanges.binance.fees.maker,
+          taker: config.exchanges.binance.fees.taker
+        }
+      },
       {
         name: 'bybit',
         isHealthy: true,
@@ -226,7 +231,8 @@ export class Orchestrator extends EventEmitter {
       this.orderbookManager,
       blacklistPairs,
       exchangeConfigs,
-      marketMetadataServices
+      marketMetadataServices,
+      this.fundingService! // Pass funding service to arbitrage engine
     )
 
     // Listen for arbitrage opportunities
@@ -240,6 +246,52 @@ export class Orchestrator extends EventEmitter {
 
     logger.info('✅ Arbitrage Engine initialized')
     logger.info('✅ Core services initialized')
+  }
+
+  private async initializeFundingService(): Promise<void> {
+    logger.info('💰 Initializing Funding Service...')
+
+    // Create ccxt exchange instances for funding rate fetching
+    const exchangeAdapters = new Map()
+    
+    // Add exchanges that support funding rates
+    for (const [exchangeId, services] of this.exchangeServices.entries()) {
+      if (config.funding.supportedExchanges.includes(exchangeId)) {
+        // Get the exchange adapter for funding data fetching
+        if (services.rest) {
+          exchangeAdapters.set(exchangeId, services.rest)
+        }
+      }
+    }
+
+    if (exchangeAdapters.size === 0) {
+      logger.warn('⚠️ No exchanges available for funding rate fetching')
+      return
+    }
+
+    // Create market metadata services map
+    const marketMetadataServices = new Map<string, MarketMetadataService>()
+    for (const [exchangeId, services] of this.exchangeServices.entries()) {
+      if (services.marketMetadata) {
+        marketMetadataServices.set(exchangeId, services.marketMetadata)
+      }
+    }
+
+    // Initialize funding service
+    this.fundingService = new FundingService(
+      exchangeAdapters,
+      marketMetadataServices,
+      config.funding
+    )
+
+    // Set up funding service event listeners
+    this.fundingService.on('fundingDataUpdated', (state) => {
+    })
+
+    // Start the funding service
+    this.fundingService.start()
+
+    logger.info('✅ Funding Service initialized and started')
   }
 
   private async initializeTradingServices(): Promise<void> {
@@ -386,19 +438,19 @@ export class Orchestrator extends EventEmitter {
 
     // Prepare exchange configurations for account sync
     const exchangeAccountConfigs = [
-      // {
-      //   exchangeId: 'binance',
-      //   wsConfig: {
-      //     apiKey: config.exchanges.binance.apiKey,
-      //     apiSecret: config.exchanges.binance.apiSecret,
-      //     maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
-      //     reconnectInterval: config.exchanges.binance.reconnectInterval,
-      //   } as WebSocketConfig,
-      //   restConfig: {
-      //     apiKey: config.exchanges.binance.apiKey,
-      //     apiSecret: config.exchanges.binance.apiSecret,
-      //   } as ExchangeConfig
-      // },
+      {
+        exchangeId: 'binance',
+        wsConfig: {
+          apiKey: config.exchanges.binance.apiKey,
+          apiSecret: config.exchanges.binance.apiSecret,
+          maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.binance.reconnectInterval,
+        } as WebSocketConfig,
+        restConfig: {
+          apiKey: config.exchanges.binance.apiKey,
+          apiSecret: config.exchanges.binance.apiSecret,
+        } as ExchangeConfig
+      },
       {
         exchangeId: 'bybit',
         wsConfig: {
@@ -484,15 +536,15 @@ export class Orchestrator extends EventEmitter {
 
     // Initialize WebSocket clients
     const wsClients = [
-      // {
-      //   id: 'binance',
-      //   client: new BinancePublicWebSocketClient({
-      //     apiKey: config.exchanges.binance.apiKey,
-      //     apiSecret: config.exchanges.binance.apiSecret,
-      //     maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
-      //     reconnectInterval: config.exchanges.binance.reconnectInterval,
-      //   })
-      // },
+      {
+        id: 'binance',
+        client: new BinancePublicWebSocketClient({
+          apiKey: config.exchanges.binance.apiKey,
+          apiSecret: config.exchanges.binance.apiSecret,
+          maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
+          reconnectInterval: config.exchanges.binance.reconnectInterval,
+        })
+      },
       {
         id: 'bybit',
         client: new BybitPublicWebSocketClient({
@@ -626,7 +678,16 @@ export class Orchestrator extends EventEmitter {
       }
     }
 
-    // 3. Shutdown core services
+    // 3. Shutdown funding service
+    if (this.fundingService) {
+      shutdownTasks.push(async () => {
+        logger.info('🔄 Shutting down Funding Service...')
+        this.fundingService!.stop()
+        logger.info('✅ Funding Service shutdown complete')
+      })
+    }
+
+    // 4. Shutdown core services
     if (this.arbitrageEngine) {
       shutdownTasks.push(async () => {
         logger.info('🔄 Shutting down Arbitrage Engine...')
@@ -671,6 +732,10 @@ export class Orchestrator extends EventEmitter {
 
   getTradeMonitor(): TradeMonitor | undefined {
     return this.tradeMonitor
+  }
+
+  getFundingService(): FundingService | undefined {
+    return this.fundingService
   }
 
   isServiceInitialized(): boolean {

@@ -1,5 +1,6 @@
 import { Market, Order, Dictionary } from 'ccxt'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
+import { ParsedFunding } from '../../core/funding/types'
 
 export interface ExchangeConfig {
   apiKey: string
@@ -27,6 +28,9 @@ export interface RestClientInterface {
   fetchBalancesSnapshot?(): Promise<BalanceInfo[]>
   fetchPositionsSnapshot?(): Promise<PositionInfo[]>
   fetchOrdersSnapshot?(symbol?: string): Promise<OrderInfo[]>
+
+  // Funding
+  fetchFundingData?(): Promise<Map<string, ParsedFunding>>
 
   // Utility
   getExchangeId(): string

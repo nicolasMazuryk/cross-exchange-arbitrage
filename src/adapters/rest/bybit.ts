@@ -2,11 +2,14 @@ import { BaseExchange } from './base'
 import { ExchangeConfig } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { ParsedFunding } from '../../core/funding/types'
+import { fetchJsonFromUrl } from '../../utils/browser'
 import logger from '../../utils/logger'
 import { getPositionSide, positionId } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'bybit'
 const CCXT_EXCHANGE_NAME = 'bybit'
+const FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual'
 
 export class BybitExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
@@ -129,4 +132,69 @@ export class BybitExchange extends BaseExchange {
         return 'UNKNOWN'
     }
   }
+
+
+  /**
+   * Fetch funding data from Bybit
+   * URL: https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual
+   * Response structure: {"ret_code":0,"ret_msg":"success","result":{"list":[{"symbol":2219,"contractType":"LinearPerpetual","symbolName":"XDCUSDT","fundingRateInterval":"4","nextFundingTimeE0":"1757534400","interestRate":"0.0003","predictedFundingRate":"0.005"}]}}
+   */
+  async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
+    try {
+      if (!FUNDING_ENDPOINT) {
+        logger.warn(`[${this.exchangeId}] No funding endpoint configured`)
+        return new Map()
+      }
+
+      const rawJson = await fetchJsonFromUrl(FUNDING_ENDPOINT)
+      
+      if (!rawJson || !rawJson.result || !rawJson.result.list || !Array.isArray(rawJson.result.list)) {
+        logger.warn(`[${this.exchangeId}] Invalid Bybit funding data structure`)
+        return new Map()
+      }
+
+      // Filter symbols to only ones that end with 'USDT'
+      const usdtSymbolsFundingData = rawJson.result.list
+        .filter((item: any) => 
+          item.symbolName && item.symbolName.endsWith('USDT'))
+        .map((item: any) => ({
+          ...item,
+          symbol: item.symbolName.replace('USDT', '/USDT:USDT')
+        }))
+        .filter((item: any) => !['USDCUSDT', 'ETHBTCUSDT', 'NEIROETHUSDT'].includes(item.symbolName))
+
+      const fundingData = new Map<string, ParsedFunding>()
+      
+      for (const item of usdtSymbolsFundingData) {
+        // Bybit provides nextFundingTimeE0 in seconds, convert to milliseconds
+        const fundingRate = parseFloat(item.predictedFundingRate)
+        const fundingInterval = parseInt(item.fundingRateInterval)
+        const nextFundingTimestamp = parseInt(item.nextFundingTimeE0) * 1000
+
+        if (isNaN(fundingRate) || !fundingInterval || !nextFundingTimestamp) {
+          logger.warn(`[${this.exchangeId}] Invalid Bybit funding data values: ${item.symbol}`)
+          continue
+        }
+
+        const parsedFunding: ParsedFunding = {
+          exchange: EXCHANGE_NAME,
+          symbol: item.symbol,
+          fundingRate: fundingRate / 100,
+          fundingRatePercent: fundingRate,
+          fundingInterval,
+          nextFundingTimestamp,
+          nextFundingDatetime: new Date(nextFundingTimestamp)
+        }
+        
+        fundingData.set(item.symbol, parsedFunding)
+      }
+
+      logger.debug(`[${this.exchangeId}] Parsed ${fundingData.size} funding rates`)
+      return fundingData
+    } catch (error) {
+      logger.error(`[${this.exchangeId}] Error fetching funding data:`, error)
+      return new Map()
+    }
+  }
 }
+

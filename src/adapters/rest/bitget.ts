@@ -2,11 +2,14 @@ import { BaseExchange } from './base'
 import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { ParsedFunding } from '../../core/funding/types'
+import { fetchJsonFromUrl } from '../../utils/browser'
 import logger from '../../utils/logger'
 import { getOrderSide, positionId } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'bitget'
 const CCXT_EXCHANGE_NAME = 'bitget'
+const FUNDING_ENDPOINT = 'https://www.bitget.com/v1/mcp/contract/symbols?businessLine=10'
 
 export class BitgetExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
@@ -122,4 +125,75 @@ export class BitgetExchange extends BaseExchange {
         return 'UNKNOWN'
     }
   }
-} 
+
+
+  /**
+   * Fetch funding data from Bitget
+   * URL: https://www.bitget.com/v1/mcp/contract/symbols?businessLine=10
+   * Response structure: {"code":"200","data":{"listDTOS":[{"symbolDTOList":[{"baseSymbol":"BTC","flv":"-0.003","fuv":"0.003","lsfRc":8}]}]}}
+   */
+  async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
+    try {
+      if (!FUNDING_ENDPOINT) {
+        logger.warn(`[${this.exchangeId}] No funding endpoint configured`)
+        return new Map()
+      }
+
+      const [rawJson, ccxtFundingRates] = await Promise.all([
+        fetchJsonFromUrl(FUNDING_ENDPOINT),
+        this.exchange.fetchFundingRates(undefined, { subType: 'linear', productType: 'USDT-FUTURES' })
+      ])
+      
+      if (!rawJson || !rawJson.data || !rawJson.data.listDTOS || !Array.isArray(rawJson.data.listDTOS) || !rawJson.data.listDTOS[0].symbolDTOList || !Array.isArray(rawJson.data.listDTOS[0].symbolDTOList)) {
+        logger.warn(`[${this.exchangeId}] Invalid Bitget funding data structure`)
+        return new Map()
+      }
+
+      // Extract and filter USDT symbols
+      const usdtSymbolsFundingData = rawJson.data.listDTOS[0].symbolDTOList
+        .filter((item: any) => 
+          item.symbolCode && item.symbolCode.endsWith('USDT') && item.lsfRc !== undefined)
+        .map((item: any) => ({
+          ...item,
+          symbol: `${item.baseSymbol}/USDT:USDT`
+        }))
+
+      const ccxtFundingRatesValues = Object.values(ccxtFundingRates)
+
+      const fundingData = new Map<string, ParsedFunding>()
+
+      for (const item of usdtSymbolsFundingData) {
+        // Find the ccxt funding data for the item. CCXT return inconsistent symbol format, so we need to find based on "info" property.
+        const ccxtFundingData = ccxtFundingRatesValues.find((ccxtFundingData) => ccxtFundingData.info.symbol === `${item.baseSymbol}${item.pricedSymbol}`)
+        // Calculate next funding time (Bitget doesn't provide this directly)
+        const fundingInterval = parseInt(item.lsfRc)
+        const intervalMs = fundingInterval * 60 * 60 * 1000
+        const now = Date.now()
+        const nextFundingTimestamp = Math.ceil(now / intervalMs) * intervalMs
+
+        if (!ccxtFundingData || typeof ccxtFundingData.fundingRate !== 'number' || isNaN(ccxtFundingData.fundingRate) || !fundingInterval || !nextFundingTimestamp) {
+          logger.warn(`[${this.exchangeId}] Invalid Bitget funding data values: ${item.symbol}`)
+          continue
+        }
+
+        const parsedFunding: ParsedFunding = {
+          exchange: EXCHANGE_NAME,
+          symbol: item.symbol,
+          fundingRate: ccxtFundingData.fundingRate,
+          fundingRatePercent: ccxtFundingData.fundingRate * 100,
+          fundingInterval,
+          nextFundingTimestamp,
+          nextFundingDatetime: new Date(nextFundingTimestamp)
+        }
+        
+        fundingData.set(item.symbol, parsedFunding)
+      }
+
+      logger.debug(`[${this.exchangeId}] Parsed ${fundingData.size} funding rates`)
+      return fundingData
+    } catch (error) {
+      logger.error(`[${this.exchangeId}] Error fetching funding data:`, error)
+      return new Map()
+    }
+  }
+}

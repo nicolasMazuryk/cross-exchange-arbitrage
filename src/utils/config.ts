@@ -64,6 +64,13 @@ interface AccountSyncConfig {
   snapshotIntervalMs: number
 }
 
+interface FundingConfig {
+  fetchIntervalMs: number
+  maxDataAgeMs: number
+  minFundingDifferential: number
+  supportedExchanges: string[]
+}
+
 interface Config {
   app: AppConfig
   exchanges: {
@@ -76,6 +83,7 @@ interface Config {
   arbitrage: ArbitrageConfig
   trading: TradingConfig
   accountSync: AccountSyncConfig
+  funding: FundingConfig
 }
 
 const config: Config = {
@@ -152,6 +160,12 @@ const config: Config = {
   accountSync: {
     maxStateAgeMs: yamlConfig?.accountSync?.maxStateAgeMs,
     snapshotIntervalMs: yamlConfig?.accountSync?.snapshotIntervalMs
+  },
+  funding: {
+    fetchIntervalMs: yamlConfig?.funding?.fetchIntervalMs,
+    maxDataAgeMs: yamlConfig?.funding?.maxDataAgeMs,
+    minFundingDifferential: yamlConfig?.funding?.minFundingDifferential,
+    supportedExchanges: yamlConfig?.funding?.supportedExchanges
   }
 }
 

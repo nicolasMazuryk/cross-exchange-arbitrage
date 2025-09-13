@@ -2,10 +2,13 @@ import { BaseExchange } from './base'
 import { ExchangeConfig } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { ParsedFunding } from '../../core/funding/types'
+import { fetchJsonFromUrl } from '../../utils/browser'
 import logger from '../../utils/logger'
 
 const EXCHANGE_NAME = 'binance'
 const CCXT_EXCHANGE_NAME = 'binanceusdm'
+const FUNDING_ENDPOINT = 'https://www.binance.com/bapi/futures/v1/public/future/common/get-funding-info'
 
 export class BinanceExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
@@ -119,4 +122,65 @@ export class BinanceExchange extends BaseExchange {
         return 'NEW'
     }
   }
+
+  /**
+   * Fetch funding data from Binance by combining browser data (funding interval) with ccxt data (funding rate and datetime)
+   */
+  async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
+    try {
+      if (!FUNDING_ENDPOINT) {
+        logger.warn(`[${this.exchangeId}] No funding endpoint configured`)
+        return new Map()
+      }
+
+      const [rawJson, ccxtFundingRates] = await Promise.all([
+        fetchJsonFromUrl(FUNDING_ENDPOINT),
+        this.exchange.fetchFundingRates(undefined, { subType: 'linear' })
+      ])
+      
+      if (!rawJson || !rawJson.data || !Array.isArray(rawJson.data)) {
+        logger.warn(`[${this.exchangeId}] Invalid Binance funding data structure`)
+        return new Map()
+      }
+
+      // Filter symbols in rawJson.data to only ones that end with 'USDT'
+      const usdtSymbolsIntervalData = rawJson.data
+        .filter((item: any) => 
+          item.symbol && item.symbol.endsWith('USDT') && item.fundingIntervalHours !== undefined)
+        .map((item: any) => ({
+          ...item,
+          symbol: item.symbol.replace('USDT', '/USDT:USDT')
+        }))
+
+      const fundingData = new Map<string, ParsedFunding>()
+      
+      for (const item of usdtSymbolsIntervalData) {
+        const ccxtFundingData = ccxtFundingRates[item.symbol]
+
+        if (!ccxtFundingData || typeof ccxtFundingData.fundingRate !== 'number' || isNaN(ccxtFundingData.fundingRate) || !ccxtFundingData.fundingTimestamp || !ccxtFundingData.fundingDatetime) {
+          logger.warn(`[${this.exchangeId}] Invalid Binance funding data values: ${item.symbol}`)
+          continue
+        }
+        
+        const parsedFunding: ParsedFunding = {
+          exchange: EXCHANGE_NAME,
+          symbol: item.symbol,
+          fundingRate: ccxtFundingData.fundingRate,
+          fundingRatePercent: ccxtFundingData.fundingRate * 100,
+          fundingInterval: item.fundingIntervalHours,
+          nextFundingTimestamp: ccxtFundingData.fundingTimestamp,
+          nextFundingDatetime: new Date(ccxtFundingData.fundingDatetime)
+        }
+        
+        fundingData.set(item.symbol, parsedFunding)
+      }
+
+      logger.debug(`[${this.exchangeId}] Parsed ${fundingData.size} funding rates`)
+      return fundingData
+    } catch (error) {
+      logger.error(`[${this.exchangeId}] Error fetching funding data:`, error)
+      return new Map()
+    }
+  }
 }
+

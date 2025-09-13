@@ -1,5 +1,7 @@
 import ccxt, { Exchange, Market, Order, Dictionary } from 'ccxt'
 import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
+import { ParsedFunding } from '../../core/funding/types'
+import { fetchJsonFromUrl } from '../../utils/browser'
 import logger from '../../utils/logger'
 
 export abstract class BaseExchange implements RestClientInterface {
@@ -131,4 +133,10 @@ export abstract class BaseExchange implements RestClientInterface {
   getExchangeId(): string {
     return this.exchangeId
   }
+
+  /**
+   * Abstract method to fetch funding data from the exchange
+   * Must be implemented by each exchange with their specific logic
+   */
+  abstract fetchFundingData(): Promise<Map<string, ParsedFunding>>
 }

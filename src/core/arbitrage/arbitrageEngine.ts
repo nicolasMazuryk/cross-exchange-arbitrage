@@ -2,6 +2,7 @@ import { EventEmitter } from 'events'
 import { OrderbookManager, OrderBook, TopOfBook, OrderBookLevel } from '../orderbook/orderbookManager'
 import { MarketMetadataService } from '../markets/marketMetadataService'
 import { ExchangeMeta } from '../../types/exchange'
+import { FundingService } from '../funding/fundingService'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
 
@@ -70,6 +71,7 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly feeModels: Map<string, FeeModel>
   private readonly orderbookManager: OrderbookManager
   private readonly marketMetadataServices: Map<string, MarketMetadataService>
+  private readonly fundingService: FundingService
   private readonly orderAmount: number
   private readonly minProfitThreshold: number
   private readonly minConfidenceScore: number
@@ -89,13 +91,15 @@ export class ArbitrageEngine extends EventEmitter {
     orderbookManager: OrderbookManager,
     blacklistPairs: string[],
     exchangeConfigs: ExchangeMeta[],
-    marketMetadataServices: Map<string, MarketMetadataService>
+    marketMetadataServices: Map<string, MarketMetadataService>,
+    fundingService: FundingService
   ) {
     super()
     this.orderbookManager = orderbookManager
     this.blacklistPairs = blacklistPairs
     this.exchangeConfigs = new Map(exchangeConfigs.map(config => [config.name, config]))
     this.marketMetadataServices = marketMetadataServices
+    this.fundingService = fundingService
     this.feeModels = new Map()
     this.orderAmount = config.trading.orderAmount
     this.minProfitThreshold = config.arbitrage.minProfitThreshold
@@ -491,73 +495,6 @@ export class ArbitrageEngine extends EventEmitter {
 
     return sortedOpportunities
   }
-// Legacy/Outdated
-  private scanAllOrderbooks(
-    allOrderbooks: Map<string, Map<string, OrderBook>>
-  ): ArbitrageOpportunity[] {
-    const opportunities: ArbitrageOpportunity[] = []
-    const exchanges = Array.from(allOrderbooks.keys())
-    const commonPairs = this.getCommonPairs(allOrderbooks)
-
-    for (const normalizedPair of commonPairs) {
-      if (this.blacklistPairs.includes(normalizedPair)) continue
-
-      for (let i = 0; i < exchanges.length; i++) {
-        for (let j = i + 1; j < exchanges.length; j++) {
-          const exchangeA = exchanges[i]
-          const exchangeB = exchanges[j]
-
-          // Get metadata services for denormalization
-          const metadataServiceA = this.marketMetadataServices.get(exchangeA)
-          const metadataServiceB = this.marketMetadataServices.get(exchangeB)
-
-          // Denormalize symbols for each exchange
-          const exchangeSymbolA = metadataServiceA?.denormalizeSymbol(normalizedPair)
-          const exchangeSymbolB = metadataServiceB?.denormalizeSymbol(normalizedPair)
-
-          const orderbookA = allOrderbooks.get(exchangeA)?.get(exchangeSymbolA!)
-          const orderbookB = allOrderbooks.get(exchangeB)?.get(exchangeSymbolB!)
-
-          if (!orderbookA || !orderbookB) continue
-
-          // Check both directions
-          this.checkDirection(
-            normalizedPair,
-            exchangeA,
-            exchangeB,
-            orderbookA,
-            orderbookB,
-            exchangeSymbolA!,
-            exchangeSymbolB!,
-            metadataServiceA!,
-            metadataServiceB!,
-            opportunities
-          )
-          this.checkDirection(
-            normalizedPair,
-            exchangeB,
-            exchangeA,
-            orderbookB,
-            orderbookA,
-            exchangeSymbolB!,
-            exchangeSymbolA!,
-            metadataServiceB!,
-            metadataServiceA!,
-            opportunities
-          )
-        }
-      }
-    }
-
-    // Sort by estimated profit and log top 5
-    const sortedOpportunities = opportunities
-      .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
-      // .slice(0, 5)
-      // .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
-      .filter(opportunity => opportunity.estimatedProfitPercent >= this.minProfitThreshold * 100)
-
-    return sortedOpportunities
-  }
 
   private checkDirection(
     normalizedPair: string,
@@ -730,7 +667,7 @@ export class ArbitrageEngine extends EventEmitter {
         volumeUSDT,
         confidenceScore: profitEstimate.confidence,
         estimatedProfit: profitEstimate.estimatedProfit,
-        estimatedProfitPercent: profitEstimate.estimatedProfitPercent
+        estimatedProfitPercent: profitEstimate.estimatedProfitPercent,
       })
     }
   }
