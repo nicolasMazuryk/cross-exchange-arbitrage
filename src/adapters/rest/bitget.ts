@@ -13,7 +13,7 @@ const FUNDING_ENDPOINT = 'https://www.bitget.com/v1/mcp/contract/symbols?busines
 
 export class BitgetExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
-    super(CCXT_EXCHANGE_NAME, config)
+    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
   }
 
   protected getExchangeOrderParams(

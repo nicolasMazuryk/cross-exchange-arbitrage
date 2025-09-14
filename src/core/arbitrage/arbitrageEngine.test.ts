@@ -72,11 +72,17 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
       ['bybit', mockMarketMetadataService]
     ])
 
+    // Mock funding service
+    const mockFundingService = {
+      getSymbolFundingData: jest.fn().mockReturnValue(undefined)
+    } as any
+
     arbitrageEngine = new ArbitrageEngine(
       mockOrderbookManager,
       [],
       exchangeConfigs,
-      marketMetadataServices
+      marketMetadataServices,
+      mockFundingService
     )
   })
 

@@ -86,32 +86,56 @@ interface ArbitrageOpportunity {
 ## Four Key Scenarios
 
 ### Scenario 1: Spread Profitable, Funding Unprofitable
-- **Example**: Buy $50,000 (funding: -0.01%), Sell $50,100 (funding: -0.05%)
+- **Example**: Buy $50,000 (funding: 0.01%), Sell $50,100 (funding: 0.01%)
 - **Spread Profit**: $100 (0.2%)
-- **Funding Cost**: -$40 over 20h
-- **Combined Result**: $60 profit (0.12%)
+- **Funding Cost**: -$20 over 20h (BUY pays 0.01%, SELL receives 0.01%, net: -0.01%)
+- **Combined Result**: $80 profit (0.16%)
 - **Decision**: Execute if combined profit > threshold
 
 ### Scenario 2: Spread Unprofitable, Funding Profitable
-- **Example**: Buy $50,000 (funding: 0.01%), Sell $49,950 (funding: -0.01%)
+- **Example**: Buy $50,000 (funding: -0.01%), Sell $49,950 (funding: 0.01%)
 - **Spread Loss**: -$50 (-0.1%)
-- **Funding Profit**: +$20 over 20h
+- **Funding Profit**: +$20 over 20h (BUY receives -0.01%, SELL receives 0.01%, net: +0.02%)
 - **Combined Result**: -$30 loss (-0.06%)
 - **Decision**: Skip due to net loss
 
 ### Scenario 3: Both Unprofitable
-- **Example**: Buy $50,000 (funding: -0.01%), Sell $49,900 (funding: -0.02%)
+- **Example**: Buy $50,000 (funding: 0.01%), Sell $49,900 (funding: 0.01%)
 - **Spread Loss**: -$100 (-0.2%)
-- **Funding Cost**: -$10 over 20h
-- **Combined Result**: -$110 loss (-0.22%)
+- **Funding Cost**: -$20 over 20h (BUY pays 0.01%, SELL receives 0.01%, net: 0%)
+- **Combined Result**: -$100 loss (-0.2%)
 - **Decision**: Skip due to net loss
 
 ### Scenario 4: Both Profitable
-- **Example**: Buy $50,000 (funding: 0.01%), Sell $50,150 (funding: -0.01%)
+- **Example**: Buy $50,000 (funding: -0.01%), Sell $50,150 (funding: 0.01%)
 - **Spread Profit**: $150 (0.3%)
-- **Funding Profit**: +$20 over 20h
-- **Combined Result**: $170 profit (0.34%)
+- **Funding Profit**: +$40 over 20h (BUY receives -0.01%, SELL receives 0.01%, net: +0.02%)
+- **Combined Result**: $190 profit (0.38%)
 - **Decision**: Execute - excellent opportunity
+
+## Position Side Logic
+
+The funding calculation correctly accounts for position sides in arbitrage:
+
+### BUY Position (Long)
+- **Positive funding rate** → We pay funding (loss)
+- **Negative funding rate** → We receive funding (profit)
+
+### SELL Position (Short)  
+- **Positive funding rate** → We receive funding (profit)
+- **Negative funding rate** → We pay funding (loss)
+
+### Net Funding Calculation
+```typescript
+// BUY position impact (negative because we're long)
+const buyFundingImpact = -buyExchangeFunding * positionValue
+
+// SELL position impact (positive because we're short)  
+const sellFundingImpact = sellExchangeFunding * positionValue
+
+// Combined funding impact
+const netFunding = buyFundingImpact + sellFundingImpact
+```
 
 ## Algorithm Details
 

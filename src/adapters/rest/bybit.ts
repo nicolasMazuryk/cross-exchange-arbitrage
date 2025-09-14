@@ -13,7 +13,7 @@ const FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support
 
 export class BybitExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
-    super(CCXT_EXCHANGE_NAME, config)
+    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
   }
 
   // Note: Bybit doesn't require exchange-specific parameters for order creation

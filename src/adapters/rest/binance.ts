@@ -12,7 +12,7 @@ const FUNDING_ENDPOINT = 'https://www.binance.com/bapi/futures/v1/public/future/
 
 export class BinanceExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
-    super(CCXT_EXCHANGE_NAME, config)
+    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
   }
 
   // Note: Binance doesn't require exchange-specific parameters for order creation

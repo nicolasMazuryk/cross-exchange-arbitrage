@@ -13,7 +13,7 @@ const FUNDING_ENDPOINT = 'https://www.okx.com/priapi/v5/public/funding-rate-all?
 
 export class OkxExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
-    super(CCXT_EXCHANGE_NAME, config)
+    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
   }
 
   protected getExchangeOrderParams(

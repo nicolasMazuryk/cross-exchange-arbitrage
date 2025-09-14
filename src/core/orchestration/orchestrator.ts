@@ -84,11 +84,11 @@ export class Orchestrator extends EventEmitter {
       // Stage 1: Initialize REST clients
       await this.initializeRestClients()
 
-      // Stage 2: Initialize core services
-      await this.initializeCoreServices()
-
-      // Stage 3: Initialize funding service
+      // Stage 2: Initialize funding service (needed by ArbitrageEngine)
       await this.initializeFundingService()
+
+      // Stage 3: Initialize core services
+      await this.initializeCoreServices()
 
       // Stage 4: Initialize account sync service
       await this.initializeAccountSyncService()

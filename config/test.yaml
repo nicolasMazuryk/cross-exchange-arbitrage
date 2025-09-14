@@ -1,0 +1,73 @@
+app:
+  name: "ArbiNet"
+  version: "1.0.0"
+  environment: "test"
+
+logging:
+  level: "error"
+  format: "json"
+  file: "logs/test.log"
+
+exchanges:
+  enabled:
+    - "binance"
+    - "bybit"
+  binance:
+    maxStreamsPerConnection: 1000
+    reconnectInterval: 5000
+    fees:
+      maker: 0.0002
+      taker: 0.0005
+    ignoredMarkets: []
+  bybit:
+    maxStreamsPerConnection: 50
+    reconnectInterval: 5000
+    fees:
+      maker: 0.0002
+      taker: 0.00055
+    ignoredMarkets: []
+
+trackedPairs:
+  - BTCUSDT
+  - ETHUSDT
+
+trading:
+  orderAmount: 10
+  minBalanceBuffer: 0.1
+  positionLimitMultiplier: 1
+  orderConfirmationTimeoutMs: 10000
+  monitor:
+    maxHoldTimeMs: 1000 * 60 * 60 * 24
+    convergenceBufferPercent: 0.00
+    checkIntervalMs: 5000
+    exitMinPersistenceMs: 1000
+    exitMinConsecutiveSnapshots: 3
+    exitCandidateCleanupMs: 5000
+
+arbitrage:
+  blacklistPairs: []
+  minConfidenceScore: 0.7
+  maxMarketSpread: 0.002
+  maxProfitAnomalyThreshold: 0.10
+  maxOrderbookAge: 2000
+  minExpectedProfitThreshold: 0.005
+  orderAmountToleranceMin: 0.60
+  orderAmountToleranceMax: 1.40
+  minPersistenceMs: 1000
+  minConsecutiveSnapshots: 3
+  candidateCleanupMs: 5000
+
+accountSync:
+  maxStateAgeMs: 30000
+  snapshotIntervalMs: 180000
+
+funding:
+  fetchIntervalMs: 60000
+  maxDataAgeMs: 120000
+  minFundingDifferential: 0.002
+  supportedExchanges:
+    - "binance"
+    - "bybit"
+  projectionHours: 20
+  minProjectedProfitPercent: 0.001
+  maxFundingRateDeviation: 0.01

@@ -2,12 +2,14 @@ import ccxt, { Exchange, Market, Order, Dictionary } from 'ccxt'
 import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
+import appConfig from '../../utils/config'
 import logger from '../../utils/logger'
 
 export abstract class BaseExchange implements RestClientInterface {
   protected exchange: Exchange
 
   constructor(
+    protected readonly exchangeName: string,
     protected readonly exchangeId: string,
     protected readonly config: ExchangeConfig
   ) {
@@ -63,6 +65,9 @@ export abstract class BaseExchange implements RestClientInterface {
 
       // logger.info(`Found ${notInverseMarkets.length} markets`)
 
+      // Get ignored markets for this exchange from config
+      const ignoredMarkets = appConfig.exchanges[this.exchangeName as keyof typeof appConfig.exchanges].ignoredMarkets || []
+      
       const usdtPerpetualMarkets = Object.fromEntries(
         Object.entries(this.exchange.markets)
           .filter(([symbol, market]) =>
@@ -71,16 +76,8 @@ export abstract class BaseExchange implements RestClientInterface {
             !market.inverse &&
             market.active
           )
-          // .filter(([symbol, market]) => 
-          //   // symbol.startsWith('SAHARA') || 
-          //   // symbol.startsWith('SOL') || 
-          //   // symbol.startsWith('GOAT') || 
-          //   // symbol.startsWith('DOGS') ||
-          //   symbol.includes('PEPE')
-          //   // symbol.includes('ACH')
-          //   // market.contractSize !== 1
-          // )
-      )
+          .filter(([symbol, market]) => !ignoredMarkets.includes(symbol))
+        )
       
       return usdtPerpetualMarkets
     } catch (error) {

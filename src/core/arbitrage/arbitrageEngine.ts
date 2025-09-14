@@ -34,8 +34,8 @@ interface OpportunityScore {
 interface FundingEvent {
   timestamp: number
   time: Date
-  buyExchangeFunding: number
-  sellExchangeFunding: number
+  buyExchangeFundingRaw: number
+  sellExchangeFundingRaw: number
   netFunding: number
   netFundingPercent: number
   cumulativeProfit: number
@@ -48,7 +48,7 @@ interface FundingProjection {
   totalProjectedProfitPercent: number
   maxDrawdown: number
   maxDrawdownPercent: number
-  averageHourlyReturn: number
+  averageHourlyProfitPercent: number
 }
 
 // Temporal Persistence Validation interfaces
@@ -299,6 +299,8 @@ export class ArbitrageEngine extends EventEmitter {
 
     const spreadProfitPercent = spreadProfit / positionAmount * 100
 
+// ************** CAREFULLY HERE: OPPORTUNITIES ARE REJECTED IF OPPORTUNITY IS NOT PROFITABLE ON THE FIRST FUNDING EVENT. 
+// COMMENT THIS OUT TO ALLOW PROFITABILITY ON THE SECOND/THIRD/ETC FUNDING EVENT. **************
     // === FUNDING PROFIT CALCULATION ===
     const fundingProfit = fundingProjection.timeline[0].netFunding
     const fundingProfitPercent = fundingProjection.timeline[0].netFundingPercent
@@ -349,9 +351,11 @@ export class ArbitrageEngine extends EventEmitter {
     
     for (const event of fundingEvents) {
       // Calculate funding impact for this event
-      const buyFundingImpact = event.buyExchangeFunding * positionValue
-      const sellFundingImpact = event.sellExchangeFunding * positionValue
-      const netFunding = buyFundingImpact - sellFundingImpact // Positive = we receive funding
+      // BUY position: positive funding rate = we pay (loss), negative = we receive (profit)
+      // SELL position: positive funding rate = we receive (profit), negative = we pay (loss)
+      const buyFundingImpact = -event.buyExchangeFunding * positionValue // Negative because we're long on buy exchange
+      const sellFundingImpact = event.sellExchangeFunding * positionValue // Positive because we're short on sell exchange
+      const netFunding = buyFundingImpact + sellFundingImpact // Combined funding impact
       
       cumulativeProfit += netFunding
       minCumulativeProfit = Math.min(minCumulativeProfit, cumulativeProfit)
@@ -362,8 +366,8 @@ export class ArbitrageEngine extends EventEmitter {
       timeline.push({
         timestamp: event.timestamp,
         time: new Date(event.timestamp),
-        buyExchangeFunding: event.buyExchangeFunding,
-        sellExchangeFunding: event.sellExchangeFunding,
+        buyExchangeFundingRaw: event.buyExchangeFunding,
+        sellExchangeFundingRaw: event.sellExchangeFunding,
         netFunding,
         netFundingPercent: (netFunding / positionValue) * 100,
         cumulativeProfit,
@@ -374,7 +378,7 @@ export class ArbitrageEngine extends EventEmitter {
     const totalProjectedProfit = cumulativeProfit
     const totalProjectedProfitPercent = (totalProjectedProfit / positionValue) * 100
     const maxDrawdownPercent = (maxDrawdown / positionValue) * 100
-    const averageHourlyReturn = totalProjectedProfitPercent / this.projectionHours
+    const averageHourlyProfitPercent = totalProjectedProfitPercent / this.projectionHours
 
     return {
       timeline,
@@ -382,7 +386,7 @@ export class ArbitrageEngine extends EventEmitter {
       totalProjectedProfitPercent,
       maxDrawdown,
       maxDrawdownPercent,
-      averageHourlyReturn
+      averageHourlyProfitPercent
     }
   }
 
@@ -731,13 +735,18 @@ export class ArbitrageEngine extends EventEmitter {
 
     // === INITIAL FUNDING RATE VALIDATION ===
     const fundingEvents = this.generateFundingEvents(buyFundingData, sellFundingData, 8)
-    const fundingRateDifference = fundingEvents[0].buyExchangeFunding - fundingEvents[0].sellExchangeFunding
+    // Apply position side logic: BUY position (negative impact), SELL position (positive impact)
+    const fundingRateDifference = -fundingEvents[0].buyExchangeFunding + fundingEvents[0].sellExchangeFunding
+
+    // ==== INITIAL TOTAL RETURN VALIDATION ====
+    const totalPotentialReturn = crossExchangePriceSpread + fundingRateDifference
 
     const minRequiredTotalReturn = roundTripFees + this.minExpectedProfitThreshold
+
     // ************** CAREFULLY HERE: OPPORTUNITIES ARE REJECTED IF OPPORTUNITY IS NOT PROFITABLE ON THE FIRST FUNDING EVENT. 
     // COMMENT THIS OUT TO ALLOW PROFITABILITY ON THE SECOND/THIRD/ETC FUNDING EVENT. **************
-    if (crossExchangePriceSpread + fundingRateDifference < minRequiredTotalReturn) return
-    if (crossExchangePriceSpread + fundingRateDifference > this.maxProfitAnomalyThreshold) return
+    if (totalPotentialReturn < minRequiredTotalReturn) return
+    if (totalPotentialReturn > this.maxProfitAnomalyThreshold) return
 
     // === VOLUME CALCULATION ===
     // Calculate target normalized volume (base asset volume) based on order amount
