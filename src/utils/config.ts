@@ -35,9 +35,9 @@ interface ArbitrageConfig {
   blacklistPairs: string[]
   minConfidenceScore: number
   maxMarketSpread: number
-  maxCrossMarketSpread: number
+  maxProfitAnomalyThreshold: number
   maxOrderbookAge: number
-  minProfitThreshold: number
+  minExpectedProfitThreshold: number
   orderAmountToleranceMin: number
   orderAmountToleranceMax: number
   minPersistenceMs: number
@@ -70,6 +70,7 @@ interface FundingConfig {
   maxDataAgeMs: number
   minFundingDifferential: number
   supportedExchanges: string[]
+  projectionHours: number
 }
 
 interface Config {
@@ -146,9 +147,9 @@ const config: Config = {
     blacklistPairs: yamlConfig?.arbitrage?.blacklistPairs || [],
     minConfidenceScore: yamlConfig?.arbitrage?.minConfidenceScore,
     maxMarketSpread: yamlConfig?.arbitrage?.maxMarketSpread,
-    maxCrossMarketSpread: yamlConfig?.arbitrage?.maxCrossMarketSpread,
+    maxProfitAnomalyThreshold: yamlConfig?.arbitrage?.maxProfitAnomalyThreshold,
     maxOrderbookAge: yamlConfig?.arbitrage?.maxOrderbookAge,
-    minProfitThreshold: yamlConfig?.arbitrage?.minProfitThreshold,
+    minExpectedProfitThreshold: yamlConfig?.arbitrage?.minExpectedProfitThreshold,
     orderAmountToleranceMin: yamlConfig?.arbitrage?.orderAmountToleranceMin,
     orderAmountToleranceMax: yamlConfig?.arbitrage?.orderAmountToleranceMax,
     minPersistenceMs: yamlConfig?.arbitrage?.minPersistenceMs,
@@ -170,7 +171,8 @@ const config: Config = {
     fetchIntervalMs: yamlConfig?.funding?.fetchIntervalMs,
     maxDataAgeMs: yamlConfig?.funding?.maxDataAgeMs,
     minFundingDifferential: yamlConfig?.funding?.minFundingDifferential,
-    supportedExchanges: yamlConfig?.funding?.supportedExchanges
+    supportedExchanges: yamlConfig?.funding?.supportedExchanges,
+    projectionHours: yamlConfig?.funding?.projectionHours
   }
 }
 

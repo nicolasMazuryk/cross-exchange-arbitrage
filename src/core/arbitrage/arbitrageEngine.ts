@@ -3,6 +3,7 @@ import { OrderbookManager, OrderBook, TopOfBook, OrderBookLevel } from '../order
 import { MarketMetadataService } from '../markets/marketMetadataService'
 import { ExchangeMeta } from '../../types/exchange'
 import { FundingService } from '../funding/fundingService'
+import { ParsedFunding } from '../funding/types'
 import logger from '../../utils/logger'
 import config from '../../utils/config'
 
@@ -21,8 +22,33 @@ interface DepthSimulationResult {
 interface OpportunityScore {
   estimatedProfit: number
   estimatedProfitPercent: number
+  spreadProfit: number
+  spreadProfitPercent: number
+  fundingProfit: number
+  fundingProfitPercent: number
   latencyPenalty: number
   confidence: number
+}
+
+// Funding timeline interfaces
+interface FundingEvent {
+  timestamp: number
+  time: Date
+  buyExchangeFunding: number
+  sellExchangeFunding: number
+  netFunding: number
+  netFundingPercent: number
+  cumulativeProfit: number
+  cumulativeProfitPercent: number
+}
+
+interface FundingProjection {
+  timeline: FundingEvent[]
+  totalProjectedProfit: number
+  totalProjectedProfitPercent: number
+  maxDrawdown: number
+  maxDrawdownPercent: number
+  averageHourlyReturn: number
 }
 
 // Temporal Persistence Validation interfaces
@@ -38,8 +64,10 @@ interface ArbitrageCandidate {
   sellExchangeConsecutiveSnapshots: number
   avgBuyNormalizedExecutionPrice: number
   avgSellNormalizedExecutionPrice: number
+  spreadProfitPercent: number
+  fundingProfitPercent: number
   estimatedProfitPercent: number
-  spread: number
+  crossExchangePriceSpread: number
 }
 
 interface PersistenceValidationResult {
@@ -61,6 +89,12 @@ export interface ArbitrageOpportunity {
   sellExchangeVolume: number
   volumeUSDT: number
   confidenceScore: number
+  // Funding-aware profitability data
+  fundingProjection?: FundingProjection
+  spreadProfit: number
+  spreadProfitPercent: number
+  fundingProfit: number
+  fundingProfitPercent: number
   estimatedProfit: number
   estimatedProfitPercent: number
 }
@@ -73,10 +107,10 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly marketMetadataServices: Map<string, MarketMetadataService>
   private readonly fundingService: FundingService
   private readonly orderAmount: number
-  private readonly minProfitThreshold: number
+  private readonly minExpectedProfitThreshold: number
   private readonly minConfidenceScore: number
   private readonly maxMarketSpread: number
-  private readonly maxCrossMarketSpread: number
+  private readonly maxProfitAnomalyThreshold: number
   private readonly maxOrderbookAge: number
   private readonly orderAmountToleranceMin: number
   private readonly orderAmountToleranceMax: number
@@ -86,6 +120,8 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly candidateCleanupMs: number
   private readonly candidates: Map<string, ArbitrageCandidate>
   private lastCleanupTime: number
+  // Funding arbitrage configuration
+  private readonly projectionHours: number
 
   constructor(
     orderbookManager: OrderbookManager,
@@ -102,10 +138,10 @@ export class ArbitrageEngine extends EventEmitter {
     this.fundingService = fundingService
     this.feeModels = new Map()
     this.orderAmount = config.trading.orderAmount
-    this.minProfitThreshold = config.arbitrage.minProfitThreshold
+    this.minExpectedProfitThreshold = config.arbitrage.minExpectedProfitThreshold
     this.minConfidenceScore = config.arbitrage.minConfidenceScore
     this.maxMarketSpread = config.arbitrage.maxMarketSpread
-    this.maxCrossMarketSpread = config.arbitrage.maxCrossMarketSpread
+    this.maxProfitAnomalyThreshold = config.arbitrage.maxProfitAnomalyThreshold
     this.maxOrderbookAge = config.arbitrage.maxOrderbookAge
     this.orderAmountToleranceMin = config.arbitrage.orderAmountToleranceMin
     this.orderAmountToleranceMax = config.arbitrage.orderAmountToleranceMax
@@ -115,6 +151,8 @@ export class ArbitrageEngine extends EventEmitter {
     this.candidateCleanupMs = config.arbitrage.candidateCleanupMs
     this.candidates = new Map()
     this.lastCleanupTime = Date.now()
+    // Funding arbitrage configuration
+    this.projectionHours = config.funding.projectionHours
     this.initializeModels()
     this.setupEventListeners()
   }
@@ -204,6 +242,7 @@ export class ArbitrageEngine extends EventEmitter {
     normalizedVolume: number,
     buyExchangeVolume: number,
     sellExchangeVolume: number,
+    positionAmount: number,
     buyExchange: string,
     sellExchange: string,
     buyExchangeSymbol: string,
@@ -215,7 +254,8 @@ export class ArbitrageEngine extends EventEmitter {
     entryBuySimulation: DepthSimulationResult,
     entrySellSimulation: DepthSimulationResult,
     exitBuySimulation: DepthSimulationResult,
-    exitSellSimulation: DepthSimulationResult
+    exitSellSimulation: DepthSimulationResult,
+    fundingProjection: FundingProjection
   ): OpportunityScore {
     const buyFeeModel = this.feeModels.get(buyExchange)
     const sellFeeModel = this.feeModels.get(sellExchange)
@@ -251,16 +291,21 @@ export class ArbitrageEngine extends EventEmitter {
     
     const totalSpreadCosts = buyMarketSpreadCosts + sellMarketSpreadCosts
     
-    // === NET PROFIT CALCULATION ===
-    const totalProfit = (normalizedSellPrice - normalizedBuyPrice) * normalizedVolume
+    // 4. TOTAL COSTS
     const totalCosts = totalTradingFeesCosts + totalSlippageCosts + totalSpreadCosts
-    const netProfit = totalProfit - totalCosts
-    
-    const positionAmount = entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume
 
-    const profitPercent = totalProfit / positionAmount * 100
-    const costsPercent = totalCosts / positionAmount * 100
-    const netProfitPercent = netProfit / positionAmount * 100
+    // === SPREAD PROFIT CALCULATION ===
+    const spreadProfit = (normalizedSellPrice - normalizedBuyPrice) * normalizedVolume
+
+    const spreadProfitPercent = spreadProfit / positionAmount * 100
+
+    // === FUNDING PROFIT CALCULATION ===
+    const fundingProfit = fundingProjection.timeline[0].netFunding
+    const fundingProfitPercent = fundingProjection.timeline[0].netFundingPercent
+
+    // === COMBINED PROFIT CALCULATION ===
+    const estimatedProfit = fundingProfit + spreadProfit - totalCosts
+    const estimatedProfitPercent = (estimatedProfit / positionAmount) * 100
 
     const latencyPenalty = this.calculateLatencyPenalty(buyBook, sellBook)
     
@@ -270,8 +315,12 @@ export class ArbitrageEngine extends EventEmitter {
     )
 
     return {
-      estimatedProfit: netProfit,
-      estimatedProfitPercent: netProfitPercent,
+      estimatedProfit,
+      estimatedProfitPercent,
+      spreadProfit,
+      spreadProfitPercent,
+      fundingProfit,
+      fundingProfitPercent,
       latencyPenalty,
       confidence
     }
@@ -280,6 +329,138 @@ export class ArbitrageEngine extends EventEmitter {
   private calculateLatencyPenalty(buyBook: OrderBook, sellBook: OrderBook): number {
     // TODO: exchange execution latency score
     return 0
+  }
+
+  /**
+   * Calculate funding profitability projection over time
+   */
+  private calculateFundingProjection(
+    buyFunding: ParsedFunding,
+    sellFunding: ParsedFunding,
+    positionValue: number
+  ): FundingProjection {
+    const timeline: FundingEvent[] = []
+    let cumulativeProfit = 0
+    let maxDrawdown = 0
+    let minCumulativeProfit = 0
+
+    // Generate funding events for the projection period
+    const fundingEvents = this.generateFundingEvents(buyFunding, sellFunding, this.projectionHours)
+    
+    for (const event of fundingEvents) {
+      // Calculate funding impact for this event
+      const buyFundingImpact = event.buyExchangeFunding * positionValue
+      const sellFundingImpact = event.sellExchangeFunding * positionValue
+      const netFunding = buyFundingImpact - sellFundingImpact // Positive = we receive funding
+      
+      cumulativeProfit += netFunding
+      minCumulativeProfit = Math.min(minCumulativeProfit, cumulativeProfit)
+      maxDrawdown = Math.max(maxDrawdown, cumulativeProfit - minCumulativeProfit)
+
+      const cumulativeProfitPercent = (cumulativeProfit / positionValue) * 100
+
+      timeline.push({
+        timestamp: event.timestamp,
+        time: new Date(event.timestamp),
+        buyExchangeFunding: event.buyExchangeFunding,
+        sellExchangeFunding: event.sellExchangeFunding,
+        netFunding,
+        netFundingPercent: (netFunding / positionValue) * 100,
+        cumulativeProfit,
+        cumulativeProfitPercent
+      })
+    }
+
+    const totalProjectedProfit = cumulativeProfit
+    const totalProjectedProfitPercent = (totalProjectedProfit / positionValue) * 100
+    const maxDrawdownPercent = (maxDrawdown / positionValue) * 100
+    const averageHourlyReturn = totalProjectedProfitPercent / this.projectionHours
+
+    return {
+      timeline,
+      totalProjectedProfit,
+      totalProjectedProfitPercent,
+      maxDrawdown,
+      maxDrawdownPercent,
+      averageHourlyReturn
+    }
+  }
+
+  /**
+   * Generate funding events considering asynchronous funding schedules
+   */
+  private generateFundingEvents(
+    buyFunding: ParsedFunding,
+    sellFunding: ParsedFunding,
+    projectionHours: number
+  ): Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> {
+    const events: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> = []
+    
+    // Use the first next closest funding event time as startTime
+    const startTime = Math.min(buyFunding.nextFundingTimestamp, sellFunding.nextFundingTimestamp)
+    const endTime = startTime + (projectionHours * 60 * 60 * 1000)
+
+    // Generate buy exchange funding events
+    const buyEvents = this.generateExchangeFundingEvents(buyFunding, startTime, endTime)
+    // Generate sell exchange funding events
+    const sellEvents = this.generateExchangeFundingEvents(sellFunding, startTime, endTime)
+
+    // Merge and sort all events by timestamp
+    const allEvents = new Map<number, { buyExchangeFunding: number, sellExchangeFunding: number }>()
+
+    // Add buy exchange events
+    for (const event of buyEvents) {
+      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
+      existing.buyExchangeFunding = event.fundingRate
+      allEvents.set(event.timestamp, existing)
+    }
+
+    // Add sell exchange events
+    for (const event of sellEvents) {
+      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
+      existing.sellExchangeFunding = event.fundingRate
+      allEvents.set(event.timestamp, existing)
+    }
+
+    // Convert to array and sort by timestamp
+    for (const [timestamp, funding] of allEvents) {
+      events.push({
+        timestamp,
+        buyExchangeFunding: funding.buyExchangeFunding,
+        sellExchangeFunding: funding.sellExchangeFunding
+      })
+    }
+
+    return events.sort((a, b) => a.timestamp - b.timestamp)
+  }
+
+  /**
+   * Generate funding events for a single exchange
+   */
+  private generateExchangeFundingEvents(
+    funding: ParsedFunding,
+    startTime: number,
+    endTime: number
+  ): Array<{ timestamp: number, fundingRate: number }> {
+    const events: Array<{ timestamp: number, fundingRate: number }> = []
+    const intervalMs = funding.fundingInterval * 60 * 60 * 1000 // Convert hours to milliseconds
+
+    // Find the first funding event after start time
+    let nextFundingTime = funding.nextFundingTimestamp
+    while (nextFundingTime < startTime) {
+      nextFundingTime += intervalMs
+    }
+
+    // Generate events until end time
+    while (nextFundingTime <= endTime) {
+      events.push({
+        timestamp: nextFundingTime,
+        fundingRate: funding.fundingRate
+      })
+      nextFundingTime += intervalMs
+    }
+
+    return events
   }
 
   // Temporal Persistence Validation Methods
@@ -318,8 +499,8 @@ export class ArbitrageEngine extends EventEmitter {
     sellExchange: string,
     avgBuyNormalizedExecutionPrice: number,
     avgSellNormalizedExecutionPrice: number,
-    estimatedProfitPercent: number,
-    spread: number,
+    profitEstimate: OpportunityScore,
+    crossExchangePriceSpread: number,
     updatingExchange: string
   ): PersistenceValidationResult {
     const candidateKey = this.generateCandidateKey(normalizedPair, buyExchange, sellExchange)
@@ -345,24 +526,32 @@ export class ArbitrageEngine extends EventEmitter {
         sellExchangeConsecutiveSnapshots: updatingExchange === sellExchange ? 1 : 0,
         avgBuyNormalizedExecutionPrice,
         avgSellNormalizedExecutionPrice,
-        estimatedProfitPercent,
-        spread
+        spreadProfitPercent: profitEstimate.spreadProfitPercent,
+        fundingProfitPercent: profitEstimate.fundingProfitPercent,
+        estimatedProfitPercent: profitEstimate.estimatedProfitPercent,
+        crossExchangePriceSpread: crossExchangePriceSpread
       }
       this.candidates.set(candidateKey, newCandidate)
       
-      logger.debug(`New arbitrage candidate detected: ${candidateKey}, spread: ${(spread * 100).toFixed(3)}%, profit: ${estimatedProfitPercent.toFixed(3)}%`)
+      logger.debug(`New arbitrage candidate detected: ${candidateKey}, crossExchangePriceSpread: ${(crossExchangePriceSpread * 100).toFixed(3)}%, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
       return { isValid: false, reason: 'New candidate - waiting for persistence', candidate: newCandidate }
     }
 
     // Existing candidate - check if spread is still valid using execution prices
-    const spreadChange = (spread - existingCandidate.spread) / existingCandidate.spread
+    const crossExchangeSpreadChange = (crossExchangePriceSpread - existingCandidate.crossExchangePriceSpread) / existingCandidate.crossExchangePriceSpread
+    const fundingProfitChange = (profitEstimate.fundingProfitPercent - existingCandidate.fundingProfitPercent) / existingCandidate.fundingProfitPercent
     const buyPriceChange = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
     const sellPriceChange = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
 
-    if (spreadChange < -0.2) {
+    if (crossExchangeSpreadChange < -0.2) {
       logger.info(`Candidate ${candidateKey} spread decreased, resetting`)
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Spread decreased significantly' }
+    }
+    if (fundingProfitChange < -0.2) {
+      logger.info(`Candidate ${candidateKey} funding profit decreased, resetting`)
+      this.candidates.delete(candidateKey)
+      return { isValid: false, reason: 'Funding profit decreased significantly' }
     }
     if (buyPriceChange > 0.01 || sellPriceChange > 0.01) {
       logger.info(`Candidate ${candidateKey} price changed, resetting`)
@@ -382,8 +571,10 @@ export class ArbitrageEngine extends EventEmitter {
     
     existingCandidate.avgBuyNormalizedExecutionPrice = avgBuyNormalizedExecutionPrice
     existingCandidate.avgSellNormalizedExecutionPrice = avgSellNormalizedExecutionPrice
-    existingCandidate.estimatedProfitPercent = estimatedProfitPercent
-    existingCandidate.spread = spread
+    existingCandidate.spreadProfitPercent = profitEstimate.spreadProfitPercent
+    existingCandidate.fundingProfitPercent = profitEstimate.fundingProfitPercent
+    existingCandidate.estimatedProfitPercent = profitEstimate.estimatedProfitPercent
+    existingCandidate.crossExchangePriceSpread = crossExchangePriceSpread
 
     // Check persistence conditions
     const persistenceDuration = existingCandidate.lastDetectedAt - existingCandidate.firstDetectedAt
@@ -391,7 +582,7 @@ export class ArbitrageEngine extends EventEmitter {
     const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
 
     if (hasMinDuration && hasMinSnapshots) {
-      logger.info(`Arbitrage opportunity validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(spread * 100).toFixed(3)}%, profit: ${estimatedProfitPercent.toFixed(3)}%`)
+      logger.info(`Arbitrage opportunity validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
       this.candidates.delete(candidateKey) // Remove after validation
       return { isValid: true, candidate: existingCandidate }
     }
@@ -461,6 +652,12 @@ export class ArbitrageEngine extends EventEmitter {
 
         if (!metadataServiceA || !metadataServiceB) continue
 
+        // Get funding data for both exchanges
+        const fundingDataA = this.fundingService.getSymbolFundingData(exchangeA, exchangeSymbolA)
+        const fundingDataB = this.fundingService.getSymbolFundingData(exchangeB, exchangeSymbolB)
+
+        if (!fundingDataA || !fundingDataB) continue
+
         // Check both directions
         this.checkDirection(
           normalizedSymbol,
@@ -473,6 +670,8 @@ export class ArbitrageEngine extends EventEmitter {
           metadataServiceA,
           metadataServiceB,
           opportunities,
+          fundingDataA,
+          fundingDataB,
           updatingExchange
         )
         this.checkDirection(
@@ -486,6 +685,8 @@ export class ArbitrageEngine extends EventEmitter {
           metadataServiceB,
           metadataServiceA,
           opportunities,
+          fundingDataB,
+          fundingDataA,
           updatingExchange
         )
       }
@@ -494,7 +695,7 @@ export class ArbitrageEngine extends EventEmitter {
     // Sort by estimated profit and filter by minimum threshold
     const sortedOpportunities = opportunities
       .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
-      .filter(opportunity => opportunity.estimatedProfitPercent >= this.minProfitThreshold * 100)
+      .filter(opportunity => opportunity.estimatedProfitPercent >= this.minExpectedProfitThreshold * 100)
       // .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
 
     return sortedOpportunities
@@ -511,23 +712,32 @@ export class ArbitrageEngine extends EventEmitter {
     buyMetadataService: MarketMetadataService,
     sellMetadataService: MarketMetadataService,
     opportunities: ArbitrageOpportunity[],
-    updatingExchange: string
+    buyFundingData: ParsedFunding,
+    sellFundingData: ParsedFunding,
+    updatingExchange: string,
   ): void {
     // === PRICE NORMALIZATION ===
     // Use the new normalization functions to handle price scales and contract sizes
     const normalizedBuyPrice = buyMetadataService.normalizePrice(buyBook.asks[0].price, buyExchangeSymbol)
     const normalizedSellPrice = sellMetadataService.normalizePrice(sellBook.bids[0].price, sellExchangeSymbol)
     
-    // === INITIAL VALIDATION ===
-    const crossMarketSpread = (normalizedSellPrice - normalizedBuyPrice) / normalizedBuyPrice
-    // Minimum required spread is minProfitThreshold plus round-trip taker fees
+    // === FEES VALIDATION ===
     const buyFee = this.feeModels.get(buyExchange)?.taker ?? 0
     const sellFee = this.feeModels.get(sellExchange)?.taker ?? 0
-
-    const minRequiredSpread = this.minProfitThreshold + ((buyFee + sellFee) * 2)
+    const roundTripFees = (buyFee + sellFee) * 2
     
-    if (crossMarketSpread < minRequiredSpread) return
-    if (crossMarketSpread > this.maxCrossMarketSpread) return
+    // === INITIAL SPREAD VALIDATION ===
+    const crossExchangePriceSpread = (normalizedSellPrice - normalizedBuyPrice) / normalizedBuyPrice
+
+    // === INITIAL FUNDING RATE VALIDATION ===
+    const fundingEvents = this.generateFundingEvents(buyFundingData, sellFundingData, 8)
+    const fundingRateDifference = fundingEvents[0].buyExchangeFunding - fundingEvents[0].sellExchangeFunding
+
+    const minRequiredTotalReturn = roundTripFees + this.minExpectedProfitThreshold
+    // ************** CAREFULLY HERE: OPPORTUNITIES ARE REJECTED IF OPPORTUNITY IS NOT PROFITABLE ON THE FIRST FUNDING EVENT. 
+    // COMMENT THIS OUT TO ALLOW PROFITABILITY ON THE SECOND/THIRD/ETC FUNDING EVENT. **************
+    if (crossExchangePriceSpread + fundingRateDifference < minRequiredTotalReturn) return
+    if (crossExchangePriceSpread + fundingRateDifference > this.maxProfitAnomalyThreshold) return
 
     // === VOLUME CALCULATION ===
     // Calculate target normalized volume (base asset volume) based on order amount
@@ -608,6 +818,15 @@ export class ArbitrageEngine extends EventEmitter {
     const exitBuySimulation = this.simulateSlippage(buyBook.bids, finalBuyExchangeVolume, false, buyExchange, buyExchangeSymbol, buyMetadataService)
     const exitSellSimulation = this.simulateSlippage(sellBook.asks, finalSellExchangeVolume, true, sellExchange, sellExchangeSymbol, sellMetadataService)
 
+    // === FUNDING PROJECTION ===
+    const positionAmount = entryBuySimulation.avgNormalizedExecutionPrice * finalNormalizedVolume
+
+    const fundingProjection = this.calculateFundingProjection(
+      buyFundingData,
+      sellFundingData,
+      positionAmount
+    )
+
     // === PROFIT ESTIMATION ===
     const profitEstimate = this.estimateProfit(
       normalizedBuyPrice,
@@ -615,6 +834,7 @@ export class ArbitrageEngine extends EventEmitter {
       finalNormalizedVolume,
       finalBuyExchangeVolume,
       finalSellExchangeVolume,
+      positionAmount,
       buyExchange,
       sellExchange,
       buyExchangeSymbol,
@@ -626,7 +846,8 @@ export class ArbitrageEngine extends EventEmitter {
       entryBuySimulation,
       entrySellSimulation,
       exitBuySimulation,
-      exitSellSimulation
+      exitSellSimulation,
+      fundingProjection
     )
 
     // === PROFIT VALIDATION ===
@@ -642,8 +863,8 @@ export class ArbitrageEngine extends EventEmitter {
       sellExchange,
       entryBuySimulation.avgNormalizedExecutionPrice,
       entrySellSimulation.avgNormalizedExecutionPrice,
-      profitEstimate.estimatedProfitPercent,
-      crossMarketSpread,
+      profitEstimate,
+      crossExchangePriceSpread,
       updatingExchange // Use provided updating exchange
     )
 
@@ -655,25 +876,32 @@ export class ArbitrageEngine extends EventEmitter {
     // Calculate volumeUSDT as the maximum between buy and sell sides
     const volumeUSDT = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
 
-    if (persistenceResult.isValid) {
-      // Create the final opportunity object
-      opportunities.push({
-        normalizedPair,
-        buyExchangeSymbol,
-        sellExchangeSymbol,
-        buyExchange,
-        sellExchange,
-        avgBuyNormalizedExecutionPrice: entryBuySimulation.avgNormalizedExecutionPrice,
-        avgSellNormalizedExecutionPrice: entrySellSimulation.avgNormalizedExecutionPrice,
-        normalizedVolume: finalNormalizedVolume,
-        buyExchangeVolume: finalBuyExchangeVolume,
-        sellExchangeVolume: finalSellExchangeVolume,
-        volumeUSDT,
-        confidenceScore: profitEstimate.confidence,
-        estimatedProfit: profitEstimate.estimatedProfit,
-        estimatedProfitPercent: profitEstimate.estimatedProfitPercent,
-      })
-    }
+    // Log funding-aware opportunity details
+    logger.info(`[${normalizedPair}] Opportunity: spread=${profitEstimate.spreadProfitPercent.toFixed(3)}%, funding=${profitEstimate.fundingProfitPercent.toFixed(3)}%, combined=${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+
+    // Create the final opportunity object with funding-aware data
+    opportunities.push({
+      normalizedPair,
+      buyExchangeSymbol,
+      sellExchangeSymbol,
+      buyExchange,
+      sellExchange,
+      avgBuyNormalizedExecutionPrice: entryBuySimulation.avgNormalizedExecutionPrice,
+      avgSellNormalizedExecutionPrice: entrySellSimulation.avgNormalizedExecutionPrice,
+      normalizedVolume: finalNormalizedVolume,
+      buyExchangeVolume: finalBuyExchangeVolume,
+      sellExchangeVolume: finalSellExchangeVolume,
+      volumeUSDT,
+      confidenceScore: profitEstimate.confidence,
+      // Funding-aware profitability data
+      fundingProjection: fundingProjection,
+      spreadProfit: profitEstimate.spreadProfit,
+      spreadProfitPercent: profitEstimate.spreadProfitPercent,
+      fundingProfit: profitEstimate.fundingProfit,
+      fundingProfitPercent: profitEstimate.fundingProfitPercent,
+      estimatedProfit: profitEstimate.estimatedProfit, // Use combined profit as the main metric
+      estimatedProfitPercent: profitEstimate.estimatedProfitPercent, // Use combined profit percent as the main metric
+    })
   }
 
   private getCommonPairs(orderbooks: Map<string, Map<string, OrderBook>>): string[] {

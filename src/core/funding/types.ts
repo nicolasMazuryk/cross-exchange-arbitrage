@@ -35,4 +35,6 @@ export interface FundingConfig {
   maxDataAgeMs: number         // Maximum age of funding data before considering stale
   minFundingDifferential: number // Minimum funding differential to consider (in bps)
   supportedExchanges: string[] // Exchanges that support funding rate fetching
+  // Funding Arbitrage Projection Settings
+  projectionHours: number      // number of hours to project funding profitability
 }

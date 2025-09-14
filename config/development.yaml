@@ -79,9 +79,9 @@ arbitrage:
   blacklistPairs: []  # pairs to exclude from arbitrage
   minConfidenceScore: 0.7  # minimum confidence score for opportunities
   maxMarketSpread: 0.002  # maximum market spread width within an exchange (0.2%)
-  maxCrossMarketSpread: 0.10  # maximum cross-market spread between exchanges (10%)
+  maxProfitAnomalyThreshold: 0.10  # maximum anomaly profit including cross-market spread between exchanges and funding rate difference (10%)
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  minProfitThreshold: 0.005  # 0.2%
+  minExpectedProfitThreshold: 0.005  # 0.2%
   orderAmountToleranceMin: 0.60  # minimum order amount tolerance (60% of order amount)
   orderAmountToleranceMax: 1.40  # maximum order amount tolerance (140% of order amount)
   # Temporal Persistence Validation
@@ -102,3 +102,5 @@ funding:
     - "bybit"
     - "okx"
     - "bitget"
+  # Funding Arbitrage Projection Settings
+  projectionHours: 20  # number of hours to project funding profitability
