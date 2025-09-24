@@ -51,7 +51,8 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
           data: balances,
           timestamp: Date.now()
         } as AccountStateUpdate)
-      } else if (this.messageParser.isPositionMessage(data)) {
+      }
+      if (this.messageParser.isPositionMessage(data)) {
         const positions = this.messageParser.parsePositionUpdate(data, this.restClient)
         this.emit('positionUpdate', {
           exchange: this.exchangeName,
@@ -59,7 +60,8 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
           data: positions,
           timestamp: Date.now()
         } as AccountStateUpdate)
-      } else if (this.messageParser.isOrderMessage(data)) {
+      }
+      if (this.messageParser.isOrderMessage(data)) {
         const orders = this.messageParser.parseOrderUpdate(data, this.restClient)
         this.emit('orderUpdate', {
           exchange: this.exchangeName,

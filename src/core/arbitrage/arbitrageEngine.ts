@@ -702,6 +702,11 @@ export class ArbitrageEngine extends EventEmitter {
       .filter(opportunity => opportunity.estimatedProfitPercent >= this.minExpectedProfitThreshold * 100)
       // .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
 
+
+    // if (sortedOpportunities.length > 0) {
+    //   logger.debug('Found opportunities: ', sortedOpportunities[0].normalizedPair)
+    // }
+
     return sortedOpportunities
   }
 
@@ -743,10 +748,20 @@ export class ArbitrageEngine extends EventEmitter {
 
     const minRequiredTotalReturn = roundTripFees + this.minExpectedProfitThreshold
 
+    // if (fundingRateDifference > 0.0020) {
+    //   logger.info(`${normalizedPair}:${buyExchange}:${sellExchange}: spread ${(crossExchangePriceSpread * 100).toFixed(3)}% funding ${(fundingRateDifference * 100).toFixed(3)}% combined ${(totalPotentialReturn * 100).toFixed(3)}%`)
+    // }
+    // if (fundingRateDifference < 0.0020) {
+    //   return
+    // }
+
     // ************** CAREFULLY HERE: OPPORTUNITIES ARE REJECTED IF OPPORTUNITY IS NOT PROFITABLE ON THE FIRST FUNDING EVENT. 
     // COMMENT THIS OUT TO ALLOW PROFITABILITY ON THE SECOND/THIRD/ETC FUNDING EVENT. **************
     if (totalPotentialReturn < minRequiredTotalReturn) return
     if (totalPotentialReturn > this.maxProfitAnomalyThreshold) return
+
+    // if (normalizedPair !== "BSW/USDT:USDT") return
+    // if (normalizedPair === "BSW/USDT:USDT") return
 
     // === VOLUME CALCULATION ===
     // Calculate target normalized volume (base asset volume) based on order amount
@@ -884,9 +899,6 @@ export class ArbitrageEngine extends EventEmitter {
     // === OPPORTUNITY CREATION ===
     // Calculate volumeUSDT as the maximum between buy and sell sides
     const volumeUSDT = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
-
-    // Log funding-aware opportunity details
-    logger.info(`[${normalizedPair}] Opportunity: spread=${profitEstimate.spreadProfitPercent.toFixed(3)}%, funding=${profitEstimate.fundingProfitPercent.toFixed(3)}%, combined=${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
 
     // Create the final opportunity object with funding-aware data
     opportunities.push({

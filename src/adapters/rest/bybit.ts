@@ -78,10 +78,10 @@ export class BybitExchange extends BaseExchange {
 
       for (const order of orders) {
         orderInfos.push({
-          id: order.id || '',
-          clientOrderId: order.clientOrderId || '',
+          id: order.id!,
+          clientOrderId: order.clientOrderId!,
           exchange: EXCHANGE_NAME,
-          symbol: order.symbol || '',
+          symbol: order.symbol!,
           orderSide: order.side!.toUpperCase() as OrderSide,
           positionSide: getPositionSide(order.side!.toUpperCase() as OrderSide, order.reduceOnly!),
           type: order.type!.toUpperCase() as OrderType,
@@ -161,7 +161,7 @@ export class BybitExchange extends BaseExchange {
           ...item,
           symbol: item.symbolName.replace('USDT', '/USDT:USDT')
         }))
-        .filter((item: any) => !['USDCUSDT', 'ETHBTCUSDT', 'NEIROETHUSDT'].includes(item.symbolName))
+        .filter((item: any) => !['USDCUSDT', 'ETHBTCUSDT'].includes(item.symbolName))
 
       const fundingData = new Map<string, ParsedFunding>()
       

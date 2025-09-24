@@ -5,6 +5,7 @@ import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exc
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import logger from '../../utils/logger'
+import { getPositionSide, positionId } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'binance'
 const CCXT_EXCHANGE_NAME = 'binanceusdm'
@@ -45,22 +46,20 @@ export class BinanceExchange extends BaseExchange {
       const positionInfos: PositionInfo[] = []
 
       for (const position of positions) {
-        if (position && typeof position === 'object') {
-          const size = (position as any).contracts || 0
-          if (size !== 0) {
+        const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp } = position  
             positionInfos.push({
-              id: position.id || '',
-              symbol: position.symbol || '',
-              side: position.side!.toUpperCase() as PositionSide,
-              size: Math.abs(size),
-              entryPrice: (position as any).entryPrice || 0,
-              leverage: (position as any).leverage || 1,
-              unrealizedPnL: (position as any).unrealizedPnl || 0,
-              timestamp: Date.now(),
-              date: new Date(Date.now())
+              id: positionId(symbol, side!.toUpperCase() as PositionSide),
+              symbol: symbol,
+              side: side!.toUpperCase() as PositionSide,
+              size: Math.abs(position.contracts! * position.contractSize!),
+              entryPrice: entryPrice!,
+              leverage: Number(leverage) || 1,
+              unrealizedPnL: unrealizedPnl!,
+              timestamp: timestamp!,
+              date: new Date(timestamp!)
+              // liquidationPrice: liqPrice,
+              // notional: notional,
             })
-          }
-        }
       }
 
       logger.debug(`[${this.exchangeId}] Fetched ${positionInfos.length} position entries`)
@@ -79,17 +78,17 @@ export class BinanceExchange extends BaseExchange {
 
       for (const order of orders) {
         orderInfos.push({
-          id: order.id || '',
-          clientOrderId: order.clientOrderId || '',
+          id: order.id!,
+          clientOrderId: order.clientOrderId!,
           exchange: EXCHANGE_NAME,
-          symbol: order.symbol || '',
+          symbol: order.symbol!,
           orderSide: order.side!.toUpperCase() as OrderSide,
-          positionSide: order.side!.toUpperCase() as PositionSide,
+          positionSide: getPositionSide(order.side!.toUpperCase() as OrderSide, order.reduceOnly!),
           type: order.type!.toUpperCase() as OrderType,
           price: order.price || 0,
           averagePrice: order.average || 0,
           quantity: order.amount,
-          status: this.normalizeOrderStatus(order.status || ''),
+          status: this.normalizeOrderStatus(order.status!),
           timestamp: order.timestamp,
           date: new Date(order.timestamp)
         })
@@ -106,7 +105,7 @@ export class BinanceExchange extends BaseExchange {
   private normalizeOrderStatus(binanceStatus: string): OrderStatus {
 // TODO: review response structure and normalize it once NEW Binance account is created
     switch (binanceStatus.toUpperCase()) {
-      case 'NEW':
+      case 'OPEN':
         return 'NEW'
       case 'PARTIALLY_FILLED':
         return 'PARTIALLY_FILLED'
@@ -119,7 +118,7 @@ export class BinanceExchange extends BaseExchange {
       case 'EXPIRED':
         return 'FAILED'
       default:
-        return 'NEW'
+        return 'UNKNOWN'
     }
   }
 

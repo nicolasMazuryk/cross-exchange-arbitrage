@@ -89,6 +89,30 @@ export class FundingService extends EventEmitter {
   }
 
   /**
+   * Compare symbols between funding data and market metadata for a specific exchange
+   */
+  private compareSymbolsConsistency(exchangeName: string): void {
+    const marketMetadataService = this.marketMetadataServices.get(exchangeName)
+    const fundingData = this.state.get(exchangeName)
+    
+    if (!marketMetadataService || !fundingData) return
+    
+    const marketSymbols = marketMetadataService.getAvailableSymbols()
+    const fundingSymbols = Array.from(fundingData.keys())
+    
+    if (fundingSymbols.length !== marketSymbols.length) {
+      const fundingOnly = fundingSymbols.filter(symbol => !marketSymbols.includes(symbol))
+      const marketOnly = marketSymbols.filter(symbol => !fundingSymbols.includes(symbol))
+      
+      logger.warn(`[${exchangeName}] Symbol count mismatch: funding=${fundingSymbols.length}, market=${marketSymbols.length}`)
+      if (fundingOnly.length > 0) logger.warn(`[${exchangeName}] Funding only: ${fundingOnly.join(', ')}`)
+      if (marketOnly.length > 0) logger.warn(`[${exchangeName}] Market only: ${marketOnly.join(', ')}`)
+
+      logger.debug(``)
+    }
+  }
+
+  /**
    * Fetch funding rates for a specific exchange
    */
   private async fetchExchangeFundingRates(exchangeName: string): Promise<void> {
@@ -107,7 +131,9 @@ export class FundingService extends EventEmitter {
       // Update state
       this.state.set(exchangeName, parsedFunding)
 
-      logger.debug(`[${exchangeName}] Fetched ${parsedFunding.size} funding rates`)
+      logger.info(`[${exchangeName}] Fetched ${parsedFunding.size} funding rates symbols`)
+
+      // this.compareSymbolsConsistency(exchangeName)
     } catch (error) {
       logger.error(`[${exchangeName}] Error fetching funding rates:`, error)
       

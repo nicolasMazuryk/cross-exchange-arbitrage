@@ -68,8 +68,10 @@ export class MarketMetadataService {
   private isValidFuturesMarket(market: ccxt.Market): boolean {
     if (!market) return false
     
+    const isActiveCondition = ['bitget'].includes(this.exchangeId) ? true : market.active
+    
     return Boolean(
-      market.active &&
+      isActiveCondition &&
       market.contract &&
       market.swap &&
       market.linear &&
@@ -117,12 +119,14 @@ export class MarketMetadataService {
 
   /**
    * Extract price scale multiplier from symbol name
-   * Examples: 1000PEPE/USDT → 1000, PEPE/USDT → 1
+   * Examples: 1000PEPE/USDT → 1000, 1000000BABYDOGE/USDT → 1000000, PEPE/USDT → 1
    */
   getPriceScale(symbol: string): number {
-    const match = symbol.match(/^(\d+)([A-Z]+)\//)
-    if (match) {
-      return parseInt(match[1], 10)
+    if (symbol.startsWith('1000')) {
+      const match = symbol.match(/^(\d+)([A-Z]+)\//)
+      if (match) {
+        return parseInt(match[1], 10)
+      }
     }
     return 1
   }

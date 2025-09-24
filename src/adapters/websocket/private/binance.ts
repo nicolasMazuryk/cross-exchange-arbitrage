@@ -5,6 +5,7 @@ import { RestClientInterface } from '../../rest/types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../../types/exchange'
 import logger from '../../../utils/logger'
+import { getPositionSide, positionId } from '../../../utils/utils'
 
 const EXCHANGE_NAME = 'binance'
 
@@ -87,7 +88,7 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
           balances.push({
             asset: balance.a,
             total: parseFloat(balance.wb),
-            available: parseFloat(balance.ab)
+            available: parseFloat(balance.cw)
           })
         }
       }
@@ -105,17 +106,18 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
       if (data.a && data.a.P) {
         for (const position of data.a.P) {
           const size = parseFloat(position.pa)
+          const side = size > 0 ? 'LONG' : 'SHORT' as PositionSide
           if (size !== 0) {
             positions.push({
-              id: position.id,
+              id: positionId(position.s, side),
               symbol: position.s,
-              side: size > 0 ? 'LONG' : 'SHORT',
-              size: Math.abs(size),
-              entryPrice: parseFloat(position.ep) || 0,
-              leverage: parseInt(position.lr) || 1,
-              unrealizedPnL: parseFloat(position.up) || 0,
+              side: side,
+              size: size,
+              entryPrice: parseFloat(position.ep),
+              leverage: 1,
+              unrealizedPnL: parseFloat(position.up),
               timestamp: Date.now(),
-              date: new Date(Date.now())
+              date: new Date()
             })
           }
         }
@@ -129,19 +131,19 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
   parseOrderUpdate(data: any): OrderInfo[] {
     if (data.e === 'ORDER_TRADE_UPDATE') {
       const order: OrderInfo = {
-        id: data.o.c,
+        id: data.o.i,
         clientOrderId: data.o.c,
         symbol: data.o.s,
         exchange: EXCHANGE_NAME,
         orderSide: data.o.S.toUpperCase() as OrderSide,
-        positionSide: data.o.ps.toUpperCase() as PositionSide,
+        positionSide: getPositionSide(data.o.S.toUpperCase() as OrderSide, data.o.R),
         type: data.o.o.toUpperCase() as OrderType,
         price: parseFloat(data.o.p) || 0,
         averagePrice: parseFloat(data.o.ap) || 0,
         quantity: parseFloat(data.o.q),
         status: this.normalizeOrderStatus(data.o.X),
-        timestamp: data.E,
-        date: new Date(data.E)
+        timestamp: data.T,
+        date: new Date(data.T)
       }
 
       return [order]
@@ -175,7 +177,7 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
       case 'EXPIRED':
         return 'FAILED'
       default:
-        return 'NEW'
+        return 'UNKNOWN'
     }
   }
 } 
