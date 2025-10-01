@@ -53,6 +53,7 @@ interface FundingProjection {
 
 // Temporal Persistence Validation interfaces
 interface ArbitrageCandidate {
+  id: string
   normalizedPair: string
   buyExchange: string
   sellExchange: string
@@ -77,6 +78,7 @@ interface PersistenceValidationResult {
 }
 
 export interface ArbitrageOpportunity {
+  id: string
   normalizedPair: string
   buyExchangeSymbol: string
   sellExchangeSymbol: string
@@ -519,6 +521,7 @@ export class ArbitrageEngine extends EventEmitter {
     if (!existingCandidate) {
       // New candidate - create and track
       const newCandidate: ArbitrageCandidate = {
+        id: `${normalizedPair}:${buyExchange}:${sellExchange}:${(Date.now() % 1_000_000).toString().padStart(6, '0')}`,
         normalizedPair,
         buyExchange,
         sellExchange,
@@ -537,7 +540,7 @@ export class ArbitrageEngine extends EventEmitter {
       }
       this.candidates.set(candidateKey, newCandidate)
       
-      logger.debug(`New arbitrage candidate detected: ${candidateKey}, crossExchangePriceSpread: ${(crossExchangePriceSpread * 100).toFixed(3)}%, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+      logger.debug(`New arbitrage candidate detected: ${newCandidate.id}, crossExchangePriceSpread: ${(crossExchangePriceSpread * 100).toFixed(3)}%, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
       return { isValid: false, reason: 'New candidate - waiting for persistence', candidate: newCandidate }
     }
 
@@ -569,7 +572,8 @@ export class ArbitrageEngine extends EventEmitter {
     // Update snapshots based on which exchange is updating
     if (updatingExchange === buyExchange) {
       existingCandidate.buyExchangeConsecutiveSnapshots++
-    } else if (updatingExchange === sellExchange) {
+    }
+    if (updatingExchange === sellExchange) {
       existingCandidate.sellExchangeConsecutiveSnapshots++
     }
     
@@ -586,12 +590,12 @@ export class ArbitrageEngine extends EventEmitter {
     const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
 
     if (hasMinDuration && hasMinSnapshots) {
-      logger.info(`Arbitrage opportunity validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+      logger.info(`Arbitrage opportunity validated: ${existingCandidate.id}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
       this.candidates.delete(candidateKey) // Remove after validation
       return { isValid: true, candidate: existingCandidate }
     }
 
-    logger.debug(`Candidate ${candidateKey} still building persistence: duration=${persistenceDuration}ms, buySnapshots=${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots=${existingCandidate.sellExchangeConsecutiveSnapshots}`)
+    logger.debug(`Candidate ${existingCandidate.id} still building persistence: duration=${persistenceDuration}ms, buySnapshots=${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots=${existingCandidate.sellExchangeConsecutiveSnapshots}`)
     return { isValid: false, reason: 'Building persistence', candidate: existingCandidate }
   }
 
@@ -696,18 +700,7 @@ export class ArbitrageEngine extends EventEmitter {
       }
     }
 
-    // Sort by estimated profit and filter by minimum threshold
-    const sortedOpportunities = opportunities
-      .sort((a, b) => b.estimatedProfit - a.estimatedProfit)
-      .filter(opportunity => opportunity.estimatedProfitPercent >= this.minExpectedProfitThreshold * 100)
-      // .filter(opportunity => opportunity.estimatedProfitPercent > -0.5)
-
-
-    // if (sortedOpportunities.length > 0) {
-    //   logger.debug('Found opportunities: ', sortedOpportunities[0].normalizedPair)
-    // }
-
-    return sortedOpportunities
+    return opportunities
   }
 
   private checkDirection(
@@ -748,7 +741,7 @@ export class ArbitrageEngine extends EventEmitter {
 
     const minRequiredTotalReturn = roundTripFees + this.minExpectedProfitThreshold
 
-    // if (fundingRateDifference > 0.0020) {
+    // if (fundingRateDifference > 0.0010) {
     //   logger.info(`${normalizedPair}:${buyExchange}:${sellExchange}: spread ${(crossExchangePriceSpread * 100).toFixed(3)}% funding ${(fundingRateDifference * 100).toFixed(3)}% combined ${(totalPotentialReturn * 100).toFixed(3)}%`)
     // }
     // if (fundingRateDifference < 0.0020) {
@@ -829,7 +822,7 @@ export class ArbitrageEngine extends EventEmitter {
     // Validate order amount tolerance using normalized price
     const orderAmountValue = finalNormalizedVolume * normalizedBuyPrice
     if (orderAmountValue < this.orderAmount * this.orderAmountToleranceMin || orderAmountValue > this.orderAmount * this.orderAmountToleranceMax) {
-      logger.warn(`[${buyExchange}] Normalized volume is outside order amount tolerance range ${orderAmountValue} not in [${this.orderAmount * this.orderAmountToleranceMin}, ${this.orderAmount * this.orderAmountToleranceMax}] for ${buyExchangeSymbol}`)
+      logger.warn(`[${buyExchange}] ${buyExchangeSymbol} Normalized volume is outside order amount tolerance range: ${orderAmountValue}$ not between [${this.orderAmount * this.orderAmountToleranceMin}$, ${this.orderAmount * this.orderAmountToleranceMax}$]`)
       return
     }
 
@@ -875,7 +868,7 @@ export class ArbitrageEngine extends EventEmitter {
     )
 
     // === PROFIT VALIDATION ===
-    if (profitEstimate.estimatedProfitPercent < 0) return
+    if (profitEstimate.estimatedProfitPercent < this.minExpectedProfitThreshold * 100) return
 
     // === CONFIDENCE VALIDATION ===
     if (profitEstimate.confidence < this.minConfidenceScore) return
@@ -902,6 +895,7 @@ export class ArbitrageEngine extends EventEmitter {
 
     // Create the final opportunity object with funding-aware data
     opportunities.push({
+      id: persistenceResult.candidate!.id,
       normalizedPair,
       buyExchangeSymbol,
       sellExchangeSymbol,

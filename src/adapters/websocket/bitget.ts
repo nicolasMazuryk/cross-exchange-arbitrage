@@ -56,7 +56,7 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected setupEventHandlers(batch: StreamBatch): void {
     batch.client.on('open', (data: any) => {
-      logger.info(`[${this.exchangeName}] WebSocket connection opened for batch ${batch.id} with ${batch.symbols.length} symbols: ${data.wsKey}`)
+      // logger.info(`[${this.exchangeName}] WebSocket connection opened for batch ${batch.id} with ${batch.symbols.length} symbols: ${data.wsKey}`)
       batch.isConnected = true
     })
 

@@ -78,7 +78,7 @@ export class BinanceExchange extends BaseExchange {
 
       for (const order of orders) {
         orderInfos.push({
-          id: order.id!,
+          id: String(order.id!),
           clientOrderId: order.clientOrderId!,
           exchange: EXCHANGE_NAME,
           symbol: order.symbol!,

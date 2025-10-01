@@ -28,7 +28,7 @@ export class BinancePrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', () => {
-      logger.info(`[${this.exchangeName}] Account WebSocket connection opened`)
+      // logger.info(`[${this.exchangeName}] Account WebSocket connection opened`)
       this.isConnected = true
     })
 
@@ -39,7 +39,7 @@ export class BinancePrivateWebSocketClient extends BasePrivateWebSocketClient {
     })
 
     this.client.on('reply', (data: any) => {
-        logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
+        // logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
       })
 
     this.client.on('reconnecting', (data: any) => {
@@ -131,7 +131,7 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
   parseOrderUpdate(data: any): OrderInfo[] {
     if (data.e === 'ORDER_TRADE_UPDATE') {
       const order: OrderInfo = {
-        id: data.o.i,
+        id: String(data.o.i),
         clientOrderId: data.o.c,
         symbol: data.o.s,
         exchange: EXCHANGE_NAME,

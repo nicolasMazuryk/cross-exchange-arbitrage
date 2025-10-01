@@ -34,7 +34,7 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', () => {
-      logger.info(`[${this.exchangeName}] Account WebSocket connection opened`)
+      // logger.info(`[${this.exchangeName}] Account WebSocket connection opened`)
       this.isConnected = true
     })
 
@@ -45,7 +45,7 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
     })
 
     this.client.on('response', (data: any) => {
-        logger.info(`[${this.exchangeName}] Account WebSocket reply received:`, data)
+        // logger.info(`[${this.exchangeName}] Account WebSocket reply received:`, data)
       })
 
     this.client.on('reconnect', (data: any) => {

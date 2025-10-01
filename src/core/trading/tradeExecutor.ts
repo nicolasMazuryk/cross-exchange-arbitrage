@@ -86,23 +86,13 @@ export class TradeExecutor extends EventEmitter {
         return this.createErrorResult(opportunity, tradeId, 'pre-check', [...validation.errors, ...validation.warnings].join('; '))
       }
 
-      logger.info(`💰 [${tradeId}] Starting trade execution`, { opportunity })
+      // logger.info(`💰 [${tradeId}] Starting trade execution`, { opportunity })
 
       // Execute the trade pair
       const entryTradeResult = await this.executeTradePair(tradeId, tradeParams)
       
       const latencyMs = Date.now() - startTime
       entryTradeResult.latencyMs = latencyMs
-
-      logger.info(`[${tradeId}] Trade execution completed`, {
-        success: entryTradeResult.success,
-        latencyMs,
-        opportunity: entryTradeResult.opportunity,
-        buyOrder: entryTradeResult.buyOrder,
-        sellOrder: entryTradeResult.sellOrder,
-        fees: entryTradeResult.fees,
-        slippage: entryTradeResult.slippage,
-      })
 
       // Emit trade result event
       this.emit('tradeCompleted', entryTradeResult)
@@ -297,6 +287,8 @@ export class TradeExecutor extends EventEmitter {
       // Rollback logic: cancel any successful orders and handle filled legs
       await this.rollbackFailedTrade(tradeId, tradeParams, buyClient, sellClient)
       throw error
+
+      // return this.createErrorResult(opportunity, tradeId, 'entry', error instanceof Error ? error.message : String(error))
     }
   }
 

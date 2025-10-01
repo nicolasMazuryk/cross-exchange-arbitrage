@@ -29,7 +29,7 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', (data: any) => {
-      logger.info(`[${this.exchangeName}] Account WebSocket connection opened: ${data.wsKey}`)
+      // logger.info(`[${this.exchangeName}] Account WebSocket connection opened: ${data.wsKey}`)
       this.isConnected = true
     })
 
@@ -40,7 +40,7 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
     })
 
     this.client.on('response', (data: any) => {
-        logger.info(`[${this.exchangeName}] Account WebSocket reply received:`, data)
+        // logger.info(`[${this.exchangeName}] Account WebSocket reply received:`, data)
     })
 
     this.client.on('reconnect', (data: any) => {

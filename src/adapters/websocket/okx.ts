@@ -60,7 +60,7 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected setupEventHandlers(batch: StreamBatch): void {
     batch.client.on('open', () => {
-      logger.info(`[${this.exchangeName}] WebSocket connection opened for batch ${batch.id} with ${batch.symbols.length} symbols`)
+      // logger.info(`[${this.exchangeName}] WebSocket connection opened for batch ${batch.id} with ${batch.symbols.length} symbols`)
       batch.isConnected = true
     })
 
