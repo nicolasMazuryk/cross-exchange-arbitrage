@@ -323,12 +323,37 @@ export class Orchestrator extends EventEmitter {
     )
 
     // Initialize Trade Monitor
+    const fundingService = this.fundingService
+    if (!fundingService) {
+      throw new Error('Funding service must be initialized before trade monitor')
+    }
     this.tradeMonitor = new TradeMonitor(
       this.accountSyncService.getAccountStateManager(),
       restClients,
       this.orderbookManager,
       marketMetadataServices,
-      config.trading.monitor
+      fundingService,
+      {
+        ...config.trading.monitor,
+        strategy: {
+          funding: {
+            enabled: config.strategy.funding.enabled,
+            windowStart: config.strategy.funding.windowStart,
+            windowEnd: config.strategy.funding.windowEnd,
+            convergenceThreshold: config.strategy.funding.convergenceThreshold,
+            spreadWideningThreshold: config.strategy.funding.spreadWideningThreshold,
+            minFundingProfit: config.strategy.funding.minFundingProfit
+          },
+          spread: {
+            enabled: config.strategy.spread.enabled,
+            windowStart: config.strategy.spread.windowStart,
+            windowEnd: config.strategy.spread.windowEnd,
+            windowEndClose: config.strategy.spread.windowEndClose,
+            convergenceThreshold: config.strategy.spread.convergenceThreshold,
+            spreadWideningThreshold: config.strategy.spread.spreadWideningThreshold
+          }
+        }
+      }
     )
 
     // Set up event listeners for trading

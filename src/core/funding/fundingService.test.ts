@@ -22,8 +22,8 @@ describe('FundingService', () => {
     fundingConfig = {
       fetchIntervalMs: 1000,
       maxDataAgeMs: 5000,
-      minFundingDifferential: 0.00001, // Lower threshold for testing
-      supportedExchanges: ['binance', 'bybit', 'okx', 'bitget']
+      supportedExchanges: ['binance', 'bybit', 'okx', 'bitget'],
+      projectionHours: 20
     }
 
     // Create mock exchanges

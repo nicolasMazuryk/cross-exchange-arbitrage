@@ -201,7 +201,12 @@ export class MarketMetadataService {
 
     const precision = metadata.amountPrecision
     // For step-based precision (e.g., 0.1, 1000), round to the nearest step
-    return Math.round(amount / precision) * precision
+    const rounded = Math.round(amount / precision) * precision
+
+    // Count decimals in precision (e.g. 0.001 → 3 decimals)
+    const decimals = precision.toString().split('.')[1]?.length || 0
+
+    return Number(rounded.toFixed(decimals))
   }
 
   /**

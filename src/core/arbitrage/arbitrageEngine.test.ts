@@ -24,10 +24,9 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
         minPersistenceMs: 200,
         minConsecutiveSnapshots: 3,
         candidateCleanupMs: 5000,
-        minExpectedProfitThreshold: 0.0015,
         minConfidenceScore: 0.7,
         maxMarketSpread: 0.003,
-        maxProfitAnomalyThreshold: 0.10,
+        maxAnomalySpreadThreshold: 0.10,
         maxOrderbookAge: 2000,
         orderAmountToleranceMin: 0.60,
         orderAmountToleranceMax: 1.40

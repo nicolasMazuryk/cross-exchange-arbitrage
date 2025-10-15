@@ -48,9 +48,8 @@ arbitrage:
   blacklistPairs: []
   minConfidenceScore: 0.7
   maxMarketSpread: 0.002
-  maxProfitAnomalyThreshold: 0.10
+  maxAnomalySpreadThreshold: 0.10
   maxOrderbookAge: 2000
-  minExpectedProfitThreshold: 0.005
   orderAmountToleranceMin: 0.60
   orderAmountToleranceMax: 1.40
   minPersistenceMs: 1000
@@ -64,7 +63,6 @@ accountSync:
 funding:
   fetchIntervalMs: 60000
   maxDataAgeMs: 120000
-  minFundingDifferential: 0.002
   supportedExchanges:
     - "binance"
     - "bybit"

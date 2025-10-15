@@ -5,7 +5,7 @@ import { ExchangeMeta } from '../../types/exchange'
 import { FundingService } from '../funding/fundingService'
 import { ParsedFunding } from '../funding/types'
 import logger from '../../utils/logger'
-import config from '../../utils/config'
+import config, { StrategyType } from '../../utils/config'
 
 // Core interfaces
 interface FeeModel {
@@ -26,6 +26,8 @@ interface OpportunityScore {
   spreadProfitPercent: number
   fundingProfit: number
   fundingProfitPercent: number
+  costs: number
+  costsPercent: number
   latencyPenalty: number
   confidence: number
 }
@@ -91,6 +93,9 @@ export interface ArbitrageOpportunity {
   sellExchangeVolume: number
   volumeUSDT: number
   confidenceScore: number
+  // Strategy type
+  strategy: StrategyType
+  targetFundingTimestamp: number
   // Funding-aware profitability data
   fundingProjection?: FundingProjection
   spreadProfit: number
@@ -109,10 +114,9 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly marketMetadataServices: Map<string, MarketMetadataService>
   private readonly fundingService: FundingService
   private readonly orderAmount: number
-  private readonly minExpectedProfitThreshold: number
   private readonly minConfidenceScore: number
   private readonly maxMarketSpread: number
-  private readonly maxProfitAnomalyThreshold: number
+  private readonly maxAnomalySpreadThreshold: number
   private readonly maxOrderbookAge: number
   private readonly orderAmountToleranceMin: number
   private readonly orderAmountToleranceMax: number
@@ -124,6 +128,18 @@ export class ArbitrageEngine extends EventEmitter {
   private lastCleanupTime: number
   // Funding arbitrage configuration
   private readonly projectionHours: number
+  // Strategy configuration
+  private readonly fundingStrategyEnabled: boolean
+  private readonly fundingStrategyWindowStart: number
+  private readonly fundingStrategyWindowEnd: number
+  private readonly fundingMinFundingProfit: number
+  private readonly fundingMinTotalProfit: number
+  private readonly spreadStrategyEnabled: boolean
+  private readonly spreadStrategyWindowStart: number
+  private readonly spreadStrategyWindowEnd: number
+  private readonly spreadMinSpreadProfit: number
+  private readonly spreadMinTotalProfit: number
+  private readonly spreadNegativeFundingMultiplier: number
 
   constructor(
     orderbookManager: OrderbookManager,
@@ -140,10 +156,9 @@ export class ArbitrageEngine extends EventEmitter {
     this.fundingService = fundingService
     this.feeModels = new Map()
     this.orderAmount = config.trading.orderAmount
-    this.minExpectedProfitThreshold = config.arbitrage.minExpectedProfitThreshold
     this.minConfidenceScore = config.arbitrage.minConfidenceScore
     this.maxMarketSpread = config.arbitrage.maxMarketSpread
-    this.maxProfitAnomalyThreshold = config.arbitrage.maxProfitAnomalyThreshold
+    this.maxAnomalySpreadThreshold = config.arbitrage.maxAnomalySpreadThreshold
     this.maxOrderbookAge = config.arbitrage.maxOrderbookAge
     this.orderAmountToleranceMin = config.arbitrage.orderAmountToleranceMin
     this.orderAmountToleranceMax = config.arbitrage.orderAmountToleranceMax
@@ -155,6 +170,18 @@ export class ArbitrageEngine extends EventEmitter {
     this.lastCleanupTime = Date.now()
     // Funding arbitrage configuration
     this.projectionHours = config.funding.projectionHours
+    // Strategy configuration
+    this.fundingStrategyEnabled = config.strategy.funding.enabled
+    this.fundingStrategyWindowStart = config.strategy.funding.windowStart
+    this.fundingStrategyWindowEnd = config.strategy.funding.windowEnd
+    this.fundingMinFundingProfit = config.strategy.funding.minFundingProfit
+    this.fundingMinTotalProfit = config.strategy.funding.minTotalProfit
+    this.spreadStrategyEnabled = config.strategy.spread.enabled
+    this.spreadStrategyWindowStart = config.strategy.spread.windowStart
+    this.spreadStrategyWindowEnd = config.strategy.spread.windowEnd
+    this.spreadMinSpreadProfit = config.strategy.spread.minSpreadProfit
+    this.spreadMinTotalProfit = config.strategy.spread.minTotalProfit
+    this.spreadNegativeFundingMultiplier = config.strategy.spread.negativeFundingMultiplier
     this.initializeModels()
     this.setupEventListeners()
   }
@@ -296,6 +323,8 @@ export class ArbitrageEngine extends EventEmitter {
     // 4. TOTAL COSTS
     const totalCosts = totalTradingFeesCosts + totalSlippageCosts + totalSpreadCosts
 
+    const totalCostsPercent = totalCosts / positionAmount * 100
+
     // === SPREAD PROFIT CALCULATION ===
     const spreadProfit = (normalizedSellPrice - normalizedBuyPrice) * normalizedVolume
 
@@ -325,6 +354,8 @@ export class ArbitrageEngine extends EventEmitter {
       spreadProfitPercent,
       fundingProfit,
       fundingProfitPercent,
+      costs: totalCosts,
+      costsPercent: totalCostsPercent,
       latencyPenalty,
       confidence
     }
@@ -349,7 +380,7 @@ export class ArbitrageEngine extends EventEmitter {
     let minCumulativeProfit = 0
 
     // Generate funding events for the projection period
-    const fundingEvents = this.generateFundingEvents(buyFunding, sellFunding, this.projectionHours)
+    const fundingEvents = this.fundingService.generateFundingEvents(buyFunding, sellFunding, this.projectionHours)
     
     for (const event of fundingEvents) {
       // Calculate funding impact for this event
@@ -392,81 +423,145 @@ export class ArbitrageEngine extends EventEmitter {
     }
   }
 
+
   /**
-   * Generate funding events considering asynchronous funding schedules
+   * Check if current time is within funding strategy execution window
    */
-  private generateFundingEvents(
-    buyFunding: ParsedFunding,
-    sellFunding: ParsedFunding,
-    projectionHours: number
-  ): Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> {
-    const events: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> = []
+  private isWithinFundingWindow(nextFundingTimestamp: number): boolean {
+    const now = Date.now()
+    const timeUntilFunding = nextFundingTimestamp - now
+    const timeUntilFundingSec = timeUntilFunding / 1000
     
-    // Use the first next closest funding event time as startTime
-    const startTime = Math.min(buyFunding.nextFundingTimestamp, sellFunding.nextFundingTimestamp)
-    const endTime = startTime + (projectionHours * 60 * 60 * 1000)
-
-    // Generate buy exchange funding events
-    const buyEvents = this.generateExchangeFundingEvents(buyFunding, startTime, endTime)
-    // Generate sell exchange funding events
-    const sellEvents = this.generateExchangeFundingEvents(sellFunding, startTime, endTime)
-
-    // Merge and sort all events by timestamp
-    const allEvents = new Map<number, { buyExchangeFunding: number, sellExchangeFunding: number }>()
-
-    // Add buy exchange events
-    for (const event of buyEvents) {
-      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
-      existing.buyExchangeFunding = event.fundingRate
-      allEvents.set(event.timestamp, existing)
-    }
-
-    // Add sell exchange events
-    for (const event of sellEvents) {
-      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
-      existing.sellExchangeFunding = event.fundingRate
-      allEvents.set(event.timestamp, existing)
-    }
-
-    // Convert to array and sort by timestamp
-    for (const [timestamp, funding] of allEvents) {
-      events.push({
-        timestamp,
-        buyExchangeFunding: funding.buyExchangeFunding,
-        sellExchangeFunding: funding.sellExchangeFunding
-      })
-    }
-
-    return events.sort((a, b) => a.timestamp - b.timestamp)
+    // Within window if time until funding is between windowStart and windowEnd (in seconds)
+    return timeUntilFundingSec <= this.fundingStrategyWindowStart && 
+           timeUntilFundingSec >= this.fundingStrategyWindowEnd
   }
 
   /**
-   * Generate funding events for a single exchange
+   * Check if current time is within spread strategy execution window
    */
-  private generateExchangeFundingEvents(
-    funding: ParsedFunding,
-    startTime: number,
-    endTime: number
-  ): Array<{ timestamp: number, fundingRate: number }> {
-    const events: Array<{ timestamp: number, fundingRate: number }> = []
-    const intervalMs = funding.fundingInterval * 60 * 60 * 1000 // Convert hours to milliseconds
+  private isWithinSpreadWindow(previousFundingTimestamp: number, nextFundingTimestamp: number): boolean {
+    const now = Date.now()
+    const timeSincePreviousFunding = now - previousFundingTimestamp
+    const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
+    const timeUntilNextFunding = nextFundingTimestamp - now
+    const timeUntilNextFundingSec = timeUntilNextFunding / 1000
+    
+    // Within window if time since previous funding > windowStart AND time until next > windowEnd
+    return timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
+           timeUntilNextFundingSec >= this.spreadStrategyWindowEnd
+  }
 
-    // Find the first funding event after start time
-    let nextFundingTime = funding.nextFundingTimestamp
-    while (nextFundingTime < startTime) {
-      nextFundingTime += intervalMs
+  /**
+   * Validate funding arbitrage entry conditions (SYNC mode)
+   */
+  private validateFundingSyncEntry(
+    fundingDiff: number,
+    estimatedTotalProfit: number
+  ): boolean {
+    return fundingDiff >= this.fundingMinFundingProfit && 
+           estimatedTotalProfit >= this.fundingMinTotalProfit
+  }
+
+  /**
+   * Validate funding arbitrage entry conditions (ASYNC mode)
+   */
+  private validateFundingAsyncEntry(
+    buyFunding: ParsedFunding,
+    sellFunding: ParsedFunding,
+    estimatedTotalProfit: number,
+    fundingEvents: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }>
+  ): boolean {
+    // Find the next sync timestamp
+    const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFunding, sellFunding)
+    
+    // Calculate cumulative funding profit until next sync (excluding the sync event itself)
+    const cumulativeFundingProfit = this.fundingService.calculateCumulativeFundingProfit(
+      nextSyncTimestamp,
+      fundingEvents
+    )
+    
+    // Check if cumulative funding profit meets minimum threshold
+    return cumulativeFundingProfit >= this.fundingMinFundingProfit &&
+           estimatedTotalProfit >= this.fundingMinTotalProfit
+  }
+
+  /**
+   * Validate spread arbitrage entry conditions
+   */
+  private validateSpreadEntry(
+    fundingDiff: number,
+    profitEstimate: OpportunityScore
+  ): boolean {
+    const spreadTotalProfit = profitEstimate.spreadProfit - profitEstimate.costs
+    // Case 1: Neutral or positive funding
+    if (fundingDiff >= 0) {
+      return spreadTotalProfit >= this.spreadMinTotalProfit
     }
+    
+    // Case 2: Negative funding - apply multiplier to adjust for risk
+    const adjustedProfit = spreadTotalProfit + (fundingDiff * this.spreadNegativeFundingMultiplier)
+    return adjustedProfit >= this.spreadMinTotalProfit
+  }
 
-    // Generate events until end time
-    while (nextFundingTime <= endTime) {
-      events.push({
-        timestamp: nextFundingTime,
-        fundingRate: funding.fundingRate
-      })
-      nextFundingTime += intervalMs
+  /**
+   * Determine and validate strategy type for an opportunity
+   */
+  private determineStrategy(
+    buyFundingData: ParsedFunding,
+    sellFundingData: ParsedFunding,
+    profitEstimate: OpportunityScore
+  ): { strategy: StrategyType | null, reason?: string } {
+    const now = Date.now()
+    
+    // Validate funding data is not outdated
+    if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
+      return { strategy: null, reason: 'Outdated funding data (nextFundingTimestamp < now)' }
     }
+    
+    const isSynchronized = this.fundingService.isFundingSynchronizedEntry(buyFundingData, sellFundingData)
+    
+    // Use the nearest funding timestamp (min of both exchanges)
+    const nextFundingTimestamp = Math.min(buyFundingData.nextFundingTimestamp, sellFundingData.nextFundingTimestamp)
+    const nextFundingInterval = Math.min(buyFundingData.fundingInterval, sellFundingData.fundingInterval)
 
-    return events
+    // Calculate previous funding timestamp based on funding interval
+    const fundingIntervalMs = nextFundingInterval * 60 * 60 * 1000
+    const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
+    
+    const withinFundingWindow = this.isWithinFundingWindow(nextFundingTimestamp)
+    const withinSpreadWindow = this.isWithinSpreadWindow(previousFundingTimestamp, nextFundingTimestamp)
+    
+    // Calculate funding difference
+    const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, this.projectionHours)
+    const fundingDiff = -fundingEvents[0].buyExchangeFunding + fundingEvents[0].sellExchangeFunding
+    
+    // Try funding strategy first if within window and enabled
+    if (this.fundingStrategyEnabled && withinFundingWindow) {
+      if (isSynchronized) {
+        if (this.validateFundingSyncEntry(fundingDiff, profitEstimate.estimatedProfit)) {
+          return { strategy: 'funding' }
+          // return { strategy: null}
+        }
+        return { strategy: null, reason: 'Funding window (SYNC) but validation failed' }
+      } else {
+        if (this.validateFundingAsyncEntry(buyFundingData, sellFundingData, profitEstimate.estimatedProfit, fundingEvents)) {
+          return { strategy: 'funding' }
+        }
+        return { strategy: null, reason: 'Funding window (ASYNC) but validation failed' }
+      }
+    }
+    
+    // Try spread strategy if within window, not in funding window, and enabled
+    if (this.spreadStrategyEnabled && withinSpreadWindow && !(this.fundingStrategyEnabled && withinFundingWindow)) {
+      if (this.validateSpreadEntry(fundingDiff, profitEstimate)) {
+        return { strategy: 'spread' }
+      }
+      return { strategy: null, reason: 'Spread window but validation failed' }
+    }
+    
+    // Not within any valid strategy window or strategies disabled
+    return { strategy: null, reason: 'Not within any valid strategy execution window' }
   }
 
   // Temporal Persistence Validation Methods
@@ -723,38 +818,10 @@ export class ArbitrageEngine extends EventEmitter {
     const normalizedBuyPrice = buyMetadataService.normalizePrice(buyBook.asks[0].price, buyExchangeSymbol)
     const normalizedSellPrice = sellMetadataService.normalizePrice(sellBook.bids[0].price, sellExchangeSymbol)
     
-    // === FEES VALIDATION ===
-    const buyFee = this.feeModels.get(buyExchange)?.taker ?? 0
-    const sellFee = this.feeModels.get(sellExchange)?.taker ?? 0
-    const roundTripFees = (buyFee + sellFee) * 2
-    
     // === INITIAL SPREAD VALIDATION ===
     const crossExchangePriceSpread = (normalizedSellPrice - normalizedBuyPrice) / normalizedBuyPrice
 
-    // === INITIAL FUNDING RATE VALIDATION ===
-    const fundingEvents = this.generateFundingEvents(buyFundingData, sellFundingData, 8)
-    // Apply position side logic: BUY position (negative impact), SELL position (positive impact)
-    const fundingRateDifference = -fundingEvents[0].buyExchangeFunding + fundingEvents[0].sellExchangeFunding
-
-    // ==== INITIAL TOTAL RETURN VALIDATION ====
-    const totalPotentialReturn = crossExchangePriceSpread + fundingRateDifference
-
-    const minRequiredTotalReturn = roundTripFees + this.minExpectedProfitThreshold
-
-    // if (fundingRateDifference > 0.0010) {
-    //   logger.info(`${normalizedPair}:${buyExchange}:${sellExchange}: spread ${(crossExchangePriceSpread * 100).toFixed(3)}% funding ${(fundingRateDifference * 100).toFixed(3)}% combined ${(totalPotentialReturn * 100).toFixed(3)}%`)
-    // }
-    // if (fundingRateDifference < 0.0020) {
-    //   return
-    // }
-
-    // ************** CAREFULLY HERE: OPPORTUNITIES ARE REJECTED IF OPPORTUNITY IS NOT PROFITABLE ON THE FIRST FUNDING EVENT. 
-    // COMMENT THIS OUT TO ALLOW PROFITABILITY ON THE SECOND/THIRD/ETC FUNDING EVENT. **************
-    if (totalPotentialReturn < minRequiredTotalReturn) return
-    if (totalPotentialReturn > this.maxProfitAnomalyThreshold) return
-
-    // if (normalizedPair !== "BSW/USDT:USDT") return
-    // if (normalizedPair === "BSW/USDT:USDT") return
+    if (crossExchangePriceSpread > this.maxAnomalySpreadThreshold) return
 
     // === VOLUME CALCULATION ===
     // Calculate target normalized volume (base asset volume) based on order amount
@@ -838,6 +905,8 @@ export class ArbitrageEngine extends EventEmitter {
     // === FUNDING PROJECTION ===
     const positionAmount = entryBuySimulation.avgNormalizedExecutionPrice * finalNormalizedVolume
 
+    const targetFundingTimestamp = Math.min(buyFundingData.nextFundingTimestamp, sellFundingData.nextFundingTimestamp)
+
     const fundingProjection = this.calculateFundingProjection(
       buyFundingData,
       sellFundingData,
@@ -867,11 +936,24 @@ export class ArbitrageEngine extends EventEmitter {
       fundingProjection
     )
 
-    // === PROFIT VALIDATION ===
-    if (profitEstimate.estimatedProfitPercent < this.minExpectedProfitThreshold * 100) return
-
     // === CONFIDENCE VALIDATION ===
     if (profitEstimate.confidence < this.minConfidenceScore) return
+
+    // === STRATEGY VALIDATION ===
+    // Determine which strategy this opportunity belongs to and validate entry conditions
+    const strategyResult = this.determineStrategy(
+      buyFundingData,
+      sellFundingData,
+      profitEstimate
+    )
+
+    // Reject opportunity if no valid strategy
+    if (!strategyResult.strategy) {
+      logger.debug(`[${normalizedPair}] Opportunity rejected: ${strategyResult.reason}`)
+      return
+    }
+
+    logger.debug(`[${normalizedPair}:${buyExchange}:${sellExchange}] Strategy validated: ${strategyResult.strategy}`)
     
     // Use the validated opportunity from the persistence check
     const persistenceResult = this.validatePersistence(
@@ -893,7 +975,7 @@ export class ArbitrageEngine extends EventEmitter {
     // Calculate volumeUSDT as the maximum between buy and sell sides
     const volumeUSDT = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
 
-    // Create the final opportunity object with funding-aware data
+    // Create the final opportunity object with funding-aware data and strategy annotation
     opportunities.push({
       id: persistenceResult.candidate!.id,
       normalizedPair,
@@ -908,6 +990,9 @@ export class ArbitrageEngine extends EventEmitter {
       sellExchangeVolume: finalSellExchangeVolume,
       volumeUSDT,
       confidenceScore: profitEstimate.confidence,
+      // Strategy type annotation
+      strategy: strategyResult.strategy,
+      targetFundingTimestamp,
       // Funding-aware profitability data
       fundingProjection: fundingProjection,
       spreadProfit: profitEstimate.spreadProfit,

@@ -207,4 +207,150 @@ export class FundingService extends EventEmitter {
   public getState(): Map<string, Map<string, ParsedFunding>> {
     return this.state
   }
+
+  /**
+   * Check if funding times are synchronized between exchanges for entry
+   */
+  public isFundingSynchronizedEntry(buyFunding: ParsedFunding, sellFunding: ParsedFunding): boolean {
+    return buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp
+  }
+
+    /**
+   * Check if funding times are synchronized between exchanges for exit
+   */
+    public isFundingSynchronizedExit(buyFunding: ParsedFunding, sellFunding: ParsedFunding): boolean {
+      return buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp && buyFunding.fundingInterval === sellFunding.fundingInterval
+    }
+
+  /**
+   * Find the next synchronization timestamp for ASYNC funding
+   * Returns the timestamp when both exchanges will have funding events at the same time
+   */
+  public findNextSyncTimestamp(
+    buyFunding: ParsedFunding,
+    sellFunding: ParsedFunding
+  ): number {
+    const now = Date.now()
+    const buyIntervalMs = buyFunding.fundingInterval * 60 * 60 * 1000
+    const sellIntervalMs = sellFunding.fundingInterval * 60 * 60 * 1000
+    
+    let buyTime = buyFunding.nextFundingTimestamp
+    let sellTime = sellFunding.nextFundingTimestamp
+    
+    // Move forward until we find a sync point (max 100 iterations to prevent infinite loop)
+    for (let i = 0; i < 100; i++) {
+      if (buyTime === sellTime && buyTime >= now) {
+        return buyTime
+      }
+      
+      if (buyTime < sellTime) {
+        buyTime += buyIntervalMs
+      } else {
+        sellTime += sellIntervalMs
+      }
+    }
+    
+    // Fallback: return far future if no sync found
+    return now + 24 * 60 * 60 * 1000 // 24 hours from now
+  }
+
+  /**
+   * Calculate cumulative funding profit until a target timestamp (excluding the target event itself)
+   */
+  public calculateCumulativeFundingProfit(
+    targetTimestamp: number,
+    fundingEvents: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }>
+  ): number {
+    let cumulativeProfit = 0
+    
+    for (const event of fundingEvents) {
+      // Only count events before the target timestamp (exclude the target event itself)
+      if (event.timestamp < targetTimestamp) {
+        const buyFundingImpact = -event.buyExchangeFunding
+        const sellFundingImpact = event.sellExchangeFunding
+        cumulativeProfit += buyFundingImpact + sellFundingImpact
+      } else {
+        break
+      }
+    }
+    
+    return cumulativeProfit
+  }
+
+  /**
+   * Generate funding events considering asynchronous funding schedules
+   */
+  public generateFundingEvents(
+    buyFunding: ParsedFunding,
+    sellFunding: ParsedFunding,
+    projectionHours: number
+  ): Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> {
+    const events: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> = []
+    
+    // Use the first next closest funding event time as startTime
+    const startTime = Math.min(buyFunding.nextFundingTimestamp, sellFunding.nextFundingTimestamp)
+    const endTime = startTime + (projectionHours * 60 * 60 * 1000)
+
+    // Generate buy exchange funding events
+    const buyEvents = this.generateExchangeFundingEvents(buyFunding, startTime, endTime)
+    // Generate sell exchange funding events
+    const sellEvents = this.generateExchangeFundingEvents(sellFunding, startTime, endTime)
+
+    // Merge and sort all events by timestamp
+    const allEvents = new Map<number, { buyExchangeFunding: number, sellExchangeFunding: number }>()
+
+    // Add buy exchange events
+    for (const event of buyEvents) {
+      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
+      existing.buyExchangeFunding = event.fundingRate
+      allEvents.set(event.timestamp, existing)
+    }
+
+    // Add sell exchange events
+    for (const event of sellEvents) {
+      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
+      existing.sellExchangeFunding = event.fundingRate
+      allEvents.set(event.timestamp, existing)
+    }
+
+    // Convert to array and sort by timestamp
+    for (const [timestamp, funding] of allEvents) {
+      events.push({
+        timestamp,
+        buyExchangeFunding: funding.buyExchangeFunding,
+        sellExchangeFunding: funding.sellExchangeFunding
+      })
+    }
+
+    return events.sort((a, b) => a.timestamp - b.timestamp)
+  }
+
+  /**
+   * Generate funding events for a single exchange
+   */
+  public generateExchangeFundingEvents(
+    funding: ParsedFunding,
+    startTime: number,
+    endTime: number
+  ): Array<{ timestamp: number, fundingRate: number }> {
+    const events: Array<{ timestamp: number, fundingRate: number }> = []
+    const intervalMs = funding.fundingInterval * 60 * 60 * 1000 // Convert hours to milliseconds
+
+    // Find the first funding event after start time
+    let nextFundingTime = funding.nextFundingTimestamp
+    while (nextFundingTime < startTime) {
+      nextFundingTime += intervalMs
+    }
+
+    // Generate events until end time
+    while (nextFundingTime <= endTime) {
+      events.push({
+        timestamp: nextFundingTime,
+        fundingRate: funding.fundingRate
+      })
+      nextFundingTime += intervalMs
+    }
+
+    return events
+  }
 }

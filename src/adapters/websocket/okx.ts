@@ -10,12 +10,14 @@ class OkxMessageParser implements PublicWebSocketMessageParser {
   constructor(private getUnifiedSymbol: (marketId: string) => string) {}
 
   isOrderBookMessage(data: any): boolean {
-    return data.arg?.channel === 'books5'
+    return data.arg?.channel === 'books' // books5 - snapshot (5 levels), books - delta (400 levels)
   }
 
   parseOrderBookUpdate(data: any): OrderBookUpdate {
+    const type = data.action === 'update' ? 'delta' : 'snapshot'
+
     return {
-      type: 'snapshot',
+      type: type,
       exchange: EXCHANGE_NAME,
       symbol: this.getUnifiedSymbol(data.arg.instId),
       timestamp: +data.data[0].ts,
@@ -107,7 +109,7 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
   protected async subscribeToSymbols(batch: StreamBatch): Promise<void> {
     for (const symbol of batch.symbols) {
       batch.client.subscribe({
-        channel: 'books5',
+        channel: 'books', // books5 - snapshot (5 levels), books - delta (400 levels)
         instId: symbol,
       })
     }

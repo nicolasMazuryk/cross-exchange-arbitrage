@@ -68,21 +68,19 @@ trading:
   positionLimitMultiplier: 1  # multiplier for position size limits
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   monitor:
-    maxHoldTimeMs: 1000 * 60 * 60 * 24  # 24 hours max hold time
-    convergenceBufferPercent: 0.00  # 0.05% convergence buffer
+    maxHoldTimeMs: 86400000  # 24 hours max hold time
     checkIntervalMs: 5000  # 5 second check interval
     # Exit Persistence Validation
     exitMinPersistenceMs: 1000  # minimum time window for exit condition persistence (2 seconds)
     exitMinConsecutiveSnapshots: 3  # minimum consecutive snapshots showing the exit condition
     exitCandidateCleanupMs: 5000  # cleanup stale exit candidates after 10 seconds
 
-arbitrage:
-  blacklistPairs: []  # pairs to exclude from arbitrage
+arbitrage: # pairs require > $20 to enter minimum order size
+  blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT']  # pairs to exclude from arbitrage
   minConfidenceScore: 0.7  # minimum confidence score for opportunities
   maxMarketSpread: 0.002  # maximum market spread width within an exchange (0.2%)
-  maxProfitAnomalyThreshold: 0.10  # maximum anomaly profit including cross-market spread between exchanges and funding rate difference (10%)
+  maxAnomalySpreadThreshold: 0.10  # maximum anomaly profit including cross-market spread between exchanges and funding rate difference (10%)
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  minExpectedProfitThreshold: 0.0020  # 0.2%
   orderAmountToleranceMin: 0.60  # minimum order amount tolerance (60% of order amount)
   orderAmountToleranceMax: 1.40  # maximum order amount tolerance (140% of order amount)
   # Temporal Persistence Validation
@@ -97,7 +95,6 @@ accountSync:
 funding:
   fetchIntervalMs: 15000  # fetch funding rates every 60 seconds using browser automation
   maxDataAgeMs: 120000  # consider funding data stale after 2 minutes
-  minFundingDifferential: 0.002  # minimum funding differential to consider (0.2%)
   supportedExchanges:
     - "binance"
     - "bybit"
@@ -105,3 +102,28 @@ funding:
     - "bitget"
   # Funding Arbitrage Projection Settings
   projectionHours: 20  # number of hours to project funding profitability
+
+strategy:
+  # Funding Arbitrage Strategy Configuration
+  funding:
+    enabled: true  # Enable/disable funding arbitrage strategy
+    windowStart: 14400  # Start execution window 600 seconds (10 minutes) before next funding event
+    windowEnd: 30  # End execution window 30 seconds before next funding event
+    minFundingProfit: -0.002  # Minimum funding difference (0.2%) for SYNC or cumulative profit for ASYNC
+    minTotalProfit: -0.005  # Minimum acceptable net profit after all costs (-0.1%)
+    # Exit Conditions
+    convergenceThreshold: -0.008  # Exit funding trade when funding diff < 0.02%
+    spreadWideningThreshold: 0.02  # Exit if spread widens excessively (-2.00%)
+  
+  # Spread Arbitrage Strategy Configuration
+  spread:
+    enabled: false  # Enable/disable spread arbitrage strategy
+    windowStart: 60  # Start execution window 300 seconds (5 minutes) after previous funding event
+    windowEnd: 60  # End execution window 1800 seconds (30 minutes) before next funding event
+    windowEndClose: 60  # Close execution window 60 seconds before next funding event (for exits)
+    minSpreadProfit: 0.004  # Minimum spread profit (0.2%)
+    minTotalProfit: -0.001  # Minimum acceptable net profit after all costs (-0.1%)
+    negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative
+    # Exit Conditions
+    convergenceThreshold: 0.00  # 0.05% convergence threshold for exits
+    spreadWideningThreshold: 0.02  # Exit if spread widens excessively (-2.00%)

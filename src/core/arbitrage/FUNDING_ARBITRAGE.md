@@ -29,7 +29,6 @@ funding:
   # Existing funding configuration
   fetchIntervalMs: 60000
   maxDataAgeMs: 120000
-  minFundingDifferential: 0.002
   supportedExchanges: ["binance", "bybit", "okx", "bitget"]
   
   # New funding arbitrage settings

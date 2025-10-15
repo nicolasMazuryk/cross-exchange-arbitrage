@@ -7,8 +7,10 @@ import { OrderInfo } from '../../types/account'
 import { OrderbookManager, TopOfBook, OrderBook, OrderBookLevel } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import logger from '../../utils/logger'
-import config from '../../utils/config'
+import config, { StrategyType } from '../../utils/config'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
+import { FundingService } from '../funding/fundingService'
+import { ParsedFunding } from '../funding/types'
 
 // Import DepthSimulationResult type from arbitrageEngine
 interface DepthSimulationResult {
@@ -23,6 +25,7 @@ export interface TrackedTrade {
   opportunity: ArbitrageOpportunity
   entryTimestamp: number
   status: 'open' | 'closed' | 'error'
+  strategy: StrategyType  // Track which strategy the trade uses
   entryTrade: TradeResult
   exitTrade?: TradeResult
   exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
@@ -48,19 +51,37 @@ export interface TrackedTrade {
 }
 
 export interface ExitCondition {
-  type: 'convergence' | 'timeout' | 'manual'
+  type: 'convergence' | 'timeout' | 'manual' | 'error'
   value?: number
   description: string
 }
 
 export interface MonitorConfig {
   maxHoldTimeMs: number
-  convergenceBufferPercent: number
   checkIntervalMs: number
   // Exit Persistence Validation
   exitMinPersistenceMs: number
   exitMinConsecutiveSnapshots: number
   exitCandidateCleanupMs: number
+  // Strategy exit conditions
+  strategy: {
+    funding: {
+      enabled: boolean
+      windowStart: number
+      windowEnd: number
+      convergenceThreshold: number
+      spreadWideningThreshold: number
+      minFundingProfit: number
+    }
+    spread: {
+      enabled: boolean
+      windowStart: number
+      windowEnd: number
+      windowEndClose: number
+      convergenceThreshold: number
+      spreadWideningThreshold: number
+    }
+  }
 }
 
 // Exit Slippage Simulation Result
@@ -77,7 +98,7 @@ interface ExitSlippageSimulationResult {
 // Exit Persistence Validation interfaces
 interface ExitCandidate {
   tradeId: string
-  exitType: 'convergence' | 'timeout'
+  exitType: 'convergence' | 'timeout' | 'manual' | 'error'
   firstDetectedAt: number
   lastDetectedAt: number
   convergencePercent: number
@@ -101,6 +122,7 @@ export class TradeMonitor extends EventEmitter {
   private readonly restClients: Map<string, RestClientInterface>
   private readonly orderbookManager: OrderbookManager
   private readonly marketMetadataServices: Map<string, MarketMetadataService>
+  private readonly fundingService: FundingService
   private readonly trackedTrades: Map<string, TrackedTrade> = new Map()
   private readonly config: MonitorConfig
   private isRunning = false
@@ -109,12 +131,26 @@ export class TradeMonitor extends EventEmitter {
   private lastExitCleanupTime: number
   // Race condition prevention
   private readonly processingTrades: Set<string> = new Set()
+  // Strategy-specific exit configuration
+  private readonly fundingStrategyEnabled: boolean
+  private readonly fundingStrategyWindowStart: number
+  private readonly fundingStrategyWindowEnd: number
+  private readonly fundingConvergenceThreshold: number
+  private readonly fundingSpreadWideningThreshold: number
+  private readonly fundingMinFundingProfit: number
+  private readonly spreadStrategyEnabled: boolean
+  private readonly spreadStrategyWindowStart: number
+  private readonly spreadStrategyWindowEnd: number
+  private readonly spreadStrategyWindowEndClose: number
+  private readonly spreadConvergenceThreshold: number
+  private readonly spreadWideningThreshold: number
 
   constructor(
     accountStateManager: AccountStateManager,
     restClients: Map<string, RestClientInterface>,
     orderbookManager: OrderbookManager,
     marketMetadataServices: Map<string, MarketMetadataService>,
+    fundingService: FundingService,
     config: MonitorConfig
   ) {
     super()
@@ -122,8 +158,22 @@ export class TradeMonitor extends EventEmitter {
     this.restClients = restClients
     this.orderbookManager = orderbookManager
     this.marketMetadataServices = marketMetadataServices
+    this.fundingService = fundingService
     this.config = config
     this.lastExitCleanupTime = Date.now()
+    // Strategy exit configuration
+    this.fundingStrategyEnabled = config.strategy.funding.enabled
+    this.fundingStrategyWindowStart = config.strategy.funding.windowStart
+    this.fundingStrategyWindowEnd = config.strategy.funding.windowEnd
+    this.fundingConvergenceThreshold = config.strategy.funding.convergenceThreshold
+    this.fundingSpreadWideningThreshold = config.strategy.funding.spreadWideningThreshold
+    this.fundingMinFundingProfit = config.strategy.funding.minFundingProfit
+    this.spreadStrategyEnabled = config.strategy.spread.enabled
+    this.spreadStrategyWindowStart = config.strategy.spread.windowStart
+    this.spreadStrategyWindowEnd = config.strategy.spread.windowEnd
+    this.spreadStrategyWindowEndClose = config.strategy.spread.windowEndClose
+    this.spreadConvergenceThreshold = config.strategy.spread.convergenceThreshold
+    this.spreadWideningThreshold = config.strategy.spread.spreadWideningThreshold
 
     logger.info('TradeMonitor initialized', { config: this.config })
   }
@@ -169,104 +219,9 @@ export class TradeMonitor extends EventEmitter {
     trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
   }
 
-  /**
-   * Handle timeout exit condition
-   */
-  private async handleTimeoutExit(trade: TrackedTrade, now: number): Promise<void> {
-    const holdTimeMs = now - trade.entryTimestamp
-    
-    const timeoutValidation = this.validateExitPersistence(
-      trade,
-      'timeout',
-      0, // No convergence for timeout
-      0, // No buy price for timeout
-      0, // No sell price for timeout
-      trade.pnlPercent,
-      'timeout' // Indicates this is a timeout update
-    )
-    
-    if (timeoutValidation.isValid) {
-      logger.info(`[${trade.id}] Trade timeout validated`, {
-        holdTimeMs,
-        maxHoldTimeMs: this.config.maxHoldTimeMs
-      })
-      await this.executeExitTrade(trade, 'timeout')
-    } else {
-      logger.debug(`[${trade.id}] Timeout condition building persistence: ${timeoutValidation.reason}`)
-    }
-  }
-
-  /**
-   * Handle convergence exit condition
-   */
-  private async handleConvergenceExit(
-    trade: TrackedTrade, 
-    convergenceResult: { shouldExit: boolean, convergencePercent: number, reason: string },
-    exitSimulation: ExitSlippageSimulationResult,
-    updatingExchange: string
-  ): Promise<void> {
-    const convergenceValidation = this.validateExitPersistence(
-      trade,
-      'convergence',
-      convergenceResult.convergencePercent,
-      exitSimulation.avgBuyNormalizedExecutionPrice,
-      exitSimulation.avgSellNormalizedExecutionPrice,
-      trade.pnlPercent,
-      updatingExchange
-    )
-    
-    if (convergenceValidation.isValid) {
-      logger.info(`[${trade.id}] Exit price convergence validated`, {
-        convergencePercent: convergenceResult.convergencePercent,
-        bufferThreshold: this.config.convergenceBufferPercent,
-        buyPrice: exitSimulation.avgBuyNormalizedExecutionPrice,
-        sellPrice: exitSimulation.avgSellNormalizedExecutionPrice,
-        exitReason: convergenceResult.reason
-      })
-      await this.executeExitTrade(trade, 'convergence')
-    } else {
-      logger.debug(`[${trade.id}] Convergence condition building persistence: ${convergenceValidation.reason}`)
-    }
-  }
-
-  /**
-   * Check convergence condition with simulated exit prices
-   */
-  private checkConvergenceCondition(
-    trade: TrackedTrade, 
-    exitSimulation: ExitSlippageSimulationResult
-  ): { shouldExit: boolean, convergencePercent: number, reason: string } {
-    // For arbitrage trades, we need to consider the exit prices:
-    // - If we bought initially, we need to sell at the bid price
-    // - If we sold initially, we need to buy at the ask price
-    
-    const exitExchangeBuyPrice = exitSimulation.avgBuyNormalizedExecutionPrice
-    const exitExchangeSellPrice = exitSimulation.avgSellNormalizedExecutionPrice
-    
-    // Calculate the price difference between entry and exit
-    const buyExitDifference = Math.abs(exitExchangeBuyPrice - trade.entryTrade.buyOrder!.averagePrice)
-    const sellExitDifference = Math.abs(exitExchangeSellPrice - trade.entryTrade.sellOrder!.averagePrice)
-    
-    // Calculate convergence as percentage
-    const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
-
-    if (convergencePercent <= this.config.convergenceBufferPercent) {
-      return {
-        shouldExit: true,
-        convergencePercent,
-        reason: 'Price convergence within buffer'
-      }
-    }
-
-    return {
-      shouldExit: false,
-      convergencePercent,
-      reason: 'No convergence'
-    }
-  }
 
   // Exit Persistence Validation Methods
-  private generateExitCandidateKey(tradeId: string, exitType: 'convergence' | 'timeout'): string {
+  private generateExitCandidateKey(tradeId: string, exitType: 'convergence' | 'timeout' | 'manual' | 'error'): string {
     return `${tradeId}::${exitType}`
   }
 
@@ -293,7 +248,7 @@ export class TradeMonitor extends EventEmitter {
 
   private validateExitPersistence(
     trade: TrackedTrade,
-    exitType: 'convergence' | 'timeout',
+    exitType: 'convergence' | 'timeout' | 'manual' | 'error',
     convergencePercent: number,
     avgBuyNormalizedExecutionPrice: number,
     avgSellNormalizedExecutionPrice: number,
@@ -448,6 +403,182 @@ export class TradeMonitor extends EventEmitter {
     }
   }
 
+
+  /**
+   * Check if current time is within funding strategy execution window
+   */
+  private isWithinFundingWindow(nextFundingTimestamp: number): boolean {
+    const now = Date.now()
+    const timeUntilFunding = nextFundingTimestamp - now
+    const timeUntilFundingSec = timeUntilFunding / 1000
+    
+    return timeUntilFundingSec <= this.fundingStrategyWindowStart && 
+           timeUntilFundingSec >= this.fundingStrategyWindowEnd
+  }
+
+  /**
+   * Check if current time is within spread strategy execution window (for exits)
+   */
+  private isWithinSpreadWindowForExit(previousFundingTimestamp: number, nextFundingTimestamp: number): boolean {
+    const now = Date.now()
+    const timeSincePreviousFunding = now - previousFundingTimestamp
+    const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
+    const timeUntilNextFunding = nextFundingTimestamp - now
+    const timeUntilNextFundingSec = timeUntilNextFunding / 1000
+    
+    // For exits: use windowStart and windowEndClose
+    return timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
+           timeUntilNextFundingSec >= this.spreadStrategyWindowEndClose
+  }
+
+  /**
+   * Check funding arbitrage exit conditions (SYNC mode)
+   */
+  private shouldExitFundingSyncTrade(
+    trade: TrackedTrade,
+    buyFundingData: ParsedFunding,
+    sellFundingData: ParsedFunding,
+    currentSpreadDiff: number
+  ): { shouldExit: boolean, reason?: string } {
+    // Calculate current funding difference
+    const fundingDiff = -buyFundingData.fundingRate + sellFundingData.fundingRate
+
+    // Exit Condition 1: Funding rates converged (< 0.02%)
+    if (fundingDiff < this.fundingConvergenceThreshold) {
+      return { 
+        shouldExit: true, 
+        reason: `Funding converged: ${(fundingDiff * 100).toFixed(3)}% < ${(this.fundingConvergenceThreshold * 100).toFixed(3)}%` 
+      }
+    }
+
+    // Exit Condition 2: Spread widened excessively (dynamic based on entry spread)
+    const spreadWideningThreshold = trade.opportunity.spreadProfit + this.fundingSpreadWideningThreshold
+    if (currentSpreadDiff > spreadWideningThreshold) {
+      return { 
+        shouldExit: true, 
+        reason: `Spread widened: ${(currentSpreadDiff * 100).toFixed(3)}% < ${(spreadWideningThreshold * 100).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfit * 100).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThreshold * 100).toFixed(3)}%)` 
+      }
+    }
+
+    return { shouldExit: false }
+  }
+
+  /**
+   * Check funding arbitrage exit conditions (ASYNC mode)
+   */
+  private shouldExitFundingAsyncTrade(
+    trade: TrackedTrade,
+    buyFundingData: ParsedFunding,
+    sellFundingData: ParsedFunding,
+    currentSpreadDiff: number
+  ): { shouldExit: boolean, reason?: string } {
+    const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, config.funding.projectionHours)
+
+    // Check if currently synchronized (upcoming event is a sync)
+    const isNextEventSync = buyFundingData.nextFundingTimestamp === sellFundingData.nextFundingTimestamp
+    
+    if (!isNextEventSync) {
+      // CASE 1: ASYNC - upcoming event is NOT a sync
+      // Calculate cumulative funding profit until the next sync event
+      const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFundingData, sellFundingData)
+      const cumulativeFundingProfit = this.fundingService.calculateCumulativeFundingProfit(
+        nextSyncTimestamp,
+        fundingEvents
+      )
+      
+      // Exit Condition: cumulativeFundingProfit < 0 (should be profitable before sync)
+      if (cumulativeFundingProfit < 0) {
+        return { 
+          shouldExit: true, 
+          reason: `ASYNC-ASYNC: Cumulative funding profit ${(cumulativeFundingProfit * 100).toFixed(3)}% < 0%` 
+        }
+      }
+    } else {
+      // CASE 2: SYNC - upcoming event IS a sync, need to look beyond it
+      // Find the next sync AFTER the upcoming sync (next + 1)
+      const currentSyncTimestamp = buyFundingData.nextFundingTimestamp
+      
+      // Find the next sync + 1 event
+      let nextPlusOneSyncTimestamp = 0
+      let foundCurrentSync = false
+      
+      for (const event of fundingEvents) {
+        if (event.timestamp === currentSyncTimestamp && event.buyExchangeFunding !== 0 && event.sellExchangeFunding !== 0) {
+          foundCurrentSync = true
+          continue // Skip current sync
+        }
+        
+        if (foundCurrentSync && event.buyExchangeFunding !== 0 && event.sellExchangeFunding !== 0) {
+          nextPlusOneSyncTimestamp = event.timestamp
+          break
+        }
+      }
+      
+      // Calculate cumulative profit for all events until nextSyncPlusOne
+      const cumulativeFundingProfit = this.fundingService.calculateCumulativeFundingProfit(
+        nextPlusOneSyncTimestamp,
+        fundingEvents
+      )
+      
+      // Exit Condition: cumulativeFundingProfit < minFundingProfit
+      if (cumulativeFundingProfit < this.fundingMinFundingProfit) {
+        return { 
+          shouldExit: true, 
+          reason: `ASYNC-SYNC: Cumulative funding profit ${(cumulativeFundingProfit * 100).toFixed(3)}% < ${(this.fundingMinFundingProfit * 100).toFixed(3)}%` 
+        }
+      }
+    }
+
+    // Exit Condition: Spread widened excessively (dynamic based on entry spread)
+    const spreadWideningThreshold = trade.opportunity.spreadProfit + this.fundingSpreadWideningThreshold
+    if (currentSpreadDiff > spreadWideningThreshold) {
+      return { 
+        shouldExit: true, 
+        reason: `Spread widened: ${(currentSpreadDiff * 100).toFixed(3)}% < ${(spreadWideningThreshold * 100).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfit * 100).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThreshold * 100).toFixed(3)}%)` 
+      }
+    }
+
+    return { shouldExit: false }
+  }
+
+  /**
+   * Check spread arbitrage exit conditions (includes convergence logic)
+   */
+  private shouldExitSpreadTrade(
+    trade: TrackedTrade,
+    currentSpreadDiff: number,
+    exitSimulation: ExitSlippageSimulationResult
+  ): { shouldExit: boolean, reason?: string } {
+    // For arbitrage trades, we need to consider the exit prices:
+    // - If we bought initially, we need to sell at the bid price
+    // - If we sold initially, we need to buy at the ask price
+
+    // Calculate convergence for exit prices
+    const exitBuyExchangePrice = exitSimulation.avgBuyNormalizedExecutionPrice
+    const exitSellExchangePrice = exitSimulation.avgSellNormalizedExecutionPrice
+    
+    const convergencePercent = ((exitSellExchangePrice - exitBuyExchangePrice) / exitBuyExchangePrice) * 100
+
+    // Check convergence threshold
+    if (convergencePercent <= this.spreadConvergenceThreshold) {
+      return {
+        shouldExit: true,
+        reason: 'SPREAD: Price convergence within threshold'
+      }
+    }
+
+    // Check if spread widened excessively (dynamic based on entry spread)
+    const spreadWideningThreshold = trade.opportunity.spreadProfit + this.spreadWideningThreshold
+    if (currentSpreadDiff > spreadWideningThreshold) {
+      return { 
+        shouldExit: true,
+        reason: `Spread widened: ${(currentSpreadDiff * 100).toFixed(3)}% < ${(spreadWideningThreshold * 100).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfit * 100).toFixed(3)}% + threshold: ${(this.spreadWideningThreshold * 100).toFixed(3)}%)` 
+      }
+    }
+
+    return { shouldExit: false, reason: 'No convergence' }
+  }
+
   /**
    * Get all trades that involve a specific exchange and symbol
    */
@@ -471,19 +602,19 @@ export class TradeMonitor extends EventEmitter {
    * Process exit conditions for a trade based on real-time orderbook update
    */
   private async processTradeExitConditions(trade: TrackedTrade, updatingExchange: string): Promise<void> {
+    // Simulate exit slippage for current orderbook state
+    const exitSimulation = this.simulateExitSlippage(trade)
+    if (!exitSimulation) {
+      logger.warn(`[${trade.id}] Could not simulate exit slippage`)
+      return
+    }
+    
     const now = Date.now()
     const holdTimeMs = now - trade.entryTimestamp
 
     // Check timeout condition first
     if (holdTimeMs > this.config.maxHoldTimeMs) {
-      await this.handleTimeoutExit(trade, now)
-      return
-    }
-
-    // Simulate exit slippage for current orderbook state
-    const exitSimulation = this.simulateExitSlippage(trade)
-    if (!exitSimulation) {
-      logger.warn(`[${trade.id}] Could not simulate exit slippage`)
+      await this.executeExitTrade(trade, exitSimulation, 'timeout', updatingExchange)
       return
     }
 
@@ -491,10 +622,72 @@ export class TradeMonitor extends EventEmitter {
     this.updatePnLWithSimulatedExit(trade, exitSimulation)
     trade.lastUpdateTimestamp = now
 
-    // Check convergence condition
-    const convergenceResult = this.checkConvergenceCondition(trade, exitSimulation)
-    if (convergenceResult.shouldExit) {
-      await this.handleConvergenceExit(trade, convergenceResult, exitSimulation, updatingExchange)
+    // Calculate current spread difference for exit checks
+    const currentSpreadDiff = (exitSimulation.avgSellNormalizedExecutionPrice - exitSimulation.avgBuyNormalizedExecutionPrice) / exitSimulation.avgBuyNormalizedExecutionPrice
+
+    // Get current funding data for all strategies
+    const buyFundingData = this.fundingService.getSymbolFundingData(
+      trade.opportunity.buyExchange,
+      trade.opportunity.buyExchangeSymbol
+    )
+    const sellFundingData = this.fundingService.getSymbolFundingData(
+      trade.opportunity.sellExchange,
+      trade.opportunity.sellExchangeSymbol
+    )
+
+    if (!buyFundingData || !sellFundingData) {
+      logger.warn(`[${trade.id}] Cannot check exit: funding data unavailable`)
+      return
+    }
+
+    // Validate funding data is not outdated
+    if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
+      logger.warn(`[${trade.id}] Outdated funding data, skipping exit check`)
+      return
+    }
+
+    const nextFundingTimestamp = Math.min(buyFundingData.nextFundingTimestamp, sellFundingData.nextFundingTimestamp)
+    const nextFundingInterval = Math.min(buyFundingData.fundingInterval, sellFundingData.fundingInterval)
+    const fundingIntervalMs = nextFundingInterval * 60 * 60 * 1000
+    const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
+
+    // Check time window and strategy enabled conditions
+    let strategyExitResult: { shouldExit: boolean, reason?: string } = { shouldExit: false }
+
+    if (trade.strategy === 'funding' && this.fundingStrategyEnabled) {
+      // Check if target funding event has occurred
+      if (now < trade.opportunity.targetFundingTimestamp) {
+        logger.debug(`[${trade.id}] Target funding event not reached yet (${Math.round((trade.opportunity.targetFundingTimestamp - now) / 1000)}s remaining), skipping exit check`)
+        return
+      }
+
+      // Check if within funding window
+      if (!this.isWithinFundingWindow(nextFundingTimestamp)) {
+        logger.debug(`[${trade.id}] Not within funding window, skipping exit check`)
+        return
+      }
+
+      // Determine if this is SYNC or ASYNC funding arbitrage
+      const isSynchronized = this.fundingService.isFundingSynchronizedExit(buyFundingData, sellFundingData)
+      
+      if (isSynchronized) {
+        strategyExitResult = this.shouldExitFundingSyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDiff)
+      } else {
+        strategyExitResult = this.shouldExitFundingAsyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDiff)
+      }
+    } else if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
+      if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
+        logger.debug(`[${trade.id}] Not within spread window, skipping exit check`)
+        return
+      }
+
+      strategyExitResult = this.shouldExitSpreadTrade(trade, currentSpreadDiff, exitSimulation)
+    }
+
+    // If strategy-specific exit condition is met, execute exit with validation
+    if (strategyExitResult.shouldExit) {
+      logger.info(`[${trade.id}] Strategy exit condition met: ${strategyExitResult.reason}`)
+      await this.executeExitTrade(trade, exitSimulation, 'convergence', updatingExchange)
     }
   }
 
@@ -606,6 +799,7 @@ export class TradeMonitor extends EventEmitter {
       opportunity: tradeResult.opportunity,
       entryTimestamp: Math.min(tradeResult.buyOrder.timestamp, tradeResult.sellOrder.timestamp),
       status: 'open',
+      strategy: tradeResult.opportunity.strategy,  // Capture strategy type from opportunity
       entryTrade: tradeResult,
       lastUpdateTimestamp: Date.now(),
       fees: {
@@ -666,7 +860,14 @@ export class TradeMonitor extends EventEmitter {
     this.clearExitCandidatesForTrade(tradeId)
 
     try {
-      await this.executeExitTrade(trade, reason)
+      // Simulate exit slippage for current orderbook state
+      const exitSimulation = this.simulateExitSlippage(trade)
+      if (!exitSimulation) {
+        logger.warn(`[${trade.id}] Could not simulate exit slippage`)
+        return false
+      }
+
+      await this.executeExitTrade(trade, exitSimulation, 'manual')
       return true
     } catch (error) {
       logger.error(`[${tradeId}] Failed to close trade`, {
@@ -772,9 +973,38 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
-   * Execute exit trade with parallel order placement
+   * Execute exit trade with parallel order placement (includes validation for convergence/timeout exits)
    */
-  private async executeExitTrade(trade: TrackedTrade, exitReason: 'convergence' | 'timeout' | 'manual' | 'error'): Promise<void> {
+  private async executeExitTrade(
+    trade: TrackedTrade,
+    exitSimulation: ExitSlippageSimulationResult,
+    exitReason: 'convergence' | 'timeout' | 'manual' | 'error',
+    updatingExchange?: string
+  ): Promise<void> {
+    // Calculate convergence for exit prices
+    const exitExchangeBuyPrice = exitSimulation.avgBuyNormalizedExecutionPrice
+    const exitExchangeSellPrice = exitSimulation.avgSellNormalizedExecutionPrice
+    
+    const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
+    
+    // Validate exit persistence for convergence
+    if (exitReason === 'convergence') {
+      const validation = this.validateExitPersistence(
+        trade,
+        exitReason,
+        convergencePercent,
+        exitExchangeBuyPrice,
+        exitExchangeSellPrice,
+        trade.pnlPercent,
+        updatingExchange!
+      )
+      
+      if (!validation.isValid) {
+        logger.debug(`[${trade.id}] Exit validation failed: ${validation.reason}`)
+        return
+      }
+    }
+
     logger.info(`[${trade.id}] Executing exit trade`, { exitReason })
 
     try {

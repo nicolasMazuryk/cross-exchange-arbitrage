@@ -35,9 +35,8 @@ interface ArbitrageConfig {
   blacklistPairs: string[]
   minConfidenceScore: number
   maxMarketSpread: number
-  maxProfitAnomalyThreshold: number
+  maxAnomalySpreadThreshold: number
   maxOrderbookAge: number
-  minExpectedProfitThreshold: number
   orderAmountToleranceMin: number
   orderAmountToleranceMax: number
   minPersistenceMs: number
@@ -52,7 +51,6 @@ interface TradingConfig {
   orderConfirmationTimeoutMs: number
   monitor: {
     maxHoldTimeMs: number
-    convergenceBufferPercent: number
     checkIntervalMs: number
     exitMinPersistenceMs: number
     exitMinConsecutiveSnapshots: number
@@ -68,9 +66,33 @@ interface AccountSyncConfig {
 interface FundingConfig {
   fetchIntervalMs: number
   maxDataAgeMs: number
-  minFundingDifferential: number
   supportedExchanges: string[]
   projectionHours: number
+}
+
+export type StrategyType = 'funding' | 'spread'
+
+interface StrategyConfig {
+  funding: {
+    enabled: boolean
+    windowStart: number
+    windowEnd: number
+    minFundingProfit: number
+    minTotalProfit: number
+    convergenceThreshold: number
+    spreadWideningThreshold: number
+  }
+  spread: {
+    enabled: boolean
+    windowStart: number
+    windowEnd: number
+    windowEndClose: number
+    minSpreadProfit: number
+    minTotalProfit: number
+    negativeFundingMultiplier: number
+    convergenceThreshold: number
+    spreadWideningThreshold: number
+  }
 }
 
 interface Config {
@@ -86,6 +108,7 @@ interface Config {
   trading: TradingConfig
   accountSync: AccountSyncConfig
   funding: FundingConfig
+  strategy: StrategyConfig
 }
 
 const config: Config = {
@@ -147,9 +170,8 @@ const config: Config = {
     blacklistPairs: yamlConfig?.arbitrage?.blacklistPairs || [],
     minConfidenceScore: yamlConfig?.arbitrage?.minConfidenceScore,
     maxMarketSpread: yamlConfig?.arbitrage?.maxMarketSpread,
-    maxProfitAnomalyThreshold: yamlConfig?.arbitrage?.maxProfitAnomalyThreshold,
+    maxAnomalySpreadThreshold: yamlConfig?.arbitrage?.maxAnomalySpreadThreshold,
     maxOrderbookAge: yamlConfig?.arbitrage?.maxOrderbookAge,
-    minExpectedProfitThreshold: yamlConfig?.arbitrage?.minExpectedProfitThreshold,
     orderAmountToleranceMin: yamlConfig?.arbitrage?.orderAmountToleranceMin,
     orderAmountToleranceMax: yamlConfig?.arbitrage?.orderAmountToleranceMax,
     minPersistenceMs: yamlConfig?.arbitrage?.minPersistenceMs,
@@ -170,9 +192,30 @@ const config: Config = {
   funding: {
     fetchIntervalMs: yamlConfig?.funding?.fetchIntervalMs,
     maxDataAgeMs: yamlConfig?.funding?.maxDataAgeMs,
-    minFundingDifferential: yamlConfig?.funding?.minFundingDifferential,
     supportedExchanges: yamlConfig?.funding?.supportedExchanges,
     projectionHours: yamlConfig?.funding?.projectionHours
+  },
+  strategy: {
+    funding: {
+      enabled: yamlConfig?.strategy?.funding?.enabled ?? false,
+      windowStart: yamlConfig?.strategy?.funding?.windowStart,
+      windowEnd: yamlConfig?.strategy?.funding?.windowEnd,
+      minFundingProfit: yamlConfig?.strategy?.funding?.minFundingProfit,
+      minTotalProfit: yamlConfig?.strategy?.funding?.minTotalProfit,
+      convergenceThreshold: yamlConfig?.strategy?.funding?.convergenceThreshold,
+      spreadWideningThreshold: yamlConfig?.strategy?.funding?.spreadWideningThreshold
+    },
+    spread: {
+      enabled: yamlConfig?.strategy?.spread?.enabled ?? false,
+      windowStart: yamlConfig?.strategy?.spread?.windowStart,
+      windowEnd: yamlConfig?.strategy?.spread?.windowEnd,
+      windowEndClose: yamlConfig?.strategy?.spread?.windowEndClose,
+      minSpreadProfit: yamlConfig?.strategy?.spread?.minSpreadProfit,
+      minTotalProfit: yamlConfig?.strategy?.spread?.minTotalProfit,
+      negativeFundingMultiplier: yamlConfig?.strategy?.spread?.negativeFundingMultiplier,
+      convergenceThreshold: yamlConfig?.strategy?.spread?.convergenceThreshold,
+      spreadWideningThreshold: yamlConfig?.strategy?.spread?.spreadWideningThreshold
+    }
   }
 }
 
