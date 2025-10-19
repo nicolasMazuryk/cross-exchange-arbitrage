@@ -63,7 +63,7 @@ trackedPairs:
   - DOGEUSDT
 
 trading:
-  orderAmountUsd: 10  # in USDT, default order size for arbitrage opportunities
+  orderAmountUsd: 15  # in USDT, default order size for arbitrage opportunities
   minBalanceBufferPercent: 10  # minimum balance buffer in percent
   positionLimitMultiplier: 1  # multiplier for position size limits
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
@@ -76,9 +76,9 @@ trading:
     exitCandidateCleanupMs: 5000  # cleanup stale exit candidates after 10 seconds
 
 arbitrage: # pairs require > $20 to enter minimum order size
-  blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT']  # pairs to exclude from arbitrage
+  blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT', 'AAVE/USDT:USDT', 'H/USDT:USDT']  # pairs to exclude from arbitrage
   minConfidenceScore: 0.7  # minimum confidence score for opportunities (0-1 range)
-  maxMarketSpreadPercent: 0.2  # maximum market spread width within an exchange in percent
+  maxMarketSpreadPercent: 0.3  # maximum market spread width within an exchange in percent
   maxAnomalySpreadThresholdPercent: 10.0  # maximum anomaly profit threshold in percent
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
   orderAmountToleranceMinPercent: 60  # minimum order amount tolerance in percent of order amount
@@ -106,22 +106,23 @@ funding:
 strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
-    enabled: true  # Enable/disable funding arbitrage strategy
-    windowStart: 14400  # Start execution window in seconds before next funding event
+    enabled: false  # Enable/disable funding arbitrage strategy
+    windowStart: 300  # Start execution window in seconds before next funding event
     windowEnd: 30  # End execution window in seconds before next funding event
-    minFundingProfitPercent: 0.2  # Minimum funding difference in percent for SYNC or cumulative profit for ASYNC
+    minFundingProfitPercent: -0.20  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
+    minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit
     spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold
   
   # Spread Arbitrage Strategy Configuration
   spread:
-    enabled: false  # Enable/disable spread arbitrage strategy
-    windowStart: 60  # Start execution window in seconds after previous funding event
+    enabled: true  # Enable/disable spread arbitrage strategy
+    windowStart: 300  # Start execution window in seconds after previous funding event
     windowEnd: 60  # End execution window in seconds before next funding event
     windowEndClose: 60  # Close execution window in seconds before next funding event (for exits)
-    minSpreadProfitPercent: 0.4  # Minimum spread profit in percent
+    minSpreadProfitPercent: 0.8  # Minimum spread profit in percent after costs
     minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative
     # Exit Conditions

@@ -76,9 +76,10 @@ export interface MonitorConfig {
       enabled: boolean
       windowStart: number
       windowEnd: number
+      minFundingProfitPercent: number
+      minFundingProfitAsyncSyncExitPercent: number
       convergenceThresholdPercent: number
       spreadWideningThresholdPercent: number
-      minFundingProfitPercent: number
     }
     spread: {
       enabled: boolean
@@ -145,6 +146,7 @@ export class TradeMonitor extends EventEmitter {
   private readonly fundingConvergenceThresholdPercent: number
   private readonly fundingSpreadWideningThresholdPercent: number
   private readonly fundingMinFundingProfitPercent: number
+  private readonly fundingMinFundingProfitAsyncSyncExitPercent: number
   private readonly spreadStrategyEnabled: boolean
   private readonly spreadStrategyWindowStart: number
   private readonly spreadStrategyWindowEnd: number
@@ -175,6 +177,7 @@ export class TradeMonitor extends EventEmitter {
     this.fundingConvergenceThresholdPercent = config.strategy.funding.convergenceThresholdPercent
     this.fundingSpreadWideningThresholdPercent = config.strategy.funding.spreadWideningThresholdPercent
     this.fundingMinFundingProfitPercent = config.strategy.funding.minFundingProfitPercent
+    this.fundingMinFundingProfitAsyncSyncExitPercent = config.strategy.funding.minFundingProfitAsyncSyncExitPercent
     this.spreadStrategyEnabled = config.strategy.spread.enabled
     this.spreadStrategyWindowStart = config.strategy.spread.windowStart
     this.spreadStrategyWindowEnd = config.strategy.spread.windowEnd
@@ -499,7 +502,7 @@ export class TradeMonitor extends EventEmitter {
       )
       
       // Exit Condition: cumulativeFundingRate < 0 (should be profitable before sync)
-      if (cumulativeFundingRate < 0) {
+      if ((cumulativeFundingRate * 100) < this.fundingConvergenceThresholdPercent) {
         return { 
           shouldExit: true, 
           reason: `ASYNC-ASYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < 0%` 
@@ -533,10 +536,10 @@ export class TradeMonitor extends EventEmitter {
       )
       
       // Exit Condition: cumulativeFundingRate < minFundingProfitPercent
-      if ((cumulativeFundingRate * 100) < this.fundingMinFundingProfitPercent) {
+      if ((cumulativeFundingRate * 100) < this.fundingMinFundingProfitAsyncSyncExitPercent) {
         return { 
           shouldExit: true, 
-          reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${(this.fundingMinFundingProfitPercent).toFixed(3)}%` 
+          reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${(this.fundingMinFundingProfitAsyncSyncExitPercent).toFixed(3)}%` 
         }
       }
     }
@@ -572,10 +575,10 @@ export class TradeMonitor extends EventEmitter {
     const convergencePercent = ((exitSellExchangePrice - exitBuyExchangePrice) / exitBuyExchangePrice) * 100
 
     // Check convergence threshold
-    if (convergencePercent <= this.spreadConvergenceThresholdPercent) {
+    if (convergencePercent < this.spreadConvergenceThresholdPercent) {
       return {
         shouldExit: true,
-        reason: 'SPREAD: Price convergence within threshold'
+        reason: `SPREAD: Price convergence: ${(convergencePercent).toFixed(3)}% < ${(this.spreadConvergenceThresholdPercent).toFixed(3)}%`
       }
     }
 

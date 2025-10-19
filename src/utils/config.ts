@@ -80,6 +80,7 @@ interface StrategyConfig {
     minFundingProfitPercent: number
     minTotalProfitPercent: number
     convergenceThresholdPercent: number
+    minFundingProfitAsyncSyncExitPercent: number
     spreadWideningThresholdPercent: number
   }
   spread: {
@@ -203,6 +204,7 @@ const config: Config = {
       minFundingProfitPercent: yamlConfig?.strategy?.funding?.minFundingProfitPercent,
       minTotalProfitPercent: yamlConfig?.strategy?.funding?.minTotalProfitPercent,
       convergenceThresholdPercent: yamlConfig?.strategy?.funding?.convergenceThresholdPercent,
+      minFundingProfitAsyncSyncExitPercent: yamlConfig?.strategy?.funding?.minFundingProfitAsyncSyncExitPercent,
       spreadWideningThresholdPercent: yamlConfig?.strategy?.funding?.spreadWideningThresholdPercent
     },
     spread: {

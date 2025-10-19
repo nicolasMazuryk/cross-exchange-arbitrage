@@ -439,10 +439,10 @@ export class ArbitrageEngine extends EventEmitter {
    */
   private validateFundingSyncEntry(
     fundingRateDifferencePercent: number,
-    estimatedTotalProfitPercent: number
+    profitEstimate: OpportunityScore
   ): boolean {
-    return fundingRateDifferencePercent >= this.fundingMinFundingProfitPercent && 
-            estimatedTotalProfitPercent >= this.fundingMinTotalProfitPercent
+    return fundingRateDifferencePercent - profitEstimate.costsPercent >= this.fundingMinFundingProfitPercent && 
+            profitEstimate.estimatedProfitPercent >= this.fundingMinTotalProfitPercent
   }
 
   /**
@@ -451,7 +451,7 @@ export class ArbitrageEngine extends EventEmitter {
   private validateFundingAsyncEntry(
     buyFunding: ParsedFunding,
     sellFunding: ParsedFunding,
-    estimatedTotalProfitPercent: number,
+    profitEstimate: OpportunityScore,
     fundingEvents: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }>
   ): boolean {
     // Find the next sync timestamp
@@ -464,8 +464,8 @@ export class ArbitrageEngine extends EventEmitter {
     )
     
     // Check if cumulative funding profit meets minimum threshold
-    return (cumulativeFundingRate * 100) >= this.fundingMinFundingProfitPercent &&
-            estimatedTotalProfitPercent >= this.fundingMinTotalProfitPercent
+    return (cumulativeFundingRate * 100) - profitEstimate.costsPercent >= this.fundingMinFundingProfitPercent &&
+            profitEstimate.estimatedProfitPercent >= this.fundingMinTotalProfitPercent
   }
 
   /**
@@ -475,15 +475,15 @@ export class ArbitrageEngine extends EventEmitter {
     fundingRateDifferencePercent: number,
     profitEstimate: OpportunityScore
   ): boolean {
-    const spreadTotalProfitPercent = profitEstimate.spreadProfitPercent - profitEstimate.costsPercent
     // Case 1: Neutral or positive funding
     if (fundingRateDifferencePercent >= 0) {
-      return spreadTotalProfitPercent >= this.spreadMinTotalProfitPercent
+      return profitEstimate.spreadProfitPercent - profitEstimate.costsPercent >= this.spreadMinSpreadProfitPercent &&
+          profitEstimate.estimatedProfitPercent >= this.spreadMinTotalProfitPercent
     }
     
     // Case 2: Negative funding - apply multiplier to adjust for risk
-    const adjustedSpreadTotalProfitPercent = spreadTotalProfitPercent + (fundingRateDifferencePercent * this.spreadNegativeFundingMultiplier)
-    return adjustedSpreadTotalProfitPercent >= this.spreadMinTotalProfitPercent
+    return profitEstimate.spreadProfitPercent - profitEstimate.costsPercent + (fundingRateDifferencePercent * this.spreadNegativeFundingMultiplier) >= this.spreadMinSpreadProfitPercent &&
+          profitEstimate.estimatedProfitPercent >= this.spreadMinTotalProfitPercent
   }
 
   /**
@@ -518,17 +518,26 @@ export class ArbitrageEngine extends EventEmitter {
     const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, this.projectionHours)
     const fundingRateDifferencePercent = (-fundingEvents[0].buyExchangeFundingRate + fundingEvents[0].sellExchangeFundingRate) * 100
     
+    if (fundingRateDifferencePercent === profitEstimate.fundingProfitPercent) {
+      console.log('fundingRateDifferencePercent === profitEstimate.fundingProfitPercent')
+    }
+    
     // Try funding strategy first if within window and enabled
     if (this.fundingStrategyEnabled && withinFundingWindow) {
       if (isSynchronized) {
-        if (this.validateFundingSyncEntry(fundingRateDifferencePercent, profitEstimate.estimatedProfitPercent)) {
+        if (this.validateFundingSyncEntry(fundingRateDifferencePercent, profitEstimate)) {
           return { strategy: 'funding' }
-          // return { strategy: null}
+        }
+        if (fundingRateDifferencePercent > 0.3) {
+          logger.info(`[${buyFundingData.symbol}] Funding strategy (SYNC) entry validation failed, but funding rate difference is high: ${fundingRateDifferencePercent.toFixed(3)}%, profitEstimate.fundingProfitPercent: ${profitEstimate.fundingProfitPercent.toFixed(3)}%, profitEstimate.estimatedProfitPercent: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
         }
         return { strategy: null, reason: 'Funding window (SYNC) but validation failed' }
       } else {
-        if (this.validateFundingAsyncEntry(buyFundingData, sellFundingData, profitEstimate.estimatedProfitPercent, fundingEvents)) {
+        if (this.validateFundingAsyncEntry(buyFundingData, sellFundingData, profitEstimate, fundingEvents)) {
           return { strategy: 'funding' }
+        }
+        if (fundingRateDifferencePercent > 0.3) {
+          logger.info(`[${buyFundingData.symbol}] Funding strategy (ASYNC) entry validation failed, but funding rate difference is high: ${fundingRateDifferencePercent.toFixed(3)}%, profitEstimate.fundingProfitPercent: ${profitEstimate.fundingProfitPercent.toFixed(3)}%, profitEstimate.estimatedProfitPercent: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
         }
         return { strategy: null, reason: 'Funding window (ASYNC) but validation failed' }
       }
