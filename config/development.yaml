@@ -19,15 +19,15 @@ exchanges:
     maxStreamsPerConnection: 1000 # max 1024 streams per connection
     reconnectInterval: 5000
     fees:
-      maker: 0.0002 # 0.02%
-      taker: 0.0005 # 0.05%
+      maker: 0.02 # maker fee in percent (0.02%)
+      taker: 0.05 # taker fee in percent (0.05%)
     ignoredMarkets: []
   bybit:
     maxStreamsPerConnection: 50 # max 60 streams per connection
     reconnectInterval: 5000
     fees:
-      maker: 0.00036 # 0.036%
-      taker: 0.00100 # 0.10%
+      maker: 0.036 # maker fee in percent (0.036%)
+      taker: 0.10 # taker fee in percent (0.10%)
     ignoredMarkets:
       - "ETHBTC/USDT:USDT"
       - "USDC/USDT:USDT"
@@ -36,23 +36,23 @@ exchanges:
     maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
     reconnectInterval: 5000
     fees:
-      maker: 0.0002 # 0.02%
-      taker: 0.0005 # 0.05%
+      maker: 0.02 # maker fee in percent (0.02%)
+      taker: 0.05 # taker fee in percent (0.05%)
     ignoredMarkets: []
   bitget:
     maxStreamsPerConnection: 500 # max connections per IP - 100; max subscriptions per connection - 1000; max subscription messages per hour - 240 per connection; max messages per second per connection - 10 (includes PING, subs)
     reconnectInterval: 5000
     fees:
-      maker: 0.00036 # 0.036%
-      taker: 0.00100 # 0.10%
+      maker: 0.036 # maker fee in percent (0.036%)
+      taker: 0.10 # taker fee in percent (0.10%)
     ignoredMarkets:
       - "DegenReborn/USDT:USDT"
   gateio:
     maxStreamsPerConnection: 100
     reconnectInterval: 5000
     fees:
-      maker: 0.0002 # 0.02%
-      taker: 0.0005 # 0.05%
+      maker: 0.02 # maker fee in percent (0.02%)
+      taker: 0.05 # taker fee in percent (0.05%)
     ignoredMarkets: []
 
 trackedPairs:
@@ -63,8 +63,8 @@ trackedPairs:
   - DOGEUSDT
 
 trading:
-  orderAmount: 10  # in USDT, default order size for arbitrage opportunities
-  minBalanceBuffer: 0.1  # 10% buffer for balance validation
+  orderAmountUsd: 10  # in USDT, default order size for arbitrage opportunities
+  minBalanceBufferPercent: 10  # minimum balance buffer in percent
   positionLimitMultiplier: 1  # multiplier for position size limits
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   monitor:
@@ -77,12 +77,12 @@ trading:
 
 arbitrage: # pairs require > $20 to enter minimum order size
   blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT']  # pairs to exclude from arbitrage
-  minConfidenceScore: 0.7  # minimum confidence score for opportunities
-  maxMarketSpread: 0.002  # maximum market spread width within an exchange (0.2%)
-  maxAnomalySpreadThreshold: 0.10  # maximum anomaly profit including cross-market spread between exchanges and funding rate difference (10%)
+  minConfidenceScore: 0.7  # minimum confidence score for opportunities (0-1 range)
+  maxMarketSpreadPercent: 0.2  # maximum market spread width within an exchange in percent
+  maxAnomalySpreadThresholdPercent: 10.0  # maximum anomaly profit threshold in percent
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
-  orderAmountToleranceMin: 0.60  # minimum order amount tolerance (60% of order amount)
-  orderAmountToleranceMax: 1.40  # maximum order amount tolerance (140% of order amount)
+  orderAmountToleranceMinPercent: 60  # minimum order amount tolerance in percent of order amount
+  orderAmountToleranceMaxPercent: 140  # maximum order amount tolerance in percent of order amount
   # Temporal Persistence Validation
   minPersistenceMs: 1000  # minimum time window for opportunity persistence (500ms)
   minConsecutiveSnapshots: 3  # minimum consecutive snapshots showing the opportunity
@@ -107,23 +107,23 @@ strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
     enabled: true  # Enable/disable funding arbitrage strategy
-    windowStart: 14400  # Start execution window 600 seconds (10 minutes) before next funding event
-    windowEnd: 30  # End execution window 30 seconds before next funding event
-    minFundingProfit: -0.002  # Minimum funding difference (0.2%) for SYNC or cumulative profit for ASYNC
-    minTotalProfit: -0.005  # Minimum acceptable net profit after all costs (-0.1%)
+    windowStart: 14400  # Start execution window in seconds before next funding event
+    windowEnd: 30  # End execution window in seconds before next funding event
+    minFundingProfitPercent: 0.2  # Minimum funding difference in percent for SYNC or cumulative profit for ASYNC
+    minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
-    convergenceThreshold: -0.008  # Exit funding trade when funding diff < 0.02%
-    spreadWideningThreshold: 0.02  # Exit if spread widens excessively (-2.00%)
+    convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
+    spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold
   
   # Spread Arbitrage Strategy Configuration
   spread:
     enabled: false  # Enable/disable spread arbitrage strategy
-    windowStart: 60  # Start execution window 300 seconds (5 minutes) after previous funding event
-    windowEnd: 60  # End execution window 1800 seconds (30 minutes) before next funding event
-    windowEndClose: 60  # Close execution window 60 seconds before next funding event (for exits)
-    minSpreadProfit: 0.004  # Minimum spread profit (0.2%)
-    minTotalProfit: -0.001  # Minimum acceptable net profit after all costs (-0.1%)
+    windowStart: 60  # Start execution window in seconds after previous funding event
+    windowEnd: 60  # End execution window in seconds before next funding event
+    windowEndClose: 60  # Close execution window in seconds before next funding event (for exits)
+    minSpreadProfitPercent: 0.4  # Minimum spread profit in percent
+    minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative
     # Exit Conditions
-    convergenceThreshold: 0.00  # 0.05% convergence threshold for exits
-    spreadWideningThreshold: 0.02  # Exit if spread widens excessively (-2.00%)
+    convergenceThresholdPercent: 0.0  # convergence threshold in percent for exits
+    spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold

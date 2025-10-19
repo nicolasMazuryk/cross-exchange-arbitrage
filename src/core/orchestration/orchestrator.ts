@@ -340,17 +340,17 @@ export class Orchestrator extends EventEmitter {
             enabled: config.strategy.funding.enabled,
             windowStart: config.strategy.funding.windowStart,
             windowEnd: config.strategy.funding.windowEnd,
-            convergenceThreshold: config.strategy.funding.convergenceThreshold,
-            spreadWideningThreshold: config.strategy.funding.spreadWideningThreshold,
-            minFundingProfit: config.strategy.funding.minFundingProfit
+            convergenceThresholdPercent: config.strategy.funding.convergenceThresholdPercent,
+            spreadWideningThresholdPercent: config.strategy.funding.spreadWideningThresholdPercent,
+            minFundingProfitPercent: config.strategy.funding.minFundingProfitPercent
           },
           spread: {
             enabled: config.strategy.spread.enabled,
             windowStart: config.strategy.spread.windowStart,
             windowEnd: config.strategy.spread.windowEnd,
             windowEndClose: config.strategy.spread.windowEndClose,
-            convergenceThreshold: config.strategy.spread.convergenceThreshold,
-            spreadWideningThreshold: config.strategy.spread.spreadWideningThreshold
+            convergenceThresholdPercent: config.strategy.spread.convergenceThresholdPercent,
+            spreadWideningThresholdPercent: config.strategy.spread.spreadWideningThresholdPercent
           }
         }
       }

@@ -16,15 +16,15 @@ exchanges:
     maxStreamsPerConnection: 1000
     reconnectInterval: 5000
     fees:
-      maker: 0.0002
-      taker: 0.0005
+      maker: 0.02  # in percent
+      taker: 0.05  # in percent
     ignoredMarkets: []
   bybit:
     maxStreamsPerConnection: 50
     reconnectInterval: 5000
     fees:
-      maker: 0.0002
-      taker: 0.00055
+      maker: 0.02  # in percent
+      taker: 0.055  # in percent
     ignoredMarkets: []
 
 trackedPairs:
@@ -33,12 +33,11 @@ trackedPairs:
 
 trading:
   orderAmount: 10
-  minBalanceBuffer: 0.1
+  minBalanceBufferPercent: 10
   positionLimitMultiplier: 1
   orderConfirmationTimeoutMs: 10000
   monitor:
     maxHoldTimeMs: 1000 * 60 * 60 * 24
-    convergenceBufferPercent: 0.00
     checkIntervalMs: 5000
     exitMinPersistenceMs: 1000
     exitMinConsecutiveSnapshots: 3
@@ -47,11 +46,11 @@ trading:
 arbitrage:
   blacklistPairs: []
   minConfidenceScore: 0.7
-  maxMarketSpread: 0.002
-  maxAnomalySpreadThreshold: 0.10
+  maxMarketSpreadPercent: 0.2
+  maxAnomalySpreadThresholdPercent: 10.0
   maxOrderbookAge: 2000
-  orderAmountToleranceMin: 0.60
-  orderAmountToleranceMax: 1.40
+  orderAmountToleranceMinPercent: 60
+  orderAmountToleranceMaxPercent: 140
   minPersistenceMs: 1000
   minConsecutiveSnapshots: 3
   candidateCleanupMs: 5000
@@ -67,5 +66,3 @@ funding:
     - "binance"
     - "bybit"
   projectionHours: 20
-  minProjectedProfitPercent: 0.001
-  maxFundingRateDeviation: 0.01

@@ -2,7 +2,6 @@ import { EventEmitter } from 'events'
 import { AccountStateManager } from '../state/accountStateManager'
 import { RestClientInterface } from '../../adapters/rest/types'
 import { MarketMetadataService } from '../markets/marketMetadataService'
-import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
 import { OrderInfo } from '../../types/account'
 import { OrderbookManager } from '../orderbook/orderbookManager'
@@ -21,16 +20,16 @@ export interface TradeParams {
   timestamp: number
 }
 
-
-
 export interface TradeResult {
   id: string
   opportunity: ArbitrageOpportunity
   success: boolean
   buyOrder: OrderInfo | null
   sellOrder: OrderInfo | null
-  fees: number
-  slippage: number
+  feesUsd: number
+  feesPercent: number
+  slippageUsd: number
+  slippagePercent: number
   latencyMs: number
   errorDetails?: {
     stage: 'pre-check' | 'entry' | 'monitor' | 'exit'
@@ -128,9 +127,9 @@ export class TradeExecutor extends EventEmitter {
     //   errors.push(`Account state for ${tradeParams.sellExchange} is stale`)
     // }
 
-    // Calculate required USDT balance using volumeUSDT from opportunity
+    // Calculate required USDT balance using orderAmountUsd from opportunity
     // For arbitrage, we need USDT to buy on one exchange and sell on another
-    const requiredBalance = opportunity.volumeUSDT * (1 + config.trading.minBalanceBuffer)
+    const requiredBalance = opportunity.orderAmountUsd * (1 + config.trading.minBalanceBufferPercent / 100)
     
     const buyExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.buyExchange, 'USDT')
     const sellExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.sellExchange, 'USDT')
@@ -160,10 +159,10 @@ export class TradeExecutor extends EventEmitter {
     const buyPosition = this.accountStateManager.getPosition(opportunity.buyExchange, opportunity.buyExchangeSymbol, 'LONG')
     const sellPosition = this.accountStateManager.getPosition(opportunity.sellExchange, opportunity.sellExchangeSymbol, 'SHORT')
 
-    if (buyPosition && Math.abs(buyPosition.size * buyPosition.entryPrice) > config.trading.orderAmount * config.trading.positionLimitMultiplier) {
+    if (buyPosition && Math.abs(buyPosition.size * buyPosition.entryPrice) > config.trading.orderAmountUsd * config.trading.positionLimitMultiplier) {
       warnings.push(`Large position detected on ${opportunity.buyExchange}: ${buyPosition.size}`)
     }
-    if (sellPosition && Math.abs(sellPosition.size * sellPosition.entryPrice) > config.trading.orderAmount * config.trading.positionLimitMultiplier) {
+    if (sellPosition && Math.abs(sellPosition.size * sellPosition.entryPrice) > config.trading.orderAmountUsd * config.trading.positionLimitMultiplier) {
       warnings.push(`Large position detected on ${opportunity.sellExchange}: ${sellPosition.size}`)
     }
 
@@ -228,7 +227,7 @@ export class TradeExecutor extends EventEmitter {
       buyExchange: opportunity.buyExchange,
       sellExchange: opportunity.sellExchange,
       normalizedPair: opportunity.normalizedPair,
-      volumeUSDT: opportunity.volumeUSDT,
+      orderAmountUsd: opportunity.orderAmountUsd,
       normalizedVolume: opportunity.normalizedVolume,
       buyExchangeVolume: opportunity.buyExchangeVolume,
       sellExchangeVolume: opportunity.sellExchangeVolume,
@@ -264,11 +263,11 @@ export class TradeExecutor extends EventEmitter {
       ])
 
       // Calculate fees and slippage
-      const buyFeeRate = this.getFeeRate(opportunity.buyExchange, 'taker')
-      const sellFeeRate = this.getFeeRate(opportunity.sellExchange, 'taker')
+      const buyFeeRatePercent = this.getTradingFeeRatePercent(opportunity.buyExchange, 'taker')
+      const sellFeeRatePercent = this.getTradingFeeRatePercent(opportunity.sellExchange, 'taker')
       
-      const buyFees = calculateFees(buyOrder, buyFeeRate)
-      const sellFees = calculateFees(sellOrder, sellFeeRate)
+      const buyFees = calculateFees(buyOrder, buyFeeRatePercent)
+      const sellFees = calculateFees(sellOrder, sellFeeRatePercent)
       const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
       const sellSlippage = calculateSlippage(sellOrder, sellOrder.orderSide)
 
@@ -278,9 +277,11 @@ export class TradeExecutor extends EventEmitter {
         buyOrder,
         sellOrder,
         success: true,
-        fees: buyFees + sellFees,
-        slippage: buySlippage + sellSlippage,
         latencyMs: 0, // Will be set by caller
+        feesUsd: buyFees.feesUsd + sellFees.feesUsd,
+        feesPercent: buyFees.feesPercent + sellFees.feesPercent,
+        slippageUsd: buySlippage.slippageUsd + sellSlippage.slippageUsd,
+        slippagePercent: buySlippage.slippagePercent + sellSlippage.slippagePercent,
       }
 
     } catch (error) {
@@ -374,9 +375,9 @@ export class TradeExecutor extends EventEmitter {
   }
 
   /**
-   * Get fee rate for an exchange
+   * Get trading fee percent for an exchange
    */
-  private getFeeRate(exchangeId: string, feeType: 'maker' | 'taker'): number {
+  private getTradingFeeRatePercent(exchangeId: string, feeType: 'maker' | 'taker'): number {
     const exchangeConfig = config.exchanges[exchangeId as keyof typeof config.exchanges]
     if (!exchangeConfig) return 0
 
@@ -393,8 +394,10 @@ export class TradeExecutor extends EventEmitter {
       success: false,
       buyOrder: null,
       sellOrder: null,
-      fees: 0,
-      slippage: 0,
+      feesUsd: 0,
+      feesPercent: 0,
+      slippageUsd: 0,
+      slippagePercent: 0,
       latencyMs: 0,
       errorDetails: {
         stage,

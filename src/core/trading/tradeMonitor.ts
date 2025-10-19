@@ -31,22 +31,29 @@ export interface TrackedTrade {
   exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
   lastUpdateTimestamp: number
   // PnL calculations
-  fees: {
+  feesUsd: {
     entry: number
     exit: number
     total: number
   }
-  slippage: {
+  slippageUsd: {
     entry: number
     exit: number
     total: number
   }
-  profit: number
-  pnl: number
-  // Percentage calculations
-  feesPercent: number
-  slippagePercent: number
-  profitPercent: number
+  feesPercent: {
+    entry: number
+    exit: number
+    total: number
+  }
+  slippagePercent: {
+    entry: number
+    exit: number
+    total: number
+  }
+  deltaProfitUsd: number
+  deltaProfitPercent: number
+  pnlUsd: number
   pnlPercent: number
 }
 
@@ -69,17 +76,17 @@ export interface MonitorConfig {
       enabled: boolean
       windowStart: number
       windowEnd: number
-      convergenceThreshold: number
-      spreadWideningThreshold: number
-      minFundingProfit: number
+      convergenceThresholdPercent: number
+      spreadWideningThresholdPercent: number
+      minFundingProfitPercent: number
     }
     spread: {
       enabled: boolean
       windowStart: number
       windowEnd: number
       windowEndClose: number
-      convergenceThreshold: number
-      spreadWideningThreshold: number
+      convergenceThresholdPercent: number
+      spreadWideningThresholdPercent: number
     }
   }
 }
@@ -135,15 +142,15 @@ export class TradeMonitor extends EventEmitter {
   private readonly fundingStrategyEnabled: boolean
   private readonly fundingStrategyWindowStart: number
   private readonly fundingStrategyWindowEnd: number
-  private readonly fundingConvergenceThreshold: number
-  private readonly fundingSpreadWideningThreshold: number
-  private readonly fundingMinFundingProfit: number
+  private readonly fundingConvergenceThresholdPercent: number
+  private readonly fundingSpreadWideningThresholdPercent: number
+  private readonly fundingMinFundingProfitPercent: number
   private readonly spreadStrategyEnabled: boolean
   private readonly spreadStrategyWindowStart: number
   private readonly spreadStrategyWindowEnd: number
   private readonly spreadStrategyWindowEndClose: number
-  private readonly spreadConvergenceThreshold: number
-  private readonly spreadWideningThreshold: number
+  private readonly spreadConvergenceThresholdPercent: number
+  private readonly spreadWideningThresholdPercent: number
 
   constructor(
     accountStateManager: AccountStateManager,
@@ -165,17 +172,17 @@ export class TradeMonitor extends EventEmitter {
     this.fundingStrategyEnabled = config.strategy.funding.enabled
     this.fundingStrategyWindowStart = config.strategy.funding.windowStart
     this.fundingStrategyWindowEnd = config.strategy.funding.windowEnd
-    this.fundingConvergenceThreshold = config.strategy.funding.convergenceThreshold
-    this.fundingSpreadWideningThreshold = config.strategy.funding.spreadWideningThreshold
-    this.fundingMinFundingProfit = config.strategy.funding.minFundingProfit
+    this.fundingConvergenceThresholdPercent = config.strategy.funding.convergenceThresholdPercent
+    this.fundingSpreadWideningThresholdPercent = config.strategy.funding.spreadWideningThresholdPercent
+    this.fundingMinFundingProfitPercent = config.strategy.funding.minFundingProfitPercent
     this.spreadStrategyEnabled = config.strategy.spread.enabled
     this.spreadStrategyWindowStart = config.strategy.spread.windowStart
     this.spreadStrategyWindowEnd = config.strategy.spread.windowEnd
     this.spreadStrategyWindowEndClose = config.strategy.spread.windowEndClose
-    this.spreadConvergenceThreshold = config.strategy.spread.convergenceThreshold
-    this.spreadWideningThreshold = config.strategy.spread.spreadWideningThreshold
+    this.spreadConvergenceThresholdPercent = config.strategy.spread.convergenceThresholdPercent
+    this.spreadWideningThresholdPercent = config.strategy.spread.spreadWideningThresholdPercent
 
-    logger.info('TradeMonitor initialized', { config: this.config })
+    logger.info('TradeMonitor initialized')
   }
 
   /**
@@ -183,40 +190,44 @@ export class TradeMonitor extends EventEmitter {
    */
   private updatePnLWithSimulatedExit(trade: TrackedTrade, exitSimulation: ExitSlippageSimulationResult): void {
     // Calculate exit fees for both legs
-    const buyFeeRate = this.getFeeRate(trade.opportunity.buyExchange, 'taker')
-    const sellFeeRate = this.getFeeRate(trade.opportunity.sellExchange, 'taker')
+    const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker')
+    const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker')
     
-    const buyExitFees = exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * buyFeeRate
-    const sellExitFees = exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * sellFeeRate
+    const buyExitFeesUsd = exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (buyFeeRatePercent / 100)
+    const sellExitFeesUsd = exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (sellFeeRatePercent / 100)
     
     // Calculate slippage separately for both buy and sell sides
-    const buySlippage = exitSimulation.buySlippagePercent * exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume
-    const sellSlippage = exitSimulation.sellSlippagePercent * exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume
+    const buySlippageUsd = exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (exitSimulation.buySlippagePercent / 100)
+    const sellSlippageUsd = exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (exitSimulation.sellSlippagePercent / 100)
     
-    trade.fees.exit = buyExitFees + sellExitFees
-    trade.slippage.exit = buySlippage + sellSlippage
-    trade.fees.total = trade.fees.entry + trade.fees.exit
-    trade.slippage.total = trade.slippage.entry + trade.slippage.exit
+    trade.feesUsd.exit = buyExitFeesUsd + sellExitFeesUsd
+    trade.feesUsd.total = trade.feesUsd.entry + trade.feesUsd.exit
 
+    trade.feesPercent.exit = buyFeeRatePercent + sellFeeRatePercent
+    trade.feesPercent.total = trade.feesPercent.entry + trade.feesPercent.exit
+
+    trade.slippageUsd.exit = buySlippageUsd + sellSlippageUsd
+    trade.slippageUsd.total = trade.slippageUsd.entry + trade.slippageUsd.exit
+
+    trade.slippagePercent.exit = exitSimulation.buySlippagePercent + exitSimulation.sellSlippagePercent
+    trade.slippagePercent.total = trade.slippagePercent.entry + trade.slippagePercent.exit
+    
     // Calculate profit with simulated exit prices
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
     const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
     const buyExchangeExitPrice = exitSimulation.avgBuyNormalizedExecutionPrice // Exit price for the buy leg
     const sellExchangeExitPrice = exitSimulation.avgSellNormalizedExecutionPrice  // Exit price for the sell leg
     
-    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
-    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
-    trade.profit = buyLegProfit + sellLegProfit
+    const orderAmountUsd = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
+
+    const buyLegDeltaUsd = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
+    const sellLegDeltaUsd = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
+    trade.deltaProfitUsd = buyLegDeltaUsd + sellLegDeltaUsd
+    trade.deltaProfitPercent = (trade.deltaProfitUsd / orderAmountUsd) * 100
 
     // Calculate final PnL: Profit - Costs
-    trade.pnl = trade.profit - trade.fees.total
-
-    // Calculate percentages
-    const totalTradeValue = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
-    trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
-    trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
-    trade.profitPercent = (trade.profit / totalTradeValue) * 100
-    trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
+    trade.pnlUsd = trade.deltaProfitUsd - trade.feesUsd.total
+    trade.pnlPercent = (trade.pnlUsd / orderAmountUsd) * 100
   }
 
 
@@ -285,17 +296,17 @@ export class TradeMonitor extends EventEmitter {
     }
 
     // Existing candidate - check if conditions are still valid
-    const convergenceChange = (convergencePercent - existingCandidate.convergencePercent) / existingCandidate.convergencePercent
-    const buyPriceChange = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
-    const sellPriceChange = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
+    const convergenceChangeRatio = (convergencePercent - existingCandidate.convergencePercent) / existingCandidate.convergencePercent
+    const buyPriceChangeRatio = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
+    const sellPriceChangeRatio = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
 
-    if (convergenceChange > 0.2) {
+    if (convergenceChangeRatio > 0.2) {
       logger.info(`Candidate ${candidateKey} convergence decreased, resetting`)
       this.exitCandidates.delete(candidateKey)
       return { isValid: false, reason: 'Convergence decreased significantly' }
     }
     // If prices changed significantly, reset the candidate
-    if (buyPriceChange > 0.01 || sellPriceChange > 0.01) { // 1% price change threshold
+    if (buyPriceChangeRatio > 0.01 || sellPriceChangeRatio > 0.01) { // 1% price change threshold
       logger.info(`Exit candidate ${candidateKey} price changed significantly, resetting`)
       this.exitCandidates.delete(candidateKey)
       return { isValid: false, reason: 'Price changed significantly' }
@@ -311,7 +322,8 @@ export class TradeMonitor extends EventEmitter {
     // Update snapshots based on which exchange is updating
     if (updatingExchange === trade.opportunity.buyExchange) {
       existingCandidate.buyExchangeConsecutiveSnapshots++
-    } else if (updatingExchange === trade.opportunity.sellExchange) {
+    }
+    if (updatingExchange === trade.opportunity.sellExchange) {
       existingCandidate.sellExchangeConsecutiveSnapshots++
     }
 
@@ -438,25 +450,25 @@ export class TradeMonitor extends EventEmitter {
     trade: TrackedTrade,
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
-    currentSpreadDiff: number
+    currentSpreadDifferencePercent: number
   ): { shouldExit: boolean, reason?: string } {
     // Calculate current funding difference
-    const fundingDiff = -buyFundingData.fundingRate + sellFundingData.fundingRate
+    const fundingDifferencePercent = (-buyFundingData.fundingRate + sellFundingData.fundingRate) * 100
 
     // Exit Condition 1: Funding rates converged (< 0.02%)
-    if (fundingDiff < this.fundingConvergenceThreshold) {
+    if (fundingDifferencePercent < this.fundingConvergenceThresholdPercent) {
       return { 
         shouldExit: true, 
-        reason: `Funding converged: ${(fundingDiff * 100).toFixed(3)}% < ${(this.fundingConvergenceThreshold * 100).toFixed(3)}%` 
+        reason: `Funding converged: ${(fundingDifferencePercent).toFixed(3)}% < ${(this.fundingConvergenceThresholdPercent).toFixed(3)}%` 
       }
     }
 
     // Exit Condition 2: Spread widened excessively (dynamic based on entry spread)
-    const spreadWideningThreshold = trade.opportunity.spreadProfit + this.fundingSpreadWideningThreshold
-    if (currentSpreadDiff > spreadWideningThreshold) {
+    const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
+    if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
       return { 
         shouldExit: true, 
-        reason: `Spread widened: ${(currentSpreadDiff * 100).toFixed(3)}% < ${(spreadWideningThreshold * 100).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfit * 100).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThreshold * 100).toFixed(3)}%)` 
+        reason: `Spread widened: ${(currentSpreadDifferencePercent).toFixed(3)}% < ${(spreadWideningThresholdPercent).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfitPercent).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThresholdPercent).toFixed(3)}%)` 
       }
     }
 
@@ -470,7 +482,7 @@ export class TradeMonitor extends EventEmitter {
     trade: TrackedTrade,
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
-    currentSpreadDiff: number
+    currentSpreadDifferencePercent: number
   ): { shouldExit: boolean, reason?: string } {
     const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, config.funding.projectionHours)
 
@@ -481,16 +493,16 @@ export class TradeMonitor extends EventEmitter {
       // CASE 1: ASYNC - upcoming event is NOT a sync
       // Calculate cumulative funding profit until the next sync event
       const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFundingData, sellFundingData)
-      const cumulativeFundingProfit = this.fundingService.calculateCumulativeFundingProfit(
+      const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
         nextSyncTimestamp,
         fundingEvents
       )
       
-      // Exit Condition: cumulativeFundingProfit < 0 (should be profitable before sync)
-      if (cumulativeFundingProfit < 0) {
+      // Exit Condition: cumulativeFundingRate < 0 (should be profitable before sync)
+      if (cumulativeFundingRate < 0) {
         return { 
           shouldExit: true, 
-          reason: `ASYNC-ASYNC: Cumulative funding profit ${(cumulativeFundingProfit * 100).toFixed(3)}% < 0%` 
+          reason: `ASYNC-ASYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < 0%` 
         }
       }
     } else {
@@ -503,38 +515,38 @@ export class TradeMonitor extends EventEmitter {
       let foundCurrentSync = false
       
       for (const event of fundingEvents) {
-        if (event.timestamp === currentSyncTimestamp && event.buyExchangeFunding !== 0 && event.sellExchangeFunding !== 0) {
+        if (event.timestamp === currentSyncTimestamp && event.buyExchangeFundingRate !== 0 && event.sellExchangeFundingRate !== 0) {
           foundCurrentSync = true
           continue // Skip current sync
         }
         
-        if (foundCurrentSync && event.buyExchangeFunding !== 0 && event.sellExchangeFunding !== 0) {
+        if (foundCurrentSync && event.buyExchangeFundingRate !== 0 && event.sellExchangeFundingRate !== 0) {
           nextPlusOneSyncTimestamp = event.timestamp
           break
         }
       }
       
-      // Calculate cumulative profit for all events until nextSyncPlusOne
-      const cumulativeFundingProfit = this.fundingService.calculateCumulativeFundingProfit(
+      // Calculate cumulative funding rate for all events until nextSyncPlusOne
+      const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
         nextPlusOneSyncTimestamp,
         fundingEvents
       )
       
-      // Exit Condition: cumulativeFundingProfit < minFundingProfit
-      if (cumulativeFundingProfit < this.fundingMinFundingProfit) {
+      // Exit Condition: cumulativeFundingRate < minFundingProfitPercent
+      if ((cumulativeFundingRate * 100) < this.fundingMinFundingProfitPercent) {
         return { 
           shouldExit: true, 
-          reason: `ASYNC-SYNC: Cumulative funding profit ${(cumulativeFundingProfit * 100).toFixed(3)}% < ${(this.fundingMinFundingProfit * 100).toFixed(3)}%` 
+          reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${(this.fundingMinFundingProfitPercent).toFixed(3)}%` 
         }
       }
     }
 
     // Exit Condition: Spread widened excessively (dynamic based on entry spread)
-    const spreadWideningThreshold = trade.opportunity.spreadProfit + this.fundingSpreadWideningThreshold
-    if (currentSpreadDiff > spreadWideningThreshold) {
+    const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
+    if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
       return { 
         shouldExit: true, 
-        reason: `Spread widened: ${(currentSpreadDiff * 100).toFixed(3)}% < ${(spreadWideningThreshold * 100).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfit * 100).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThreshold * 100).toFixed(3)}%)` 
+        reason: `Spread widened: ${(currentSpreadDifferencePercent).toFixed(3)}% < ${(spreadWideningThresholdPercent).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfitPercent).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThresholdPercent).toFixed(3)}%)` 
       }
     }
 
@@ -546,7 +558,7 @@ export class TradeMonitor extends EventEmitter {
    */
   private shouldExitSpreadTrade(
     trade: TrackedTrade,
-    currentSpreadDiff: number,
+    currentSpreadDifferencePercent: number,
     exitSimulation: ExitSlippageSimulationResult
   ): { shouldExit: boolean, reason?: string } {
     // For arbitrage trades, we need to consider the exit prices:
@@ -560,7 +572,7 @@ export class TradeMonitor extends EventEmitter {
     const convergencePercent = ((exitSellExchangePrice - exitBuyExchangePrice) / exitBuyExchangePrice) * 100
 
     // Check convergence threshold
-    if (convergencePercent <= this.spreadConvergenceThreshold) {
+    if (convergencePercent <= this.spreadConvergenceThresholdPercent) {
       return {
         shouldExit: true,
         reason: 'SPREAD: Price convergence within threshold'
@@ -568,11 +580,11 @@ export class TradeMonitor extends EventEmitter {
     }
 
     // Check if spread widened excessively (dynamic based on entry spread)
-    const spreadWideningThreshold = trade.opportunity.spreadProfit + this.spreadWideningThreshold
-    if (currentSpreadDiff > spreadWideningThreshold) {
+    const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.spreadWideningThresholdPercent
+    if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
       return { 
         shouldExit: true,
-        reason: `Spread widened: ${(currentSpreadDiff * 100).toFixed(3)}% < ${(spreadWideningThreshold * 100).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfit * 100).toFixed(3)}% + threshold: ${(this.spreadWideningThreshold * 100).toFixed(3)}%)` 
+        reason: `Spread widened: ${(currentSpreadDifferencePercent).toFixed(3)}% < ${(spreadWideningThresholdPercent).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfitPercent).toFixed(3)}% + threshold: ${(this.spreadWideningThresholdPercent).toFixed(3)}%)` 
       }
     }
 
@@ -623,7 +635,7 @@ export class TradeMonitor extends EventEmitter {
     trade.lastUpdateTimestamp = now
 
     // Calculate current spread difference for exit checks
-    const currentSpreadDiff = (exitSimulation.avgSellNormalizedExecutionPrice - exitSimulation.avgBuyNormalizedExecutionPrice) / exitSimulation.avgBuyNormalizedExecutionPrice
+    const currentSpreadDifferencePercent = ((exitSimulation.avgSellNormalizedExecutionPrice - exitSimulation.avgBuyNormalizedExecutionPrice) / exitSimulation.avgBuyNormalizedExecutionPrice) * 100
 
     // Get current funding data for all strategies
     const buyFundingData = this.fundingService.getSymbolFundingData(
@@ -671,9 +683,9 @@ export class TradeMonitor extends EventEmitter {
       const isSynchronized = this.fundingService.isFundingSynchronizedExit(buyFundingData, sellFundingData)
       
       if (isSynchronized) {
-        strategyExitResult = this.shouldExitFundingSyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDiff)
+        strategyExitResult = this.shouldExitFundingSyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDifferencePercent)
       } else {
-        strategyExitResult = this.shouldExitFundingAsyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDiff)
+        strategyExitResult = this.shouldExitFundingAsyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDifferencePercent)
       }
     } else if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
       if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
@@ -681,7 +693,7 @@ export class TradeMonitor extends EventEmitter {
         return
       }
 
-      strategyExitResult = this.shouldExitSpreadTrade(trade, currentSpreadDiff, exitSimulation)
+      strategyExitResult = this.shouldExitSpreadTrade(trade, currentSpreadDifferencePercent, exitSimulation)
     }
 
     // If strategy-specific exit condition is met, execute exit with validation
@@ -775,8 +787,8 @@ export class TradeMonitor extends EventEmitter {
 
     const avgExecutionPrice = weightedPrice / exchangeVolume
     const slippagePercent = isBuy
-      ? (avgExecutionPrice - basePrice) / basePrice
-      : (basePrice - avgExecutionPrice) / basePrice
+      ? ((avgExecutionPrice - basePrice) / basePrice) * 100
+      : ((basePrice - avgExecutionPrice) / basePrice) * 100
 
     return {
       avgExecutionPrice,
@@ -802,21 +814,29 @@ export class TradeMonitor extends EventEmitter {
       strategy: tradeResult.opportunity.strategy,  // Capture strategy type from opportunity
       entryTrade: tradeResult,
       lastUpdateTimestamp: Date.now(),
-      fees: {
-        entry: tradeResult.fees,
+      feesUsd: {
+        entry: tradeResult.feesUsd,
         exit: 0, // Will be calculated when position is closed
-        total: tradeResult.fees
+        total: tradeResult.feesUsd
       },
-      slippage: {
-        entry: tradeResult.slippage,
+      slippageUsd: {
+        entry: tradeResult.slippageUsd,
         exit: 0, // Will be calculated when position is closed
-        total: tradeResult.slippage
+        total: tradeResult.slippageUsd
       },
-      profit: 0, // Will be calculated based on current or actual exit prices
-      pnl: 0, // Will be calculated as profit - fees
-      feesPercent: 0,
-      slippagePercent: 0,
-      profitPercent: 0,
+      feesPercent: {
+        entry: tradeResult.feesPercent,
+        exit: 0, // Will be calculated when position is closed
+        total: tradeResult.feesPercent
+      },
+      slippagePercent: {
+        entry: tradeResult.slippagePercent,
+        exit: 0, // Will be calculated when position is closed
+        total: tradeResult.slippagePercent
+      },
+      deltaProfitUsd: 0,
+      deltaProfitPercent: 0,
+      pnlUsd: 0,
       pnlPercent: 0
     }
 
@@ -931,48 +951,6 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
-   * Update PnL calculations using current market prices
-   */
-  private updatePnLCalculations(trade: TrackedTrade, currentPrices: { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number }): void {
-    // Calculate exit prices
-    // const exitBuyExchangePrice = currentPrices.buyPrice  // To close a long position
-    // const exitSellExchangePrice = currentPrices.sellPrice // To close a short position
-    
-    // Calculate profit: ((Entry Price A - Exit Price A) × Volume) - ((Entry Price B - Exit Price B) × Volume)
-    const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
-    const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
-    const buyExchangeExitPrice = currentPrices.buyPrice // Exit price for the buy leg
-    const sellExchangeExitPrice = currentPrices.sellPrice  // Exit price for the sell leg
-    
-    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
-    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
-    trade.profit = buyLegProfit + sellLegProfit
-
-    // Calculate estimated exit costs
-    const buyFeeRate = this.getFeeRate(trade.opportunity.buyExchange, 'taker')
-    const sellFeeRate = this.getFeeRate(trade.opportunity.sellExchange, 'taker')
-    
-    const exitBuyFees = calculateFees({ averagePrice: buyExchangeExitPrice, quantity: trade.entryTrade.buyOrder!.quantity } as OrderInfo, buyFeeRate)
-    const exitSellFees = calculateFees({ averagePrice: sellExchangeExitPrice, quantity: trade.entryTrade.sellOrder!.quantity } as OrderInfo, sellFeeRate)
-    
-    trade.fees.exit = exitBuyFees + exitSellFees
-    trade.slippage.exit = 0 // Exit slippage is 0 for open positions (estimated exit)
-    trade.fees.total = trade.fees.entry + trade.fees.exit
-    trade.slippage.total = trade.slippage.entry + trade.slippage.exit
-
-    // Calculate total PnL: Profit - Fees
-    // Note: Slippage costs already included in averagePrices
-    trade.pnl = trade.profit - trade.fees.total
-
-    // Calculate percentages
-    const totalTradeValue = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
-    trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
-    trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
-    trade.profitPercent = (trade.profit / totalTradeValue) * 100
-    trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
-  }
-
-  /**
    * Execute exit trade with parallel order placement (includes validation for convergence/timeout exits)
    */
   private async executeExitTrade(
@@ -1045,16 +1023,27 @@ export class TradeMonitor extends EventEmitter {
         )
       ])
 
+      // Calculate fees and slippage
+      const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker')
+      const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker')
+      
+      const buyFees = calculateFees(buyOrder, buyFeeRatePercent)
+      const sellFees = calculateFees(sellOrder, sellFeeRatePercent)
+      const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
+      const sellSlippage = calculateSlippage(sellOrder, sellOrder.orderSide)
+
       // Create exit trade result
       const exitTradeResult: TradeResult = {
         id: `${trade.id}EXIT`,
-        success: true,
+        opportunity: trade.opportunity,
         buyOrder,
         sellOrder,
-        opportunity: trade.opportunity,
-        fees: this.calculateExitFees(buyOrder, sellOrder, trade),
-        slippage: this.calculateExitSlippage(buyOrder, sellOrder),
-        latencyMs: 0
+        success: true,
+        latencyMs: 0,        
+        feesUsd: buyFees.feesUsd + sellFees.feesUsd,
+        feesPercent: buyFees.feesPercent + sellFees.feesPercent,
+        slippageUsd: buySlippage.slippageUsd + sellSlippage.slippageUsd,
+        slippagePercent: buySlippage.slippagePercent + sellSlippage.slippagePercent,
       }
 
       // Update PnL calculations with actual exit prices
@@ -1070,10 +1059,10 @@ export class TradeMonitor extends EventEmitter {
 
       logger.info(`[${trade.id}] Exit trade completed`, {
         exitReason,
+        feesPercent: trade.feesPercent.total,
+        slippagePercent: trade.slippagePercent.total,
+        deltaProfitPercent: trade.deltaProfitPercent,
         pnlPercent: trade.pnlPercent,
-        profitPercent: trade.profitPercent,
-        feesPercent: trade.feesPercent,
-        slippagePercent: trade.slippagePercent,
       })
 
       this.emit('tradeClosed', trade)
@@ -1091,37 +1080,21 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
-   * Calculate exit fees for the exit trade
-   */
-  private calculateExitFees(buyOrder: OrderInfo, sellOrder: OrderInfo, trade: TrackedTrade): number {
-    const buyFeeRate = this.getFeeRate(trade.opportunity.buyExchange, 'taker')
-    const sellFeeRate = this.getFeeRate(trade.opportunity.sellExchange, 'taker')
-    
-    const buyFees = calculateFees(buyOrder, buyFeeRate)
-    const sellFees = calculateFees(sellOrder, sellFeeRate)
-    
-    return buyFees + sellFees
-  }
-
-  /**
-   * Calculate exit slippage for the exit trade
-   */
-  private calculateExitSlippage(buyOrder: OrderInfo, sellOrder: OrderInfo): number {
-    const buySlippage = calculateSlippage(buyOrder, 'SELL')
-    const sellSlippage = calculateSlippage(sellOrder, 'BUY')
-    
-    return buySlippage + sellSlippage
-  }
-
-  /**
    * Update PnL calculations with actual exit trade data
    */
   private updatePnLWithActualExit(trade: TrackedTrade, exitTrade: TradeResult): void {
     // Update costs with actual exit data
-    trade.fees.exit = exitTrade.fees
-    trade.slippage.exit = exitTrade.slippage
-    trade.fees.total = trade.fees.entry + trade.fees.exit
-    trade.slippage.total = trade.slippage.entry + trade.slippage.exit
+    trade.feesUsd.exit = exitTrade.feesUsd
+    trade.feesUsd.total = trade.feesUsd.entry + trade.feesUsd.exit
+
+    trade.feesPercent.exit = exitTrade.feesPercent
+    trade.feesPercent.total = trade.feesPercent.entry + trade.feesPercent.exit
+    
+    trade.slippageUsd.exit = exitTrade.slippageUsd
+    trade.slippageUsd.total = trade.slippageUsd.entry + trade.slippageUsd.exit
+
+    trade.slippagePercent.exit = exitTrade.slippagePercent
+    trade.slippagePercent.total = trade.slippagePercent.entry + trade.slippagePercent.exit
 
     // Calculate profit with actual exit prices
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
@@ -1129,25 +1102,22 @@ export class TradeMonitor extends EventEmitter {
     const buyExchangeExitPrice = exitTrade.buyOrder!.averagePrice // Exit price for the buy leg
     const sellExchangeExitPrice = exitTrade.sellOrder!.averagePrice  // Exit price for the sell leg
     
-    const buyLegProfit = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
-    const sellLegProfit = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
-    trade.profit = buyLegProfit + sellLegProfit
+    const orderAmountUsd = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
+
+    const buyLegDeltaUsd = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
+    const sellLegDeltaUsd = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
+    trade.deltaProfitUsd = buyLegDeltaUsd + sellLegDeltaUsd
+    trade.deltaProfitPercent = (trade.deltaProfitUsd / orderAmountUsd) * 100
 
     // Calculate final PnL: Profit - Costs
-    trade.pnl = trade.profit - trade.fees.total
-
-    // Calculate percentages
-    const totalTradeValue = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
-    trade.feesPercent = (trade.fees.total / totalTradeValue) * 100
-    trade.slippagePercent = (trade.slippage.total / totalTradeValue) * 100
-    trade.profitPercent = (trade.profit / totalTradeValue) * 100
-    trade.pnlPercent = (trade.pnl / totalTradeValue) * 100
+    trade.pnlUsd = trade.deltaProfitUsd - trade.feesUsd.total
+    trade.pnlPercent = (trade.pnlUsd / orderAmountUsd) * 100
   }
 
   /**
-   * Get fee rate for an exchange
+   * Get trading fee percent for an exchange
    */
-  private getFeeRate(exchangeId: string, feeType: 'maker' | 'taker'): number {
+  private getTradingFeeRatePercent(exchangeId: string, feeType: 'maker' | 'taker'): number {
     const exchangeConfig = config.exchanges[exchangeId as keyof typeof config.exchanges]
     if (!exchangeConfig) return 0
 
@@ -1164,13 +1134,13 @@ export class TradeMonitor extends EventEmitter {
     openTrades: number
     closedTrades: number
     errorTrades: number
-    totalPnL: number
-    avgPnL: number
-    totalProfit: number
-    totalFees: number
-    totalSlippage: number
+    totalPnLUsd: number
+    avgPnLUsd: number
+    totalDeltaProfitUsd: number
+    totalFeesUsd: number
+    totalSlippageUsd: number
     avgPnLPercent: number
-    avgProfitPercent: number
+    avgDeltaProfitPercent: number
     avgFeesPercent: number
     avgSlippagePercent: number
     exitCandidates: number
@@ -1180,28 +1150,28 @@ export class TradeMonitor extends EventEmitter {
     const closedTrades = trades.filter(t => t.status === 'closed')
     const errorTrades = trades.filter(t => t.status === 'error')
 
-    const totalPnL = trades.reduce((sum, trade) => sum + trade.pnl, 0)
-    const totalProfit = trades.reduce((sum, trade) => sum + trade.profit, 0)
-    const totalFees = trades.reduce((sum, trade) => sum + trade.fees.total, 0)
-    const totalSlippage = trades.reduce((sum, trade) => sum + trade.slippage.total, 0)
-    const avgPnL = trades.length > 0 ? totalPnL / trades.length : 0
+    const totalPnLUsd = trades.reduce((sum, trade) => sum + trade.pnlUsd, 0)
+    const totalDeltaProfitUsd = trades.reduce((sum, trade) => sum + trade.deltaProfitUsd, 0)
+    const totalFeesUsd = trades.reduce((sum, trade) => sum + trade.feesUsd.total, 0)
+    const totalSlippageUsd = trades.reduce((sum, trade) => sum + trade.slippageUsd.total, 0)
+    const avgPnLUsd = trades.length > 0 ? totalPnLUsd / trades.length : 0
     const avgPnLPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.pnlPercent, 0) / trades.length : 0
-    const avgProfitPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.profitPercent, 0) / trades.length : 0
-    const avgFeesPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.feesPercent, 0) / trades.length : 0
-    const avgSlippagePercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.slippagePercent, 0) / trades.length : 0
+    const avgDeltaProfitPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.deltaProfitPercent, 0) / trades.length : 0
+    const avgFeesPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.feesPercent.total, 0) / trades.length : 0
+    const avgSlippagePercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.slippagePercent.total, 0) / trades.length : 0
 
     return {
       totalTrades: trades.length,
       openTrades: openTrades.length,
       closedTrades: closedTrades.length,
       errorTrades: errorTrades.length,
-      totalPnL,
-      avgPnL,
-      totalProfit,
-      totalFees,
-      totalSlippage,
+      totalPnLUsd,
+      avgPnLUsd,
+      totalDeltaProfitUsd: totalDeltaProfitUsd,
+      totalFeesUsd,
+      totalSlippageUsd,
       avgPnLPercent,
-      avgProfitPercent,
+      avgDeltaProfitPercent,
       avgFeesPercent,
       avgSlippagePercent,
       exitCandidates: this.exitCandidates.size

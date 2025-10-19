@@ -255,26 +255,26 @@ export class FundingService extends EventEmitter {
   }
 
   /**
-   * Calculate cumulative funding profit until a target timestamp (excluding the target event itself)
+   * Calculate cumulative funding rate until a target timestamp (excluding the target event itself)
    */
-  public calculateCumulativeFundingProfit(
+  public calculateCumulativeFundingRate(
     targetTimestamp: number,
-    fundingEvents: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }>
+    fundingEvents: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }>
   ): number {
-    let cumulativeProfit = 0
+    let cumulativeFundingRate = 0
     
     for (const event of fundingEvents) {
       // Only count events before the target timestamp (exclude the target event itself)
       if (event.timestamp < targetTimestamp) {
-        const buyFundingImpact = -event.buyExchangeFunding
-        const sellFundingImpact = event.sellExchangeFunding
-        cumulativeProfit += buyFundingImpact + sellFundingImpact
+        const buyFundingImpact = -event.buyExchangeFundingRate
+        const sellFundingImpact = event.sellExchangeFundingRate
+        cumulativeFundingRate += buyFundingImpact + sellFundingImpact
       } else {
         break
       }
     }
     
-    return cumulativeProfit
+    return cumulativeFundingRate
   }
 
   /**
@@ -284,8 +284,8 @@ export class FundingService extends EventEmitter {
     buyFunding: ParsedFunding,
     sellFunding: ParsedFunding,
     projectionHours: number
-  ): Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> {
-    const events: Array<{ timestamp: number, buyExchangeFunding: number, sellExchangeFunding: number }> = []
+  ): Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }> {
+    const events: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }> = []
     
     // Use the first next closest funding event time as startTime
     const startTime = Math.min(buyFunding.nextFundingTimestamp, sellFunding.nextFundingTimestamp)
@@ -297,19 +297,19 @@ export class FundingService extends EventEmitter {
     const sellEvents = this.generateExchangeFundingEvents(sellFunding, startTime, endTime)
 
     // Merge and sort all events by timestamp
-    const allEvents = new Map<number, { buyExchangeFunding: number, sellExchangeFunding: number }>()
+    const allEvents = new Map<number, { buyExchangeFundingRate: number, sellExchangeFundingRate: number }>()
 
     // Add buy exchange events
     for (const event of buyEvents) {
-      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
-      existing.buyExchangeFunding = event.fundingRate
+      const existing = allEvents.get(event.timestamp) || { buyExchangeFundingRate: 0, sellExchangeFundingRate: 0 }
+      existing.buyExchangeFundingRate = event.fundingRate
       allEvents.set(event.timestamp, existing)
     }
 
     // Add sell exchange events
     for (const event of sellEvents) {
-      const existing = allEvents.get(event.timestamp) || { buyExchangeFunding: 0, sellExchangeFunding: 0 }
-      existing.sellExchangeFunding = event.fundingRate
+      const existing = allEvents.get(event.timestamp) || { buyExchangeFundingRate: 0, sellExchangeFundingRate: 0 }
+      existing.sellExchangeFundingRate = event.fundingRate
       allEvents.set(event.timestamp, existing)
     }
 
@@ -317,8 +317,8 @@ export class FundingService extends EventEmitter {
     for (const [timestamp, funding] of allEvents) {
       events.push({
         timestamp,
-        buyExchangeFunding: funding.buyExchangeFunding,
-        sellExchangeFunding: funding.sellExchangeFunding
+        buyExchangeFundingRate: funding.buyExchangeFundingRate,
+        sellExchangeFundingRate: funding.sellExchangeFundingRate
       })
     }
 

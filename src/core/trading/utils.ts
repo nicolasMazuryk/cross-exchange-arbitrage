@@ -61,31 +61,32 @@ export async function monitorOrderConfirmation(
 /**
  * Calculate slippage for an order with proper direction awareness
  */
-export function calculateSlippage(orderInfo: OrderInfo, side: OrderSide): number {
-  if (!orderInfo.expectedPrice || orderInfo.expectedPrice === 0 || orderInfo.averagePrice === 0) return 0
+export function calculateSlippage(orderInfo: OrderInfo, side: OrderSide): { slippageUsd: number, slippagePercent: number } {
+  if (!orderInfo.expectedPrice || orderInfo.expectedPrice === 0 || orderInfo.averagePrice === 0) return { slippageUsd: 0, slippagePercent: 0 }
   
   let slippagePercent: number
   
   if (side === 'BUY') {
     // For BUY orders: buying into the ask side
     // Positive slippage means we paid more than expected (bad)
-    slippagePercent = (orderInfo.averagePrice - orderInfo.expectedPrice) / orderInfo.expectedPrice
+    slippagePercent = ((orderInfo.averagePrice - orderInfo.expectedPrice) / orderInfo.expectedPrice) * 100
   } else {
     // For SELL orders: selling into the bid side
     // Positive slippage means we paid more than expected (bad)
-    slippagePercent = (orderInfo.expectedPrice - orderInfo.averagePrice) / orderInfo.averagePrice
+    slippagePercent = ((orderInfo.expectedPrice - orderInfo.averagePrice) / orderInfo.averagePrice) * 100
   }
   
-  const slippageValue = orderInfo.averagePrice * orderInfo.quantity * slippagePercent
+  const slippageUsd = orderInfo.averagePrice * orderInfo.quantity * (slippagePercent / 100)
   
-  return slippageValue
+  return { slippageUsd, slippagePercent }
 }
 
 /**
  * Calculate fees for an order
  */
-export function calculateFees(orderInfo: OrderInfo, feeRate: number): number {
-  return orderInfo.averagePrice * orderInfo.quantity * feeRate
+export function calculateFees(orderInfo: OrderInfo, feePercent: number): { feesUsd: number, feesPercent: number } {
+  const feesUsd = orderInfo.averagePrice * orderInfo.quantity * (feePercent / 100)
+  return { feesUsd, feesPercent: feePercent }
 }
 
 /**
