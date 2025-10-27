@@ -518,7 +518,8 @@ export class ArbitrageEngine extends EventEmitter {
     const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, this.projectionHours)
     const fundingRateDifferencePercent = (-fundingEvents[0].buyExchangeFundingRate + fundingEvents[0].sellExchangeFundingRate) * 100
     
-    if (fundingRateDifferencePercent === profitEstimate.fundingProfitPercent) {
+    // TEMPORARY FOR DEBUGGING
+    if (fundingRateDifferencePercent !== profitEstimate.fundingProfitPercent) {
       console.log('fundingRateDifferencePercent === profitEstimate.fundingProfitPercent')
     }
     

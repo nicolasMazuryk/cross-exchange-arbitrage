@@ -106,10 +106,10 @@ funding:
 strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
-    enabled: false  # Enable/disable funding arbitrage strategy
+    enabled: true  # Enable/disable funding arbitrage strategy
     windowStart: 300  # Start execution window in seconds before next funding event
     windowEnd: 30  # End execution window in seconds before next funding event
-    minFundingProfitPercent: -0.20  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
+    minFundingProfitPercent: -0.10  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
@@ -118,7 +118,7 @@ strategy:
   
   # Spread Arbitrage Strategy Configuration
   spread:
-    enabled: true  # Enable/disable spread arbitrage strategy
+    enabled: false  # Enable/disable spread arbitrage strategy
     windowStart: 300  # Start execution window in seconds after previous funding event
     windowEnd: 60  # End execution window in seconds before next funding event
     windowEndClose: 60  # Close execution window in seconds before next funding event (for exits)
