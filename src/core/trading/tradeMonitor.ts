@@ -6,11 +6,15 @@ import { MarketMetadataService } from '../markets/marketMetadataService'
 import { OrderInfo } from '../../types/account'
 import { OrderbookManager, TopOfBook, OrderBook, OrderBookLevel } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
+import { TraceContext } from '../../utils/traceContext'
 import config, { StrategyType } from '../../utils/config'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
 import { FundingService } from '../funding/fundingService'
 import { ParsedFunding } from '../funding/types'
+import { State } from '../state/stateService'
+
+const logger = new Logger('trade-monitor')
 
 // Import DepthSimulationResult type from arbitrageEngine
 interface DepthSimulationResult {
@@ -139,6 +143,8 @@ export class TradeMonitor extends EventEmitter {
   private lastExitCleanupTime: number
   // Race condition prevention
   private readonly processingTrades: Set<string> = new Set()
+  // State persistence
+  private readonly state: State
   // Strategy-specific exit configuration
   private readonly fundingStrategyEnabled: boolean
   private readonly fundingStrategyWindowStart: number
@@ -160,7 +166,8 @@ export class TradeMonitor extends EventEmitter {
     orderbookManager: OrderbookManager,
     marketMetadataServices: Map<string, MarketMetadataService>,
     fundingService: FundingService,
-    config: MonitorConfig
+    config: MonitorConfig,
+    state: State
   ) {
     super()
     this.accountStateManager = accountStateManager
@@ -170,6 +177,8 @@ export class TradeMonitor extends EventEmitter {
     this.fundingService = fundingService
     this.config = config
     this.lastExitCleanupTime = Date.now()
+    // Initialize state service
+    this.state = state
     // Strategy exit configuration
     this.fundingStrategyEnabled = config.strategy.funding.enabled
     this.fundingStrategyWindowStart = config.strategy.funding.windowStart
@@ -185,7 +194,7 @@ export class TradeMonitor extends EventEmitter {
     this.spreadConvergenceThresholdPercent = config.strategy.spread.convergenceThresholdPercent
     this.spreadWideningThresholdPercent = config.strategy.spread.spreadWideningThresholdPercent
 
-    logger.info('TradeMonitor initialized')
+    logger.info({ msg: 'TradeMonitor initialized', function: 'TradeMonitor.constructor' })
   }
 
   /**
@@ -254,7 +263,8 @@ export class TradeMonitor extends EventEmitter {
 
     for (const key of keysToRemove) {
       this.exitCandidates.delete(key)
-      logger.debug(`Cleaned up stale exit candidate: ${key}`)
+      logger.trace({ msg: 'Cleaned up stale exit candidate', function: 'TradeMonitor.cleanupStaleExitCandidates',
+        candidateKey: key, })
     }
 
     this.lastExitCleanupTime = now
@@ -294,7 +304,10 @@ export class TradeMonitor extends EventEmitter {
       }
       this.exitCandidates.set(candidateKey, newCandidate)
       
-      logger.debug(`New exit candidate detected: ${candidateKey}, convergence: ${convergencePercent.toFixed(3)}%, pnl: ${pnlPercent.toFixed(3)}%`)
+      logger.trace({ msg: 'New exit candidate detected', function: 'TradeMonitor.validateExitPersistence',
+        candidateKey,
+        convergencePercent,
+        pnlPercent, })
       return { isValid: false, reason: 'New exit candidate - waiting for persistence', candidate: newCandidate }
     }
 
@@ -304,13 +317,18 @@ export class TradeMonitor extends EventEmitter {
     const sellPriceChangeRatio = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
 
     if (convergenceChangeRatio > 0.2) {
-      logger.info(`Candidate ${candidateKey} convergence decreased, resetting`)
+      logger.trace({ msg: 'Exit candidate convergence decreased, resetting', function: 'TradeMonitor.validateExitPersistence',
+        candidateKey,
+        convergenceChangeRatio, })
       this.exitCandidates.delete(candidateKey)
       return { isValid: false, reason: 'Convergence decreased significantly' }
     }
     // If prices changed significantly, reset the candidate
     if (buyPriceChangeRatio > 0.01 || sellPriceChangeRatio > 0.01) { // 1% price change threshold
-      logger.info(`Exit candidate ${candidateKey} price changed significantly, resetting`)
+      logger.trace({ msg: 'Exit candidate price changed significantly, resetting', function: 'TradeMonitor.validateExitPersistence',
+        candidateKey,
+        buyPriceChangeRatio,
+        sellPriceChangeRatio, })
       this.exitCandidates.delete(candidateKey)
       return { isValid: false, reason: 'Price changed significantly' }
     }
@@ -336,28 +354,43 @@ export class TradeMonitor extends EventEmitter {
     const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots
 
     if (hasMinDuration && hasMinSnapshots) {
-      logger.info(`Exit condition validated: ${candidateKey}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, convergence: ${convergencePercent.toFixed(3)}%, pnl: ${pnlPercent.toFixed(3)}%`)
+      logger.debug({ msg: 'Exit condition validated', function: 'TradeMonitor.validateExitPersistence',
+        candidateKey,
+        duration: persistenceDuration,
+        buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
+        sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
+        convergencePercent: convergencePercent.toFixed(3),
+        pnlPercent: pnlPercent.toFixed(3), })
       this.exitCandidates.delete(candidateKey) // Remove after validation
       return { isValid: true, candidate: existingCandidate }
     }
 
-    logger.debug(`Exit candidate ${candidateKey} still building persistence: duration=${persistenceDuration}ms, buySnapshots=${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots=${existingCandidate.sellExchangeConsecutiveSnapshots}`)
+    logger.trace({ msg: 'Exit candidate still building persistence', function: 'TradeMonitor.validateExitPersistence',
+      candidateKey,
+      duration: persistenceDuration,
+      buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
+      sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots, })
     return { isValid: false, reason: 'Building exit persistence', candidate: existingCandidate }
   }
 
   /**
    * Start monitoring trades
    */
-  start(): void {
+  async start(): Promise<void> {
     if (this.isRunning) {
-      logger.warn('TradeMonitor is already running')
+      logger.warn({ msg: 'TradeMonitor is already running', function: 'TradeMonitor.start' })
       return
     }
+
+    // Restore open trades from Redis
+    await this.restoreState()
 
     this.isRunning = true
     // Setup real-time orderbook event listeners
     this.setupOrderbookEventListeners()
-    logger.info('TradeMonitor started with real-time orderbook monitoring')
+
+    logger.info({ msg: 'TradeMonitor started with real-time orderbook monitoring', function: 'TradeMonitor.start',
+      openTrades: this.trackedTrades })
   }
 
   /**
@@ -369,7 +402,7 @@ export class TradeMonitor extends EventEmitter {
     this.orderbookManager.removeAllListeners('topOfBookUpdate')
     // Clear processing trades set
     this.processingTrades.clear()
-    logger.info('TradeMonitor stopped')
+    logger.info({ msg: 'TradeMonitor stopped', function: 'TradeMonitor.stop' })
   }
 
   /**
@@ -378,7 +411,9 @@ export class TradeMonitor extends EventEmitter {
   private setupOrderbookEventListeners(): void {
     // Listen for top of book updates from orderbook manager
     this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
-      this.handleOrderbookUpdate(topOfBook)
+      TraceContext.runWithExistingTrace(topOfBook.traceId, 'trade-monitor', () => {
+        this.handleOrderbookUpdate(topOfBook)
+      })
     })
   }
 
@@ -390,34 +425,48 @@ export class TradeMonitor extends EventEmitter {
 
     const { exchange, symbol } = topOfBook
     
-    // Check if this update affects any open trades
-    const affectedTrades = this.getTradesForSymbol(exchange, symbol)
-    
-    if (affectedTrades.length > 0) {
-      logger.debug(`Orderbook update for ${exchange}:${symbol} affects ${affectedTrades.length} trades`)
+    try {
+      // Check if this update affects any open trades
+      const affectedTrades = this.getTradesForSymbol(exchange, symbol)
       
-      // Process each affected trade
-      for (const trade of affectedTrades) {
-        // Prevent race conditions by checking if trade is already being processed
-        if (this.processingTrades.has(trade.id)) {
-          logger.debug(`[${trade.id}] Trade already being processed, skipping`)
-          continue
-        }
+      if (affectedTrades.length > 0) {
+        logger.trace({ msg: 'Orderbook update affects trades', function: 'TradeMonitor.handleOrderbookUpdate',
+          exchange,
+          symbol,
+          affectedTrades: affectedTrades.length })
+        
+        // Process each affected trade
+        for (const trade of affectedTrades) {
+          // Prevent race conditions by checking if trade is already being processed
+          if (this.processingTrades.has(trade.id)) {
+            logger.trace({ msg: 'Trade already being processed, skipping', function: 'TradeMonitor.handleOrderbookUpdate',
+              tradeId: trade.id,
+              exchange,
+              symbol, })
+            continue
+          }
 
-        try {
-          this.processingTrades.add(trade.id)
-          this.processTradeExitConditions(trade, exchange)
-        } catch (error) {
-          logger.error(`[${trade.id}] Error processing trade exit conditions`, {
-            error: error instanceof Error ? error.message : String(error)
-          })
-        } finally {
-          this.processingTrades.delete(trade.id)
+          try {
+            this.processingTrades.add(trade.id)
+            this.processTradeExitConditions(trade, exchange)
+          } catch (error) {
+            logger.error({ msg: 'Error processing trade exit conditions', function: 'TradeMonitor.handleOrderbookUpdate',
+              tradeId: trade.id,
+              exchange,
+              symbol,
+              error })
+          } finally {
+            this.processingTrades.delete(trade.id)
+          }
         }
       }
+    } catch (error) {
+      logger.error({ msg: 'Error handling orderbook update', function: 'TradeMonitor.handleOrderbookUpdate',
+        exchange,
+        symbol,
+        error })
     }
   }
-
 
   /**
    * Check if current time is within funding strategy execution window
@@ -620,7 +669,8 @@ export class TradeMonitor extends EventEmitter {
     // Simulate exit slippage for current orderbook state
     const exitSimulation = this.simulateExitSlippage(trade)
     if (!exitSimulation) {
-      logger.warn(`[${trade.id}] Could not simulate exit slippage`)
+      logger.warn({ msg: 'Could not simulate exit slippage', function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id, })
       return
     }
     
@@ -651,13 +701,15 @@ export class TradeMonitor extends EventEmitter {
     )
 
     if (!buyFundingData || !sellFundingData) {
-      logger.warn(`[${trade.id}] Cannot check exit: funding data unavailable`)
+      logger.warn({ msg: 'Cannot check exit: funding data unavailable', function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id, })
       return
     }
 
     // Validate funding data is not outdated
     if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
-      logger.warn(`[${trade.id}] Outdated funding data, skipping exit check`)
+      logger.warn({ msg: 'Outdated funding data, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id, })
       return
     }
 
@@ -672,13 +724,16 @@ export class TradeMonitor extends EventEmitter {
     if (trade.strategy === 'funding' && this.fundingStrategyEnabled) {
       // Check if target funding event has occurred
       if (now < trade.opportunity.targetFundingTimestamp) {
-        logger.debug(`[${trade.id}] Target funding event not reached yet (${Math.round((trade.opportunity.targetFundingTimestamp - now) / 1000)}s remaining), skipping exit check`)
+        logger.trace({ msg: 'Target funding event not reached yet, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+          secondsRemaining: Math.round((trade.opportunity.targetFundingTimestamp - now) / 1000) })
         return
       }
 
       // Check if within funding window
       if (!this.isWithinFundingWindow(nextFundingTimestamp)) {
-        logger.debug(`[${trade.id}] Not within funding window, skipping exit check`)
+        logger.trace({ msg: 'Not within funding window, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id, })
         return
       }
 
@@ -692,7 +747,8 @@ export class TradeMonitor extends EventEmitter {
       }
     } else if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
       if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
-        logger.debug(`[${trade.id}] Not within spread window, skipping exit check`)
+        logger.trace({ msg: 'Not within spread window, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id, })
         return
       }
 
@@ -701,7 +757,9 @@ export class TradeMonitor extends EventEmitter {
 
     // If strategy-specific exit condition is met, execute exit with validation
     if (strategyExitResult.shouldExit) {
-      logger.info(`[${trade.id}] Strategy exit condition met: ${strategyExitResult.reason}`)
+      logger.info({ msg: 'Strategy exit condition met', function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id,
+        reason: strategyExitResult.reason, })
       await this.executeExitTrade(trade, exitSimulation, 'convergence', updatingExchange)
     }
   }
@@ -754,9 +812,11 @@ export class TradeMonitor extends EventEmitter {
         totalSlippagePercent: buyExitSimulation.slippagePercent + sellExitSimulation.slippagePercent
       }
     } catch (error) {
-      logger.error(`[${trade.id}] Error simulating exit slippage`, {
-        error: error instanceof Error ? error.message : String(error)
-      })
+      logger.error({ msg: 'Error simulating exit slippage', function: 'TradeMonitor.simulateExitSlippage',
+        tradeId: trade.id,
+        buyExchange: trade.opportunity.buyExchange,
+        sellExchange: trade.opportunity.sellExchange,
+        error })
       return null
     }
   }
@@ -785,7 +845,15 @@ export class TradeMonitor extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
-      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: Remaining Requested Volume ${remainingVolume} ($${remainingVolume * basePrice}) - Order Volume ${exchangeVolume} ($${exchangeVolume * basePrice})`)
+      logger.warn({ msg: 'Orderbook cannot fill full requested volume', function: 'TradeMonitor.simulateSlippage',
+        exchange,
+        side: isBuy ? 'BUY' : 'SELL',
+        exchangeSymbol,
+        requestedVolume: exchangeVolume,
+        remainingVolume,
+        basePrice,
+        requestedUsd: exchangeVolume * basePrice,
+        remainingUsd: remainingVolume * basePrice, })
     }
 
     const avgExecutionPrice = weightedPrice / exchangeVolume
@@ -805,7 +873,8 @@ export class TradeMonitor extends EventEmitter {
    */
   addTrade(tradeResult: TradeResult): void {
     if (!tradeResult.success || !tradeResult.buyOrder || !tradeResult.sellOrder) {
-      logger.warn(`Cannot monitor failed trade: ${tradeResult.id}`)
+      logger.error({ msg: 'Cannot monitor failed trade', function: 'TradeMonitor.addTrade',
+        tradeId: tradeResult.id })
       return
     }
 
@@ -845,12 +914,16 @@ export class TradeMonitor extends EventEmitter {
 
     this.trackedTrades.set(tradeResult.id, trackedTrade)
     
-    logger.info(`[${tradeResult.id}] Trade added to monitoring`, {
+    logger.info({ msg: 'Trade added to monitoring', function: 'TradeMonitor.addTrade',
       id: trackedTrade.id,
-      entryTrade: trackedTrade.entryTrade,
-    })
+      entryTrade: trackedTrade.entryTrade, })
 
-    this.emit('tradeAdded', trackedTrade)
+    // Save trade to Redis
+    this.state.saveTrackedTrade(trackedTrade).catch(error => {
+      logger.error({ msg: 'Failed to save trade to Redis', function: 'TradeMonitor.addTrade',
+        tradeId: trackedTrade.id,
+        error })
+    })
   }
 
   /**
@@ -873,11 +946,15 @@ export class TradeMonitor extends EventEmitter {
   async closeTrade(tradeId: string, reason: 'manual' | 'error' = 'manual'): Promise<boolean> {
     const trade = this.trackedTrades.get(tradeId)
     if (!trade || trade.status !== 'open') {
-      logger.warn(`Cannot close trade ${tradeId}: not found or already closed`)
+      logger.warn({ msg: 'Cannot close trade - not found or already closed', function: 'TradeMonitor.closeTrade',
+        tradeId,
+        status: trade?.status })
       return false
     }
 
-    logger.info(`[${tradeId}] Manually closing trade`, { reason })
+    logger.info({ msg: 'Manually closing trade', function: 'TradeMonitor.closeTrade',
+      tradeId,
+      reason })
 
     // Clear any pending exit candidates for this trade
     this.clearExitCandidatesForTrade(tradeId)
@@ -886,16 +963,17 @@ export class TradeMonitor extends EventEmitter {
       // Simulate exit slippage for current orderbook state
       const exitSimulation = this.simulateExitSlippage(trade)
       if (!exitSimulation) {
-        logger.warn(`[${trade.id}] Could not simulate exit slippage`)
+        logger.warn({ msg: 'Could not simulate exit slippage', function: 'TradeMonitor.closeTrade',
+          tradeId })
         return false
       }
 
       await this.executeExitTrade(trade, exitSimulation, 'manual')
       return true
     } catch (error) {
-      logger.error(`[${tradeId}] Failed to close trade`, {
-        error: error instanceof Error ? error.message : String(error)
-      })
+      logger.error({ msg: 'Failed to close trade', function: 'TradeMonitor.closeTrade',
+        tradeId,
+        error })
       return false
     }
   }
@@ -913,43 +991,52 @@ export class TradeMonitor extends EventEmitter {
     
     for (const key of keysToRemove) {
       this.exitCandidates.delete(key)
-      logger.debug(`Cleared exit candidate: ${key}`)
+      logger.trace({ msg: 'Cleared exit candidate', function: 'TradeMonitor.clearExitCandidatesForTrade',
+        candidateKey: key,
+        tradeId, })
     }
 
     // Also clear from processing trades set to prevent race conditions
     this.processingTrades.delete(tradeId)
   }
 
-
-
   /**
    * Get current orderbook prices for a trade with normalization
    */
   private getCurrentOrderbookPrices(opportunity: ArbitrageOpportunity): { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number } {
-    const buyTopOfBook = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)
-    const sellTopOfBook = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)
-    
-    if (!buyTopOfBook || !sellTopOfBook) {
-      throw new Error(`No orderbook data available for ${opportunity.buyExchange} ${opportunity.buyExchangeSymbol} or ${opportunity.sellExchange} ${opportunity.sellExchangeSymbol}`)
-    }
-    
-    // Get market metadata services for normalization
-    const buyMetadataService = this.marketMetadataServices.get(opportunity.buyExchange)
-    const sellMetadataService = this.marketMetadataServices.get(opportunity.sellExchange)
-    
-    if (!buyMetadataService || !sellMetadataService) {
-      throw new Error('Market metadata services not available')
-    }
-    
-    // Normalize prices to base scale for comparison
-    const normalizedBuyPrice = buyMetadataService.normalizePrice(buyTopOfBook.bestBid.price, opportunity.buyExchangeSymbol)
-    const normalizedSellPrice = sellMetadataService.normalizePrice(sellTopOfBook.bestAsk.price, opportunity.sellExchangeSymbol)
-    
-    return {
-      buyPrice: buyTopOfBook.bestBid.price,
-      sellPrice: sellTopOfBook.bestAsk.price,
-      normalizedBuyPrice,
-      normalizedSellPrice
+    try {
+      const buyTopOfBook = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)
+      const sellTopOfBook = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)
+      
+      if (!buyTopOfBook || !sellTopOfBook) {
+        throw new Error(`No orderbook data available for ${opportunity.buyExchange} ${opportunity.buyExchangeSymbol} or ${opportunity.sellExchange} ${opportunity.sellExchangeSymbol}`)
+      }
+      
+      // Get market metadata services for normalization
+      const buyMetadataService = this.marketMetadataServices.get(opportunity.buyExchange)
+      const sellMetadataService = this.marketMetadataServices.get(opportunity.sellExchange)
+      
+      if (!buyMetadataService || !sellMetadataService) {
+        throw new Error('Market metadata services not available')
+      }
+      
+      // Normalize prices to base scale for comparison
+      const normalizedBuyPrice = buyMetadataService.normalizePrice(buyTopOfBook.bestBid.price, opportunity.buyExchangeSymbol)
+      const normalizedSellPrice = sellMetadataService.normalizePrice(sellTopOfBook.bestAsk.price, opportunity.sellExchangeSymbol)
+      
+      return {
+        buyPrice: buyTopOfBook.bestBid.price,
+        sellPrice: sellTopOfBook.bestAsk.price,
+        normalizedBuyPrice,
+        normalizedSellPrice
+      }
+    } catch (error) {
+      logger.error({ msg: 'Failed to get current orderbook prices', function: 'TradeMonitor.getCurrentOrderbookPrices',
+        normalizedPair: opportunity.normalizedPair,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange,
+        error })
+      throw error
     }
   }
 
@@ -981,12 +1068,16 @@ export class TradeMonitor extends EventEmitter {
       )
       
       if (!validation.isValid) {
-        logger.debug(`[${trade.id}] Exit validation failed: ${validation.reason}`)
+        logger.trace({ msg: 'Exit validation failed', function: 'TradeMonitor.executeExitTrade',
+          tradeId: trade.id,
+          reason: validation.reason })
         return
       }
     }
 
-    logger.info(`[${trade.id}] Executing exit trade`, { exitReason })
+    logger.debug({ msg: 'Executing exit trade', function: 'TradeMonitor.executeExitTrade',
+      tradeId: trade.id,
+      exitReason })
 
     try {
       // Execute reverse trades in parallel
@@ -1060,25 +1151,42 @@ export class TradeMonitor extends EventEmitter {
       // Clear any pending exit candidates for this trade
       this.clearExitCandidatesForTrade(trade.id)
 
-      logger.info(`[${trade.id}] Exit trade completed`, {
-        exitReason,
-        feesPercent: trade.feesPercent.total,
-        slippagePercent: trade.slippagePercent.total,
-        deltaProfitPercent: trade.deltaProfitPercent,
-        pnlPercent: trade.pnlPercent,
+      // Update trade in Redis with closed status
+      this.state.updateTrackedTrade(trade).catch(error => {
+        logger.error({ msg: 'Failed to update trade in Redis', function: 'TradeMonitor.executeExitTrade',
+          tradeId: trade.id,
+          error })
       })
 
-      this.emit('tradeClosed', trade)
+      logger.info({ msg: 'Exit trade completed', function: 'TradeMonitor.executeExitTrade',
+        tradeId: trade.id,
+        normalizedPair: trade.opportunity.normalizedPair,
+        buyExchange: trade.opportunity.buyExchange,
+        sellExchange: trade.opportunity.sellExchange,
+        exitReason,
+        feesPercent: trade.feesPercent.total.toFixed(3),
+        slippagePercent: trade.slippagePercent.total.toFixed(3),
+        deltaProfitPercent: trade.deltaProfitPercent.toFixed(3),
+        pnlPercent: trade.pnlPercent.toFixed(3), })
 
     } catch (error) {
-      logger.error(`[${trade.id}] Exit trade failed`, {
-        error: error instanceof Error ? error.message : String(error),
-        exitReason
-      })
+      logger.error({ msg: 'Exit trade failed', function: 'TradeMonitor.executeExitTrade',
+        tradeId: trade.id,
+        normalizedPair: trade.opportunity.normalizedPair,
+        buyExchange: trade.opportunity.buyExchange,
+        sellExchange: trade.opportunity.sellExchange,
+        exitReason,
+        error })
 
       trade.status = 'error'
       trade.exitReason = 'error'
-      this.emit('tradeError', { trade, error })
+      
+      // Update trade in Redis with error status
+      this.state.updateTrackedTrade(trade).catch(error => {
+        logger.error({ msg: 'Failed to update trade in Redis on error', function: 'TradeMonitor.executeExitTrade',
+          tradeId: trade.id,
+          error })
+      })
     }
   }
 
@@ -1126,8 +1234,6 @@ export class TradeMonitor extends EventEmitter {
 
     return exchangeConfig.fees[feeType]
   }
-
-
 
   /**
    * Get monitoring statistics
@@ -1178,6 +1284,36 @@ export class TradeMonitor extends EventEmitter {
       avgFeesPercent,
       avgSlippagePercent,
       exitCandidates: this.exitCandidates.size
+    }
+  }
+
+  /**
+   * Restore state from Redis
+   */
+  private async restoreState(): Promise<void> {
+    if (!this.state.isRedisConnected()) {
+      logger.error({ msg: 'Redis not connected, skipping state restoration', function: 'TradeMonitor.restoreState' })
+      return
+    }
+
+    try {
+      const restoredTrades = await this.state.loadOpenTrackedTrades()
+
+      if (restoredTrades.length === 0) {
+        logger.debug({ msg: 'No open trades to restore from Redis', function: 'TradeMonitor.restoreState' })
+        return
+      }
+
+      // Restore open trades to memory
+      for (const trade of restoredTrades) {
+        this.trackedTrades.set(trade.id, trade)
+      }
+
+      logger.info({ msg: 'State restored from Redis', function: 'TradeMonitor.restoreState',
+        openTrades: restoredTrades.length })
+    } catch (error) {
+      logger.error({ msg: 'Failed to restore state from Redis', function: 'TradeMonitor.restoreState',
+        error })
     }
   }
 } 

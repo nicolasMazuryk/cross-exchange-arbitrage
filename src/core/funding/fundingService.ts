@@ -3,9 +3,11 @@ import { MarketMetadataService } from '../markets/marketMetadataService'
 import { ParsedFunding } from './types'
 import { closeBrowser } from '../../utils/browser'
 import { RestClientInterface } from '../../adapters/rest/types'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
+import { TraceContext } from '../../utils/traceContext'
 import { FundingConfig } from './types'
 
+const logger = new Logger('funding-service')
 
 export class FundingService extends EventEmitter {
   private readonly exchangeAdapters: Map<string, RestClientInterface>
@@ -31,60 +33,134 @@ export class FundingService extends EventEmitter {
    * Start the funding service
    */
   public start(): void {
-    if (this.isRunning) {
-      logger.warn('FundingService is already running')
-      return
+    try {
+      if (this.isRunning) {
+        logger.warn({
+          msg: 'FundingService is already running',
+          function: 'FundingService.start'
+        })
+        return
+      }
+
+      this.isRunning = true
+      logger.info({
+        msg: 'Starting FundingService',
+        function: 'FundingService.start',
+        exchangeCount: this.exchangeAdapters.size,
+        fetchIntervalSeconds: this.fundingConfig.fetchIntervalMs / 1000
+      })
+
+      const fetchWithTrace = async (contextName: string) => {
+        try {
+          TraceContext.runWithTrace(contextName, async () => {
+            await this.fetchAllFundingRates()
+          })
+        } catch (error) {
+          logger.error({
+            msg: `Error fetching funding rates during "${contextName}"`,
+            function: 'FundingService.start',
+            error
+          })
+        }
+      }
+
+      // Initial fetch
+      fetchWithTrace('funding-fetch-initial')
+
+      // Set up periodic fetching
+      this.fetchInterval = setInterval(() => {
+        fetchWithTrace('funding-fetch-periodic')
+      }, this.fundingConfig.fetchIntervalMs)
+
+      logger.info({
+        msg: 'FundingService started successfully',
+        function: 'FundingService.start',
+        intervalMs: this.fundingConfig.fetchIntervalMs
+      })
+    } catch (error) {
+      logger.fatal({
+        msg: 'Failed to start FundingService',
+        function: 'FundingService.start',
+        error,
+      })
+      throw error
     }
-
-    this.isRunning = true
-    logger.info('Starting FundingService...')
-
-    // Initial fetch
-    this.fetchAllFundingRates()
-
-    // Set up periodic fetching
-    this.fetchInterval = setInterval(() => {
-      this.fetchAllFundingRates()
-    }, this.fundingConfig.fetchIntervalMs)
-
-    logger.info(`FundingService started with ${this.fundingConfig.fetchIntervalMs / 1000}s interval`)
   }
 
   /**
    * Stop the funding service
    */
   public stop(): void {
-    if (!this.isRunning) {
-      logger.warn('FundingService is not running')
-      return
+    try {
+      if (!this.isRunning) {
+        logger.warn({
+          msg: 'FundingService is not running',
+          function: 'FundingService.stop'
+        })
+        return
+      }
+
+      this.isRunning = false
+      if (this.fetchInterval) {
+        clearInterval(this.fetchInterval)
+        this.fetchInterval = undefined
+      }
+
+      // Close browser resources
+      closeBrowser().catch(error => {
+        logger.error({
+          msg: 'Error closing browser resources during FundingService stop',
+          function: 'FundingService.stop',
+          error,
+        })
+      })
+
+      logger.info({
+        msg: 'FundingService stopped successfully',
+        function: 'FundingService.stop'
+      })
+    } catch (error) {
+      logger.error({
+        msg: 'Error stopping FundingService',
+        function: 'FundingService.stop',
+        error,
+      })
+      throw error
     }
-
-    this.isRunning = false
-    if (this.fetchInterval) {
-      clearInterval(this.fetchInterval)
-      this.fetchInterval = undefined
-    }
-
-    // Close browser resources
-    closeBrowser()
-
-    logger.info('FundingService stopped')
   }
 
   /**
    * Fetch funding rates from all supported exchanges
    */
   private async fetchAllFundingRates(): Promise<void> {
-    const promises = Array.from(this.exchangeAdapters.keys()).map(exchangeName => 
-      this.fetchExchangeFundingRates(exchangeName)
-    )
-
     try {
-      await Promise.allSettled(promises)
+      const promises = Array.from(this.exchangeAdapters.keys()).map(exchangeName => 
+        this.fetchExchangeFundingRates(exchangeName)
+      )
+
+      const results = await Promise.allSettled(promises)
+      
+      // Log any failed fetches
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          const exchangeName = Array.from(this.exchangeAdapters.keys())[index]
+          logger.error({
+            msg: 'Failed to fetch funding rates for exchange',
+            function: 'FundingService.fetchAllFundingRates',
+            exchange: exchangeName,
+            error: result.reason,
+          })
+        }
+      })
 
       this.emit('fundingDataUpdated', this.state)
     } catch (error) {
-      logger.error('Error in fetchAllFundingRates:', error)
+      logger.error({
+        msg: 'Error fetching funding rates from all exchanges',
+        function: 'FundingService.fetchAllFundingRates',
+        exchangeCount: this.exchangeAdapters.size,
+        error,
+      })
     }
   }
 
@@ -94,21 +170,42 @@ export class FundingService extends EventEmitter {
   private compareSymbolsConsistency(exchangeName: string): void {
     const marketMetadataService = this.marketMetadataServices.get(exchangeName)
     const fundingData = this.state.get(exchangeName)
-    
+
     if (!marketMetadataService || !fundingData) return
-    
+
     const marketSymbols = marketMetadataService.getAvailableSymbols()
     const fundingSymbols = Array.from(fundingData.keys())
-    
+
     if (fundingSymbols.length !== marketSymbols.length) {
       const fundingOnly = fundingSymbols.filter(symbol => !marketSymbols.includes(symbol))
       const marketOnly = marketSymbols.filter(symbol => !fundingSymbols.includes(symbol))
-      
-      logger.warn(`[${exchangeName}] Symbol count mismatch: funding=${fundingSymbols.length}, market=${marketSymbols.length}`)
-      if (fundingOnly.length > 0) logger.warn(`[${exchangeName}] Funding only: ${fundingOnly.join(', ')}`)
-      if (marketOnly.length > 0) logger.warn(`[${exchangeName}] Market only: ${marketOnly.join(', ')}`)
 
-      logger.debug(``)
+      logger.warn({
+        msg: 'Symbol count mismatch',
+        function: 'FundingService.compareSymbolsConsistency',
+        exchange: exchangeName,
+        fundingCount: fundingSymbols.length,
+        marketCount: marketSymbols.length,
+        fundingOnlyCount: fundingOnly.length,
+        marketOnlyCount: marketOnly.length
+      })
+
+      if (fundingOnly.length > 0) {
+        logger.warn({
+          msg: 'Funding symbols not in market metadata',
+          function: 'FundingService.compareSymbolsConsistency',
+          exchange: exchangeName,
+          fundingOnly
+        })
+      }
+      if (marketOnly.length > 0) {
+        logger.warn({
+          msg: 'Market metadata symbols not in funding',
+          function: 'FundingService.compareSymbolsConsistency',
+          exchange: exchangeName,
+          marketOnly
+        })
+      }
     }
   }
 
@@ -117,26 +214,44 @@ export class FundingService extends EventEmitter {
    */
   private async fetchExchangeFundingRates(exchangeName: string): Promise<void> {
     try {
-      logger.debug(`Fetching funding rates for ${exchangeName}...`)
-      
+      logger.trace({
+        msg: 'Fetching funding rates',
+        function: 'FundingService.fetchExchangeFundingRates',
+        exchange: exchangeName
+      })
+
       const exchangeAdapter = this.exchangeAdapters.get(exchangeName)
       if (!exchangeAdapter || !exchangeAdapter.fetchFundingData) {
-        logger.warn(`No funding data adapter available for ${exchangeName}`)
+        logger.error({
+          msg: 'No funding data adapter available',
+          function: 'FundingService.fetchExchangeFundingRates',
+          exchange: exchangeName
+        })
         return
       }
 
       // Fetch and parse funding data using the exchange adapter
       const parsedFunding = await exchangeAdapter.fetchFundingData()
-      
+
       // Update state
       this.state.set(exchangeName, parsedFunding)
 
-      logger.info(`[${exchangeName}] Fetched ${parsedFunding.size} funding rates symbols`)
+      logger.debug({
+        msg: 'Fetched funding rates',
+        function: 'FundingService.fetchExchangeFundingRates',
+        exchange: exchangeName,
+        symbolCount: parsedFunding.size
+      })
 
       // this.compareSymbolsConsistency(exchangeName)
     } catch (error) {
-      logger.error(`[${exchangeName}] Error fetching funding rates:`, error)
-      
+      logger.error({
+        msg: 'Error fetching funding rates',
+        function: 'FundingService.fetchExchangeFundingRates',
+        exchange: exchangeName,
+        error
+      })
+
       // Update state with empty map on error
       this.state.set(exchangeName, new Map())
     }
@@ -150,12 +265,12 @@ export class FundingService extends EventEmitter {
     if (!exchangeFunding || exchangeFunding.size === 0) {
       return undefined
     }
-    
+
     const symbolFunding = exchangeFunding.get(symbol)
     if (!symbolFunding) {
       return undefined
     }
-    
+
     return symbolFunding
   }
 
@@ -180,24 +295,24 @@ export class FundingService extends EventEmitter {
   } {
     const comparison = new Map<string, { fundingOnly: string[], marketOnly: string[], matched: string[] }>()
     let report = '\n=== Symbol Comparison Report ===\n'
-    
+
     for (const [exchangeName, marketMetadataService] of this.marketMetadataServices) {
       const fundingData = this.state.get(exchangeName)
       const marketSymbols = marketMetadataService.getAvailableSymbols()
       const fundingSymbols = fundingData ? Array.from(fundingData.keys()) : []
-      
+
       const fundingOnly = fundingSymbols.filter(symbol => !marketSymbols.includes(symbol))
       const marketOnly = marketSymbols.filter(symbol => !fundingSymbols.includes(symbol))
       const matched = fundingSymbols.filter(symbol => marketSymbols.includes(symbol))
-      
+
       comparison.set(exchangeName, { fundingOnly, marketOnly, matched })
-      
+
       report += `\n[${exchangeName}]:\n`
       report += `  Matched: ${matched.length}, Funding only: ${fundingOnly.length}, Market only: ${marketOnly.length}\n`
       if (fundingOnly.length > 0) report += `  Funding only: ${fundingOnly.join(', ')}\n`
       if (marketOnly.length > 0) report += `  Market only: ${marketOnly.join(', ')}\n`
     }
-    
+
     return { data: comparison, report }
   }
 
@@ -218,9 +333,9 @@ export class FundingService extends EventEmitter {
     /**
    * Check if funding times are synchronized between exchanges for exit
    */
-    public isFundingSynchronizedExit(buyFunding: ParsedFunding, sellFunding: ParsedFunding): boolean {
-      return buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp && buyFunding.fundingInterval === sellFunding.fundingInterval
-    }
+  public isFundingSynchronizedExit(buyFunding: ParsedFunding, sellFunding: ParsedFunding): boolean {
+    return buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp && buyFunding.fundingInterval === sellFunding.fundingInterval
+  }
 
   /**
    * Find the next synchronization timestamp for ASYNC funding
@@ -233,23 +348,23 @@ export class FundingService extends EventEmitter {
     const now = Date.now()
     const buyIntervalMs = buyFunding.fundingInterval * 60 * 60 * 1000
     const sellIntervalMs = sellFunding.fundingInterval * 60 * 60 * 1000
-    
+
     let buyTime = buyFunding.nextFundingTimestamp
     let sellTime = sellFunding.nextFundingTimestamp
-    
+
     // Move forward until we find a sync point (max 100 iterations to prevent infinite loop)
     for (let i = 0; i < 100; i++) {
       if (buyTime === sellTime && buyTime >= now) {
         return buyTime
       }
-      
+
       if (buyTime < sellTime) {
         buyTime += buyIntervalMs
       } else {
         sellTime += sellIntervalMs
       }
     }
-    
+
     // Fallback: return far future if no sync found
     return now + 24 * 60 * 60 * 1000 // 24 hours from now
   }
@@ -262,7 +377,7 @@ export class FundingService extends EventEmitter {
     fundingEvents: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }>
   ): number {
     let cumulativeFundingRate = 0
-    
+
     for (const event of fundingEvents) {
       // Only count events before the target timestamp (exclude the target event itself)
       if (event.timestamp < targetTimestamp) {
@@ -273,7 +388,7 @@ export class FundingService extends EventEmitter {
         break
       }
     }
-    
+
     return cumulativeFundingRate
   }
 
@@ -286,7 +401,7 @@ export class FundingService extends EventEmitter {
     projectionHours: number
   ): Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }> {
     const events: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }> = []
-    
+
     // Use the first next closest funding event time as startTime
     const startTime = Math.min(buyFunding.nextFundingTimestamp, sellFunding.nextFundingTimestamp)
     const endTime = startTime + (projectionHours * 60 * 60 * 1000)

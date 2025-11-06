@@ -4,8 +4,11 @@ import { MarketMetadataService } from '../markets/marketMetadataService'
 import { ExchangeMeta } from '../../types/exchange'
 import { FundingService } from '../funding/fundingService'
 import { ParsedFunding } from '../funding/types'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
+import { TraceContext } from '../../utils/traceContext'
 import config, { StrategyType } from '../../utils/config'
+
+const logger = new Logger('arbitrage-engine')
 
 // Core interfaces
 interface FeeModel {
@@ -102,6 +105,8 @@ export interface ArbitrageOpportunity {
   fundingProfitPercent: number,
   estimatedProfitUsd: number,
   estimatedProfitPercent: number
+  // Trace context
+  traceId: string
 }
 
 export class ArbitrageEngine extends EventEmitter {
@@ -138,6 +143,8 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly spreadMinSpreadProfitPercent: number
   private readonly spreadMinTotalProfitPercent: number
   private readonly spreadNegativeFundingMultiplier: number
+  // Anti-spam logging configuration
+  private antiSpamLogTime: number
 
   constructor(
     orderbookManager: OrderbookManager,
@@ -180,6 +187,8 @@ export class ArbitrageEngine extends EventEmitter {
     this.spreadMinSpreadProfitPercent = config.strategy.spread.minSpreadProfitPercent
     this.spreadMinTotalProfitPercent = config.strategy.spread.minTotalProfitPercent
     this.spreadNegativeFundingMultiplier = config.strategy.spread.negativeFundingMultiplier
+    // Anti-spam logging configuration
+    this.antiSpamLogTime = 0
     this.initializeModels()
     this.setupEventListeners()
   }
@@ -187,7 +196,16 @@ export class ArbitrageEngine extends EventEmitter {
   private setupEventListeners(): void {
     // Listen for top of book updates
     this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
-      this.scanOpportunities(topOfBook)
+      try {
+        TraceContext.runWithExistingTrace(topOfBook.traceId, 'arbitrage-scan', () => {
+          this.scanOpportunities(topOfBook)
+        })
+      } catch (error) {
+        logger.error({ msg: 'Error scanning opportunities from orderbook update', function: 'ArbitrageEngine.setupEventListeners',
+          exchange: topOfBook.exchange,
+          symbol: topOfBook.symbol,
+          error })
+      }
     })
   }
 
@@ -223,7 +241,18 @@ export class ArbitrageEngine extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
-      logger.warn(`[${exchange}] Volume cannot be filled in orderbook for ${isBuy ? 'BUY' : 'SELL'} ${exchangeSymbol}: Remaining Requested Volume ${remainingVolume} ($${remainingVolume * basePrice}) - Order Volume ${exchangeVolume} ($${exchangeVolume * basePrice})`)
+      if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+        logger.warn({ msg: 'Orderbook cannot fully fill requested volume', function: 'ArbitrageEngine.simulateSlippage',
+            exchange,
+            symbol: exchangeSymbol,
+            side: isBuy ? 'BUY' : 'SELL',
+            remainingVolume,
+            requestedVolume: exchangeVolume,
+            basePrice,
+            remainingUsd: remainingVolume * basePrice,
+            requestedUsd: exchangeVolume * basePrice, })
+          this.antiSpamLogTime = Date.now()
+      }
     }
 
     const avgExecutionPrice = weightedPrice / exchangeVolume
@@ -288,6 +317,9 @@ export class ArbitrageEngine extends EventEmitter {
     const sellFeeModel = this.feeModels.get(sellExchange)
     
     if (!buyFeeModel || !sellFeeModel) {
+      logger.error({ msg: 'Fee models not found for exchange', function: 'ArbitrageEngine.estimateProfit',
+        buyExchange, 
+        sellExchange, })
       throw new Error(`Fee models not found for exchange: ${!buyFeeModel ? buyExchange : sellExchange}`)
     }
     
@@ -530,7 +562,16 @@ export class ArbitrageEngine extends EventEmitter {
           return { strategy: 'funding' }
         }
         if (fundingRateDifferencePercent > 0.3) {
-          logger.info(`[${buyFundingData.symbol}] Funding strategy (SYNC) entry validation failed, but funding rate difference is high: ${fundingRateDifferencePercent.toFixed(3)}%, profitEstimate.fundingProfitPercent: ${profitEstimate.fundingProfitPercent.toFixed(3)}%, profitEstimate.estimatedProfitPercent: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+          if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+            logger.info({ msg: 'Funding strategy (SYNC) entry validation failed, BUT funding rate difference is HIGH', function: 'ArbitrageEngine.determineStrategy',
+              buyExchange: buyFundingData.exchange,
+              sellExchange: sellFundingData.exchange,
+              symbol: buyFundingData.symbol,
+              fundingRateDifferencePercent: fundingRateDifferencePercent.toFixed(3),
+              fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+              estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3) })
+            this.antiSpamLogTime = Date.now()
+          }
         }
         return { strategy: null, reason: 'Funding window (SYNC) but validation failed' }
       } else {
@@ -538,7 +579,16 @@ export class ArbitrageEngine extends EventEmitter {
           return { strategy: 'funding' }
         }
         if (fundingRateDifferencePercent > 0.3) {
-          logger.info(`[${buyFundingData.symbol}] Funding strategy (ASYNC) entry validation failed, but funding rate difference is high: ${fundingRateDifferencePercent.toFixed(3)}%, profitEstimate.fundingProfitPercent: ${profitEstimate.fundingProfitPercent.toFixed(3)}%, profitEstimate.estimatedProfitPercent: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+          if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+            logger.info({ msg: 'Funding strategy (ASYNC) entry validation failed, BUT funding rate difference is HIGH', function: 'ArbitrageEngine.determineStrategy',
+              buyExchange: buyFundingData.exchange,
+              sellExchange: sellFundingData.exchange,
+              symbol: buyFundingData.symbol,
+              fundingRateDifferencePercent: fundingRateDifferencePercent.toFixed(3),
+              fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+              estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3) })
+            this.antiSpamLogTime = Date.now()
+          }
         }
         return { strategy: null, reason: 'Funding window (ASYNC) but validation failed' }
       }
@@ -580,7 +630,8 @@ export class ArbitrageEngine extends EventEmitter {
 
     for (const key of keysToRemove) {
       this.candidates.delete(key)
-      logger.debug(`Cleaned up stale candidate: ${key}`)
+      logger.trace({ msg: `Cleaned up stale candidate`, function: 'ArbitrageEngine.cleanupStaleCandidates',
+        candidateKey: key })
     }
 
     this.lastCleanupTime = now
@@ -627,7 +678,13 @@ export class ArbitrageEngine extends EventEmitter {
       }
       this.candidates.set(candidateKey, newCandidate)
       
-      logger.debug(`New arbitrage candidate detected: ${newCandidate.id}, crossExchangePriceSpreadPercent: ${crossExchangePriceSpreadPercent.toFixed(3)}%, spread: ${profitEstimate.spreadProfitPercent.toFixed(3)}%, funding: ${profitEstimate.fundingProfitPercent.toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+      logger.trace({ msg: 'New arbitrage candidate detected', function: 'ArbitrageEngine.validatePersistence',
+          candidateKey,
+          candidateId: newCandidate.id,
+          crossExchangePriceSpreadPercent: crossExchangePriceSpreadPercent.toFixed(3),
+          spreadProfitPercent: profitEstimate.spreadProfitPercent.toFixed(3),
+          fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+          estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3), })
       return { isValid: false, reason: 'New candidate - waiting for persistence', candidate: newCandidate }
     }
 
@@ -638,17 +695,17 @@ export class ArbitrageEngine extends EventEmitter {
     const sellPriceChangeRatio = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
 
     if (crossExchangeSpreadChangeRatio < -0.2) {
-      logger.info(`Candidate ${candidateKey} spread decreased, resetting`)
+      logger.trace({ msg: `Candidate ${candidateKey} spread decreased, resetting`, function: 'ArbitrageEngine.validatePersistence', candidateKey })
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Spread decreased significantly' }
     }
     if (fundingProfitChangeRatio < -0.2) {
-      logger.info(`Candidate ${candidateKey} funding profit decreased, resetting`)
+      logger.trace({ msg: `Candidate ${candidateKey} funding profit decreased, resetting`, function: 'ArbitrageEngine.validatePersistence', candidateKey })
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Funding profit decreased significantly' }
     }
     if (buyPriceChangeRatio > 0.01 || sellPriceChangeRatio > 0.01) {
-      logger.info(`Candidate ${candidateKey} price changed, resetting`)
+      logger.trace({ msg: `Candidate ${candidateKey} price changed, resetting`, function: 'ArbitrageEngine.validatePersistence', candidateKey })
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Price changed significantly' }
     }
@@ -677,117 +734,166 @@ export class ArbitrageEngine extends EventEmitter {
     const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
 
     if (hasMinDuration && hasMinSnapshots) {
-      logger.info(`Arbitrage opportunity validated: ${existingCandidate.id}, duration: ${persistenceDuration}ms, buySnapshots: ${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots: ${existingCandidate.sellExchangeConsecutiveSnapshots}, spread: ${(profitEstimate.spreadProfitPercent).toFixed(3)}%, funding: ${(profitEstimate.fundingProfitPercent).toFixed(3)}%, combined: ${profitEstimate.estimatedProfitPercent.toFixed(3)}%`)
+      logger.debug({ msg: 'Arbitrage opportunity validated', function: 'ArbitrageEngine.validatePersistence',
+          candidateKey,
+          candidateId: existingCandidate.id,
+          persistenceDuration,
+          buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
+          sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
+          spreadProfitPercent: profitEstimate.spreadProfitPercent.toFixed(3),
+          fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+          estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3) })
       this.candidates.delete(candidateKey) // Remove after validation
       return { isValid: true, candidate: existingCandidate }
     }
 
-    logger.debug(`Candidate ${existingCandidate.id} still building persistence: duration=${persistenceDuration}ms, buySnapshots=${existingCandidate.buyExchangeConsecutiveSnapshots}, sellSnapshots=${existingCandidate.sellExchangeConsecutiveSnapshots}`)
+    logger.trace({ msg: 'Candidate still building persistence', function: 'ArbitrageEngine.validatePersistence',
+        candidateKey,
+        candidateId: existingCandidate.id,
+        persistenceDuration,
+        buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
+        sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots })
     return { isValid: false, reason: 'Building persistence', candidate: existingCandidate }
   }
 
-
-// Optimized: scan only the updated symbol across all exchanges to improve latency and CPU usage
+  // Optimized: scan only the updated symbol across all exchanges to improve latency and CPU usage
   private scanOpportunities(topOfBook: TopOfBook): void {
-    const allOrderbooks = this.orderbookManager.getAllOrderbooks()
-    // const opportunities = this.scanAllOrderbooks(allOrderbooks)
-    const opportunities = this.scanOrderbooksForSymbol(topOfBook.exchange, topOfBook.symbol, allOrderbooks)
+    try {
+      const allOrderbooks = this.orderbookManager.getAllOrderbooks()
+      // const opportunities = this.scanAllOrderbooks(allOrderbooks)
+      const opportunities = this.scanOrderbooksForSymbol(topOfBook.exchange, topOfBook.symbol, allOrderbooks, topOfBook.traceId)
 
-    if (opportunities.length > 0) {
-      // Emit opportunities for trade execution
-      this.emit('opportunities', opportunities)
+      if (opportunities.length > 0) {
+        // Emit opportunities for trade execution
+        this.emit('opportunities', opportunities)
+      }
+    } catch (error) {
+      logger.error({ msg: 'Error scanning opportunities', function: 'ArbitrageEngine.scanOpportunities',
+        exchange: topOfBook.exchange,
+        symbol: topOfBook.symbol,
+        error })
     }
   }
 
-  private scanOrderbooksForSymbol(updatingExchange: string, symbol: string, allOrderbooks: Map<string, Map<string, OrderBook>>): ArbitrageOpportunity[] {
+  private scanOrderbooksForSymbol(updatingExchange: string, symbol: string, allOrderbooks: Map<string, Map<string, OrderBook>>, traceId: string): ArbitrageOpportunity[] {
     const opportunities: ArbitrageOpportunity[] = []
-    const exchanges = Array.from(allOrderbooks.keys())
     
-    const updatingExchangeMetadataService = this.marketMetadataServices.get(updatingExchange)
-    if (!updatingExchangeMetadataService) return []
+    try {
+      const exchanges = Array.from(allOrderbooks.keys())
+      
+      const updatingExchangeMetadataService = this.marketMetadataServices.get(updatingExchange)
+      if (!updatingExchangeMetadataService) return []
 
-    const normalizedSymbol = updatingExchangeMetadataService.normalizeSymbol(symbol)
-    if (!normalizedSymbol) return []
+      const normalizedSymbol = updatingExchangeMetadataService.normalizeSymbol(symbol)
+      if (!normalizedSymbol) return []
 
-    // Get exchange-specific symbols
-    const exchangeSymbols = new Map<string, string>()
+      // Get exchange-specific symbols
+      const exchangeSymbols = new Map<string, string>()
 
-    // Find the normalized pair and exchange-specific symbols
-    for (const exchange of exchanges) {
-      const metadataService = this.marketMetadataServices.get(exchange)
-      if (!metadataService) continue
+      // Find the normalized pair and exchange-specific symbols
+      for (const exchange of exchanges) {
+        const metadataService = this.marketMetadataServices.get(exchange)
+        if (!metadataService) continue
 
-      const exchangeSymbol = metadataService.denormalizeSymbol(normalizedSymbol)
-      if (exchangeSymbol) {
-        exchangeSymbols.set(exchange, exchangeSymbol)
+        const exchangeSymbol = metadataService.denormalizeSymbol(normalizedSymbol)
+        if (exchangeSymbol) {
+          exchangeSymbols.set(exchange, exchangeSymbol)
+        }
       }
-    }
 
-    if (!normalizedSymbol || this.blacklistPairs.includes(normalizedSymbol)) return []
+      if (!normalizedSymbol || this.blacklistPairs.includes(normalizedSymbol)) return []
 
-    // Check all exchange pairs for this specific symbol
-    for (let i = 0; i < exchanges.length; i++) {
-      for (let j = i + 1; j < exchanges.length; j++) {
-        const exchangeA = exchanges[i]
-        const exchangeB = exchanges[j]
+      // Check all exchange pairs for this specific symbol
+      for (let i = 0; i < exchanges.length; i++) {
+        for (let j = i + 1; j < exchanges.length; j++) {
+          const exchangeA = exchanges[i]
+          const exchangeB = exchanges[j]
 
-        const exchangeSymbolA = exchangeSymbols.get(exchangeA)
-        const exchangeSymbolB = exchangeSymbols.get(exchangeB)
+          const exchangeSymbolA = exchangeSymbols.get(exchangeA)
+          const exchangeSymbolB = exchangeSymbols.get(exchangeB)
 
-        if (!exchangeSymbolA || !exchangeSymbolB) continue
+          if (!exchangeSymbolA || !exchangeSymbolB) continue
 
-        const orderbookA = allOrderbooks.get(exchangeA)?.get(exchangeSymbolA)
-        const orderbookB = allOrderbooks.get(exchangeB)?.get(exchangeSymbolB)
+          const orderbookA = allOrderbooks.get(exchangeA)?.get(exchangeSymbolA)
+          const orderbookB = allOrderbooks.get(exchangeB)?.get(exchangeSymbolB)
 
-        if (!orderbookA || !orderbookB) continue
+          if (!orderbookA || !orderbookB) continue
 
-        // Get metadata services for denormalization
-        const metadataServiceA = this.marketMetadataServices.get(exchangeA)
-        const metadataServiceB = this.marketMetadataServices.get(exchangeB)
+          // Get metadata services for denormalization
+          const metadataServiceA = this.marketMetadataServices.get(exchangeA)
+          const metadataServiceB = this.marketMetadataServices.get(exchangeB)
 
-        if (!metadataServiceA || !metadataServiceB) continue
+          if (!metadataServiceA || !metadataServiceB) continue
 
-        // Get funding data for both exchanges
-        const fundingDataA = this.fundingService.getSymbolFundingData(exchangeA, exchangeSymbolA)
-        const fundingDataB = this.fundingService.getSymbolFundingData(exchangeB, exchangeSymbolB)
+          // Get funding data for both exchanges
+          const fundingDataA = this.fundingService.getSymbolFundingData(exchangeA, exchangeSymbolA)
+          const fundingDataB = this.fundingService.getSymbolFundingData(exchangeB, exchangeSymbolB)
 
-        if (!fundingDataA || !fundingDataB) continue
+          if (!fundingDataA || !fundingDataB) continue
 
-        // Check both directions
-        this.checkDirection(
-          normalizedSymbol,
-          exchangeA,
-          exchangeB,
-          orderbookA,
-          orderbookB,
-          exchangeSymbolA,
-          exchangeSymbolB,
-          metadataServiceA,
-          metadataServiceB,
-          opportunities,
-          fundingDataA,
-          fundingDataB,
-          updatingExchange
-        )
-        this.checkDirection(
-          normalizedSymbol,
-          exchangeB,
-          exchangeA,
-          orderbookB,
-          orderbookA,
-          exchangeSymbolB,
-          exchangeSymbolA,
-          metadataServiceB,
-          metadataServiceA,
-          opportunities,
-          fundingDataB,
-          fundingDataA,
-          updatingExchange
-        )
+          // Check both directions with error handling
+          try {
+            this.checkDirection(
+              normalizedSymbol,
+              exchangeA,
+              exchangeB,
+              orderbookA,
+              orderbookB,
+              exchangeSymbolA,
+              exchangeSymbolB,
+              metadataServiceA,
+              metadataServiceB,
+              opportunities,
+              fundingDataA,
+              fundingDataB,
+              updatingExchange,
+              traceId
+            )
+          } catch (error) {
+            logger.error({ msg: 'Error checking direction', event: 'arbitrage_check_direction_failed',
+              function: 'ArbitrageEngine.scanOrderbooksForSymbol',
+              normalizedSymbol,
+              buyExchange: exchangeA,
+              sellExchange: exchangeB,
+              error })
+          }
+
+          try {
+            this.checkDirection(
+              normalizedSymbol,
+              exchangeB,
+              exchangeA,
+              orderbookB,
+              orderbookA,
+              exchangeSymbolB,
+              exchangeSymbolA,
+              metadataServiceB,
+              metadataServiceA,
+              opportunities,
+              fundingDataB,
+              fundingDataA,
+              updatingExchange,
+              traceId
+            )
+          } catch (error) {
+            logger.error({ msg: 'Error checking direction', event: 'arbitrage_check_direction_failed',
+              function: 'ArbitrageEngine.scanOrderbooksForSymbol',
+              normalizedSymbol,
+              buyExchange: exchangeB,
+              sellExchange: exchangeA,
+              error })
+          }
+        }
       }
-    }
 
-    return opportunities
+      return opportunities
+    } catch (error) {
+      logger.error({ msg: 'Error scanning orderbooks for symbol', function: 'ArbitrageEngine.scanOrderbooksForSymbol',
+        updatingExchange,
+        symbol,
+        error })
+      return opportunities
+    }
   }
 
   private checkDirection(
@@ -804,6 +910,7 @@ export class ArbitrageEngine extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     updatingExchange: string,
+    traceId: string
   ): void {
     // === PRICE NORMALIZATION ===
     // Use the new normalization functions to handle price scales and contract sizes
@@ -859,29 +966,63 @@ export class ArbitrageEngine extends EventEmitter {
       finalBuyExchangeVolume = maxActualBuyExchangeVolume
       finalSellExchangeVolume = maxActualSellExchangeVolume
     } else {
-      // Neither min nor max volumes are equal - this indicates a problem with normalization
-      logger.warn(`Volume normalization failed for ${normalizedPair}: min volumes (${minActualBuyNormalizedVolume}, ${minActualSellNormalizedVolume}) and max volumes (${maxActualBuyNormalizedVolume}, ${maxActualSellNormalizedVolume}) are not equal`)
+      if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+        // Neither min nor max volumes are equal - this indicates a problem with normalization
+        logger.warn({ msg: 'Volume normalization failed: either MIN or MAX normalized volumes are not equal for BUY and SELL', function: 'ArbitrageEngine.checkDirection',
+            normalizedPair,
+            minActualBuyNormalizedVolume,
+            minActualSellNormalizedVolume,
+            maxActualBuyNormalizedVolume,
+            maxActualSellNormalizedVolume })
+        this.antiSpamLogTime = Date.now()
+      }
+
       return
-    }
+  }
     
     // Validate minimum contract amounts
     const buyMetadata = buyMetadataService.getMetadata(buyExchangeSymbol)
     const sellMetadata = sellMetadataService.getMetadata(sellExchangeSymbol)
     
     if (buyMetadata && finalBuyExchangeVolume < buyMetadata.minAmount!) {
-      logger.warn(`[${buyExchange}] Buy volume ${finalBuyExchangeVolume} below minimum ${buyMetadata.minAmount} for ${buyExchangeSymbol}`)
+      if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+        logger.warn({ msg: 'Buy volume below minimum', function: 'ArbitrageEngine.checkDirection',
+          exchange: buyExchange,
+          symbol: buyExchangeSymbol,
+          volume: finalBuyExchangeVolume,
+          minAmount: buyMetadata.minAmount, })
+        this.antiSpamLogTime = Date.now()
+      }
       return
     }
     
     if (sellMetadata && finalSellExchangeVolume < sellMetadata.minAmount!) {
-      logger.warn(`[${sellExchange}] Sell volume ${finalSellExchangeVolume} below minimum ${sellMetadata.minAmount} for ${sellExchangeSymbol}`)
+      if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+        logger.warn({ msg: 'Sell volume below minimum', function: 'ArbitrageEngine.checkDirection',
+          exchange: sellExchange,
+          symbol: sellExchangeSymbol,
+          volume: finalSellExchangeVolume,
+          minAmount: sellMetadata.minAmount, })
+        this.antiSpamLogTime = Date.now()
+      }
       return
     }
 
     // Validate order amount tolerance using normalized price
     const orderAmountUsd = finalNormalizedVolume * normalizedBuyPrice
-    if (orderAmountUsd < this.orderAmountUsd * this.orderAmountToleranceMinPercent / 100 || orderAmountUsd > this.orderAmountUsd * this.orderAmountToleranceMaxPercent / 100) {
-      logger.warn(`[${buyExchange}] ${buyExchangeSymbol} Normalized volume is outside order amount tolerance range: ${orderAmountUsd}$ not between [${this.orderAmountUsd * this.orderAmountToleranceMinPercent / 100}$, ${this.orderAmountUsd * this.orderAmountToleranceMaxPercent / 100}$]`)
+    if (
+      orderAmountUsd < this.orderAmountUsd * this.orderAmountToleranceMinPercent / 100 ||
+      orderAmountUsd > this.orderAmountUsd * this.orderAmountToleranceMaxPercent / 100
+    ) {
+      if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
+        logger.warn({ msg: 'Normalized volume is outside order amount tolerance range', function: 'ArbitrageEngine.checkDirection',
+          exchange: buyExchange,
+          symbol: buyExchangeSymbol,
+          orderAmountUsd,
+          minAllowed: this.orderAmountUsd * this.orderAmountToleranceMinPercent / 100,
+          maxAllowed: this.orderAmountUsd * this.orderAmountToleranceMaxPercent / 100, })
+        this.antiSpamLogTime = Date.now()
+      }
       return
     }
 
@@ -940,11 +1081,19 @@ export class ArbitrageEngine extends EventEmitter {
 
     // Reject opportunity if no valid strategy
     if (!strategyResult.strategy) {
-      logger.debug(`[${normalizedPair}] Opportunity rejected: ${strategyResult.reason}`)
+      logger.debug({ msg: 'Opportunity rejected', function: 'ArbitrageEngine.checkDirection',
+        normalizedPair,
+        buyExchange,
+        sellExchange,
+        reason: strategyResult.reason })
       return
     }
 
-    logger.debug(`[${normalizedPair}:${buyExchange}:${sellExchange}] Strategy validated: ${strategyResult.strategy}`)
+    logger.debug({ msg: 'Strategy validated', function: 'ArbitrageEngine.checkDirection',
+      normalizedPair,
+      buyExchange,
+      sellExchange,
+      strategy: strategyResult.strategy })
     
     // Use the validated opportunity from the persistence check
     const persistenceResult = this.validatePersistence(
@@ -959,6 +1108,11 @@ export class ArbitrageEngine extends EventEmitter {
     )
 
     if (!persistenceResult.isValid) {
+      logger.debug({ msg: 'Opportunity not persisted', function: 'ArbitrageEngine.checkDirection',
+        normalizedPair,
+        buyExchange,
+        sellExchange,
+        reason: persistenceResult.reason })
       return // Opportunity hasn't met persistence requirements yet
     }
 
@@ -994,6 +1148,8 @@ export class ArbitrageEngine extends EventEmitter {
       fundingProfitPercent: profitEstimate.fundingProfitPercent,
       estimatedProfitUsd: profitEstimate.estimatedProfitUsd, // Use combined profit as the main metric
       estimatedProfitPercent: profitEstimate.estimatedProfitPercent, // Use combined profit percent as the main metric
+      // Trace context
+      traceId,
     })
   }
 

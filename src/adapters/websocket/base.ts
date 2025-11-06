@@ -1,8 +1,10 @@
 import { EventEmitter } from 'events'
 import { Dictionary, Market } from 'ccxt'
 import { PublicWebSocketClientInterface, WebSocketConfig, StreamBatch, PublicWebSocketMessageParser } from './types'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
 import { wait } from '../../utils/utils'
+
+const logger = new Logger('ws-base')
 
 export abstract class BasePublicWebSocketClient extends EventEmitter implements PublicWebSocketClientInterface {
   protected abstract readonly exchangeName: string
@@ -15,12 +17,23 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   }
 
   public async initialize(markets: Dictionary<Market>): Promise<void> {
-    this.markets = markets
-    const symbols = Object.values(this.markets).map(market => market!.id) as string[]
-    
-    const batches = this.groupSymbolsIntoBatches(symbols)
-    for (let i = 0; i < batches.length; i++) {
-      await this.createPublicWebSocketConnection(batches[i], i)
+    try {
+      this.markets = markets
+      const symbols = Object.values(this.markets).map(market => market!.id) as string[]
+      const batches = this.groupSymbolsIntoBatches(symbols)
+      for (let i = 0; i < batches.length; i++) {
+        await this.createPublicWebSocketConnection(batches[i], i)
+      }
+      logger.info({ msg: 'Initialized WebSocket client', function: 'BasePublicWebSocketClient.initialize',
+        exchange: this.exchangeName,
+        symbolCount: symbols.length,
+        batchCount: batches.length, })
+    } catch (error) {
+      logger.error({ msg: 'Failed to initialize WebSocket client', function: 'BasePublicWebSocketClient.initialize',
+        exchange: this.exchangeName,
+        marketCount: Object.keys(markets).length,
+        error, })
+      throw error
     }
   }
 
@@ -32,40 +45,125 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
     return batches
   }
 
-  protected async createPublicWebSocketConnection(symbols: string[], batchIndex: number): Promise<void> {
-    const client = this.createClient()
+  protected async createPublicWebSocketConnection(symbols: string[], batchIndex: number, isReconnect: boolean = false): Promise<void> {
+    try {
+      const client = this.createClient()
 
-    const batch: StreamBatch = {
-      id: batchIndex,
-      client,
-      symbols,
-      isConnected: false,
+      if (!client) {
+        throw new Error(`Failed to create WebSocket client for batch ${batchIndex}`)
+      }
+
+      let batch: StreamBatch
+
+      if (isReconnect) {
+        batch = this.streamBatches.find(b => b.id === batchIndex)!
+
+        this.cleanupClient(batch)
+
+        batch.client = client
+        batch.isConnected = false
+      } else {
+        batch = {
+          id: batchIndex,
+          client,
+          symbols,
+          isConnected: false,
+        }
+      }
+
+      this.setupEventHandlers(batch)
+      await this.subscribeToSymbols(batch)
+      if (!isReconnect) this.streamBatches.push(batch)
+
+      logger.debug({ msg: 'Created WebSocket connection for batch', function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
+        exchange: this.exchangeName,
+        batchIndex,
+        symbolCount: symbols.length,
+        isReconnect, })
+    } catch (error) {
+      logger.error({ msg: 'Failed to create WebSocket connection', function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
+        exchange: this.exchangeName,
+        batchIndex,
+        symbolCount: symbols.length,
+        isReconnect,
+        error, })
+      throw error
     }
+  }
 
-    this.setupEventHandlers(batch)
-    await this.subscribeToSymbols(batch)
+  protected cleanupClient(batch: StreamBatch): void {
+    if (!batch.client) return
 
-    this.streamBatches.push(batch)
+    try {
+      // Close all connections for the client
+      if (typeof batch.client.closeAll === 'function') {
+        batch.client.closeAll()
+      } else if (typeof batch.client.close === 'function') {
+        batch.client.close()
+      }
+      // Remove all event listeners to prevent memory leaks
+      batch.client.removeAllListeners()
+    } catch (cleanupError) {
+      logger.error({
+        msg: 'Error during client cleanup',
+        function: 'BasePublicWebSocketClient.cleanupClient',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        error: cleanupError,
+      })
+    } finally {
+      batch.client = null as any
+      batch.isConnected = false
+    }
   }
 
   protected async handleConnectionError(batch: StreamBatch): Promise<void> {
-    logger.info(`[${this.exchangeName}] Attempting to connect again for batch ${batch.id}...`)
+    logger.warn({ msg: 'Handling connection error. Reconnecting WebSocket', function: 'BasePublicWebSocketClient.handleConnectionError',
+      exchange: this.exchangeName,
+      batchId: batch.id,
+      symbolCount: batch.symbols.length,
+      reconnectInterval: this.config.reconnectInterval, })
     try {
       await wait(this.config.reconnectInterval)
-      await this.createPublicWebSocketConnection(batch.symbols, batch.id)
+      await this.createPublicWebSocketConnection(batch.symbols, batch.id, true)
     } catch (error) {
-      logger.error(`[${this.exchangeName}] Failed to connect again for batch ${batch.id}:`, error)
+      logger.error({ msg: 'Failed to reconnect WebSocket, will retry', function: 'BasePublicWebSocketClient.handleConnectionError',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        symbolCount: batch.symbols.length,
+        reconnectInterval: this.config.reconnectInterval,
+        error, })
       await this.handleConnectionError(batch)
     }
   }
 
   public close(): void {
-    this.streamBatches.forEach(batch => {
-      batch.client.closeAll()
-      batch.isConnected = false
-      logger.info(`[${this.exchangeName}] Closed WebSocket connection for batch ${batch.id}`)
-    })
-    this.streamBatches = []
+    try {
+      logger.info({ msg: 'Closing all WebSocket connections', function: 'BasePublicWebSocketClient.close', exchange: this.exchangeName, })
+      
+      this.streamBatches.forEach(batch => {
+        try {
+          this.cleanupClient(batch)
+          logger.debug({ msg: 'Closed WebSocket connection for batch', function: 'BasePublicWebSocketClient.close',
+            exchange: this.exchangeName,
+            batchId: batch.id,
+            symbolCount: batch.symbols.length, })
+        } catch (error) {
+          logger.error({ msg: 'Failed to close WebSocket batch', function: 'BasePublicWebSocketClient.close',
+            exchange: this.exchangeName,
+            batchId: batch.id,
+            error, })
+        }
+      })
+      this.streamBatches = []
+      logger.info({ msg: 'All WebSocket connections closed', function: 'BasePublicWebSocketClient.close',
+        exchange: this.exchangeName, })
+    } catch (error) {
+      logger.error({ msg: 'Failed to close WebSocket connections', function: 'BasePublicWebSocketClient.close',
+        exchange: this.exchangeName,
+        error, })
+      // Don't throw - allow graceful shutdown to continue
+    }
   }
 
   protected getUnifiedSymbol(marketId: string): string {
@@ -77,4 +175,4 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   protected abstract createClient(): any
   protected abstract setupEventHandlers(batch: StreamBatch): void
   protected abstract subscribeToSymbols(batch: StreamBatch): Promise<void>
-} 
+}

@@ -8,6 +8,9 @@ logging:
   format: "json"
   file: "logs/test.log"
 
+redis:
+  url: "redis://localhost:6379"
+
 exchanges:
   enabled:
     - "binance"
@@ -34,7 +37,7 @@ trackedPairs:
 trading:
   orderAmount: 10
   minBalanceBufferPercent: 10
-  positionLimitMultiplier: 1
+  maxPositionAmountUsd: 10
   orderConfirmationTimeoutMs: 10000
   monitor:
     maxHoldTimeMs: 1000 * 60 * 60 * 24

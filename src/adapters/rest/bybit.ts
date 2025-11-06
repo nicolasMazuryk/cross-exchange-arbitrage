@@ -4,12 +4,14 @@ import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
 import { getPositionSide, positionId } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'bybit'
 const CCXT_EXCHANGE_NAME = 'bybit'
 const FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual'
+
+const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
 export class BybitExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
@@ -33,10 +35,16 @@ export class BybitExchange extends BaseExchange {
         available: parseFloat(totalAvailableBalance)
       })
 
-      logger.debug(`[${this.exchangeId}] Fetched ${balanceInfos.length} balance entries`)
+      logger.debug({ msg: 'Fetched balance entries from exchange', function: 'BybitExchange.fetchBalancesSnapshot',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        count: balanceInfos.length })
       return balanceInfos
     } catch (error) {
-      logger.error(`Error fetching balance snapshot on ${this.exchangeId}:`, error)
+      logger.error({ msg: 'Failed to fetch balance snapshot from exchange', function: 'BybitExchange.fetchBalancesSnapshot',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        error, })
       throw error
     }
   }
@@ -47,26 +55,32 @@ export class BybitExchange extends BaseExchange {
       const positionInfos: PositionInfo[] = []
 
       for (const position of positions) {
-        const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp } = position  
-            positionInfos.push({
-              id: positionId(symbol, side!.toUpperCase() as PositionSide),
-              symbol: symbol,
-              side: side!.toUpperCase() as PositionSide,
-              size: Math.abs(position.contracts! * position.contractSize!),
-              entryPrice: entryPrice!,
-              leverage: Number(leverage) || 1,
-              unrealizedPnL: unrealizedPnl!,
-              timestamp: timestamp!,
-              date: new Date(timestamp!)
-              // liquidationPrice: liqPrice,
-              // notional: notional,
-            })
+        const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp } = position
+        positionInfos.push({
+          id: positionId(symbol, side!.toUpperCase() as PositionSide),
+          symbol: symbol,
+          side: side!.toUpperCase() as PositionSide,
+          size: Math.abs(position.contracts! * position.contractSize!),
+          entryPrice: entryPrice!,
+          leverage: Number(leverage) || 1,
+          unrealizedPnL: unrealizedPnl!,
+          timestamp: timestamp!,
+          date: new Date(timestamp!)
+          // liquidationPrice: liqPrice,
+          // notional: notional,
+        })
       }
 
-      logger.debug(`[${this.exchangeId}] Fetched ${positionInfos.length} position entries`)
+      logger.debug({ msg: 'Fetched position entries from exchange', function: 'BybitExchange.fetchPositionsSnapshot',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        count: positionInfos.length })
       return positionInfos
     } catch (error) {
-      logger.error(`Error fetching position snapshot on ${this.exchangeId}:`, error)
+      logger.error({ msg: 'Failed to fetch positions snapshot from exchange', function: 'BybitExchange.fetchPositionsSnapshot',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        error, })
       throw error
     }
   }
@@ -94,10 +108,18 @@ export class BybitExchange extends BaseExchange {
         })
       }
 
-      logger.debug(`[${this.exchangeId}] Fetched ${orderInfos.length} order entries`)
+      logger.debug({ msg: 'Fetched order entries from exchange', function: 'BybitExchange.fetchOrdersSnapshot',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        symbol: symbol || 'all',
+        count: orderInfos.length })
       return orderInfos
     } catch (error) {
-      logger.error(`Error fetching order snapshot on ${this.exchangeId}:`, error)
+      logger.error({ msg: 'Failed to fetch orders snapshot from exchange', function: 'BybitExchange.fetchOrdersSnapshot',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        symbol: symbol || 'all',
+        error, })
       throw error
     }
   }
@@ -133,7 +155,6 @@ export class BybitExchange extends BaseExchange {
     }
   }
 
-
   /**
    * Fetch funding data from Bybit
    * URL: https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual
@@ -142,20 +163,24 @@ export class BybitExchange extends BaseExchange {
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       if (!FUNDING_ENDPOINT) {
-        logger.warn(`[${this.exchangeId}] No funding endpoint configured`)
+        logger.error({ msg: 'No funding endpoint configured', function: 'BybitExchange.fetchFundingData',
+          exchange: EXCHANGE_NAME,
+          exchangeId: this.exchangeId })
         return new Map()
       }
 
       const rawJson = await fetchJsonFromUrl(FUNDING_ENDPOINT)
-      
+
       if (!rawJson || !rawJson.result || !rawJson.result.list || !Array.isArray(rawJson.result.list)) {
-        logger.warn(`[${this.exchangeId}] Invalid Bybit funding data structure`)
+        logger.error({ msg: 'Invalid funding data structure received from exchange', function: 'BybitExchange.fetchFundingData',
+          exchange: EXCHANGE_NAME,
+          exchangeId: this.exchangeId, })
         return new Map()
       }
 
       // Filter symbols to only ones that end with 'USDT'
       const usdtSymbolsFundingData = rawJson.result.list
-        .filter((item: any) => 
+        .filter((item: any) =>
           item.symbolName && item.symbolName.endsWith('USDT'))
         .map((item: any) => ({
           ...item,
@@ -164,7 +189,7 @@ export class BybitExchange extends BaseExchange {
         .filter((item: any) => !['USDCUSDT', 'ETHBTCUSDT'].includes(item.symbolName))
 
       const fundingData = new Map<string, ParsedFunding>()
-      
+
       for (const item of usdtSymbolsFundingData) {
         // Bybit provides nextFundingTimeE0 in seconds, convert to milliseconds
         const fundingRate = parseFloat(item.predictedFundingRate)
@@ -172,7 +197,13 @@ export class BybitExchange extends BaseExchange {
         const nextFundingTimestamp = parseInt(item.nextFundingTimeE0) * 1000
 
         if (isNaN(fundingRate) || !fundingInterval || !nextFundingTimestamp) {
-          logger.warn(`[${this.exchangeId}] Invalid Bybit funding data values: ${item.symbol}`)
+          // logger.warn({ msg: 'Invalid funding data values for symbol', function: 'BybitExchange.fetchFundingData',
+          //   exchange: EXCHANGE_NAME,
+          //   exchangeId: this.exchangeId,
+          //   symbol: item.symbol,
+          //   fundingRate: item.predictedFundingRate,
+          //   fundingInterval: item.fundingRateInterval,
+          //   nextFundingTime: item.nextFundingTimeE0 })
           continue
         }
 
@@ -185,16 +216,22 @@ export class BybitExchange extends BaseExchange {
           nextFundingTimestamp,
           nextFundingDatetime: new Date(nextFundingTimestamp)
         }
-        
+
         fundingData.set(item.symbol, parsedFunding)
       }
 
-      logger.debug(`[${this.exchangeId}] Parsed ${fundingData.size} funding rates`)
+      logger.debug({ msg: 'Parsed funding rates from exchange', function: 'BybitExchange.fetchFundingData',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        count: fundingData.size })
       return fundingData
     } catch (error) {
-      logger.error(`[${this.exchangeId}] Error fetching funding data:`, error)
+      logger.error({ msg: 'Failed to fetch funding data from exchange', function: 'BybitExchange.fetchFundingData',
+        exchange: EXCHANGE_NAME,
+        exchangeId: this.exchangeId,
+        endpoint: FUNDING_ENDPOINT,
+        error, })
       return new Map()
     }
   }
 }
-

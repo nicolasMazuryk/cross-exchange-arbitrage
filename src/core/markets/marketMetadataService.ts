@@ -1,4 +1,7 @@
 import * as ccxt from 'ccxt'
+import { Logger } from '../../utils/logger'
+
+const logger = new Logger('market-metadata-service')
 
 export interface MarketMetadata {
   symbol: string              // Exchange-specific symbol (e.g., 1000PEPEUSDT)
@@ -156,7 +159,13 @@ export class MarketMetadataService {
   normalizeAmount(contractAmount: number, symbol: string): number {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
-      throw new Error(`No metadata found for symbol: ${symbol}`)
+      const error = new Error(`No metadata found for symbol: ${symbol}`)
+      logger.error({ msg: 'Failed to normalize amount - metadata not found', function: 'MarketMetadataService.normalizeAmount',
+        exchange: this.exchangeId,
+        symbol,
+        contractAmount,
+        error })
+      throw error
     }
 
     // Convert contracts to base asset units
@@ -176,7 +185,13 @@ export class MarketMetadataService {
   denormalizeAmount(normalizedAmount: number, symbol: string): number {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
-      throw new Error(`No metadata found for symbol: ${symbol}`)
+      const error = new Error(`No metadata found for symbol: ${symbol}`)
+      logger.error({ msg: 'Failed to denormalize amount - metadata not found', function: 'MarketMetadataService.denormalizeAmount',
+        exchange: this.exchangeId,
+        symbol,
+        normalizedAmount,
+        error })
+      throw error
     }
 
     // Apply price scale denormalization
@@ -196,7 +211,13 @@ export class MarketMetadataService {
   roundAmount(amount: number, symbol: string): number {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
-      throw new Error(`No metadata found for symbol: ${symbol}`)
+      const error = new Error(`No metadata found for symbol: ${symbol}`)
+      logger.error({ msg: 'Failed to round amount - metadata not found', function: 'MarketMetadataService.roundAmount',
+        exchange: this.exchangeId,
+        symbol,
+        amount,
+        error })
+      throw error
     }
 
     const precision = metadata.amountPrecision

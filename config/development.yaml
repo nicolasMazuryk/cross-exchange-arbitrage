@@ -2,11 +2,11 @@ app:
   name: "ArbiNet"
   version: "1.0.0"
   environment: "development"
+  logLevel: "info"
 
-logging:
-  level: "debug"
-  format: "json"
-  file: "logs/app.log"
+redis:
+  url: "redis://localhost:6379"  # Redis connection URL
+  keyPrefix: "arbinet:"
 
 exchanges:
   enabled:
@@ -64,8 +64,8 @@ trackedPairs:
 
 trading:
   orderAmountUsd: 15  # in USDT, default order size for arbitrage opportunities
+  maxPositionAmountUsd: 21  # maximum position amount in USD
   minBalanceBufferPercent: 10  # minimum balance buffer in percent
-  positionLimitMultiplier: 1  # multiplier for position size limits
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   monitor:
     maxHoldTimeMs: 86400000  # 24 hours max hold time
@@ -107,10 +107,10 @@ strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
     enabled: true  # Enable/disable funding arbitrage strategy
-    windowStart: 300  # Start execution window in seconds before next funding event
+    windowStart: 14400  # Start execution window in seconds before next funding event
     windowEnd: 30  # End execution window in seconds before next funding event
-    minFundingProfitPercent: -0.10  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
-    minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
+    minFundingProfitPercent: 0.20  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
+    minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
     minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit

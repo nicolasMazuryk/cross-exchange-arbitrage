@@ -3,7 +3,9 @@ import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './type
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import appConfig from '../../utils/config'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
+
+const logger = new Logger('rest-base')
 
 export abstract class BaseExchange implements RestClientInterface {
   protected exchange: Exchange
@@ -22,7 +24,7 @@ export abstract class BaseExchange implements RestClientInterface {
         // This is needed because we fetch all open orders during snapshots
         warnOnFetchOpenOrdersWithoutSymbol: false,
         ...config.options
-      },
+      }
     })
   }
 
@@ -30,7 +32,10 @@ export abstract class BaseExchange implements RestClientInterface {
     try {
       return await this.exchange.loadMarkets()
     } catch (error) {
-      logger.error(`[${this.exchangeId}] Error fetching markets:`, error)
+      logger.error({ msg: 'Failed to load markets from exchange', function: 'BaseExchange.loadMarkets',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        error, })
       throw error
     }
   }
@@ -39,7 +44,7 @@ export abstract class BaseExchange implements RestClientInterface {
     try {
       // const markets = Object.values(this.exchange.markets)
 
-      // logger.info(`Found ${markets.length} markets`)
+      // logger.info({ msg: `Found ${markets.length} markets` })
 
       // const USDTmarkets = Object.values(this.exchange.markets)
       // .filter(
@@ -47,7 +52,7 @@ export abstract class BaseExchange implements RestClientInterface {
       //     market.quote === 'USDT'
       // )
 
-      // logger.info(`Found ${USDTmarkets.length} markets`)
+      // logger.info({ msg: `Found ${USDTmarkets.length} markets` })
 
       // const Swapmarkets = Object.values(this.exchange.markets)
       // .filter(
@@ -55,7 +60,7 @@ export abstract class BaseExchange implements RestClientInterface {
       //     market.quote === 'USDT' && market.swap
       // )
 
-      // logger.info(`Found ${Swapmarkets.length} markets`)
+      // logger.info({ msg: `Found ${Swapmarkets.length} markets` })
 
       // const notInverseMarkets = Object.values(this.exchange.markets)
       // .filter(
@@ -63,11 +68,10 @@ export abstract class BaseExchange implements RestClientInterface {
       //     market.quote === 'USDT' && market.swap && !market.inverse
       // )
 
-      // logger.info(`Found ${notInverseMarkets.length} markets`)
+      // logger.info({ msg: `Found ${notInverseMarkets.length} markets` })
 
       // Get ignored markets for this exchange from config
       const ignoredMarkets = appConfig.exchanges[this.exchangeName as keyof typeof appConfig.exchanges].ignoredMarkets || []
-      
       const usdtPerpetualMarkets = Object.fromEntries(
         Object.entries(this.exchange.markets)
           .filter(([symbol, market]) =>
@@ -77,11 +81,15 @@ export abstract class BaseExchange implements RestClientInterface {
             market.active
           )
           .filter(([symbol, market]) => !ignoredMarkets.includes(symbol))
-        )
-      
+      )
       return usdtPerpetualMarkets
     } catch (error) {
-      logger.error(`[${this.exchangeId}] Error fetching USDT perpetual pairs:`, error)
+      logger.error({ msg: 'Failed to filter trading markets', function: 'BaseExchange.getTradingMarkets',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        totalMarkets: Object.keys(this.exchange.markets || { }).length,
+        error,
+      })
       throw error
     }
   }
@@ -95,10 +103,20 @@ export abstract class BaseExchange implements RestClientInterface {
 
       // Get exchange-specific parameters
       const exchangeParams = this.getExchangeOrderParams(symbol, type, side, amount, price, baseParams)
-      
+
       return (await this.exchange.createOrder(symbol, type.toLowerCase(), side.toLowerCase(), amount, price, exchangeParams)) as Order
     } catch (error) {
-      logger.error(`[${this.exchangeId}] Error creating order for ${symbol}:`, error)
+      logger.error({ msg: 'Failed to create order on exchange', function: 'BaseExchange.createOrder',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        symbol,
+        type,
+        side,
+        amount,
+        price,
+        reduceOnly,
+        clientOrderId,
+        error, })
       throw error
     }
   }
@@ -108,11 +126,11 @@ export abstract class BaseExchange implements RestClientInterface {
    * exchange-specific order parameters
    */
   protected getExchangeOrderParams(
-    symbol: string, 
-    type: string, 
-    side: string, 
-    amount: number, 
-    price?: number, 
+    symbol: string,
+    type: string,
+    side: string,
+    amount: number,
+    price?: number,
     baseParams: ExchangeOrderParams = {}
   ): ExchangeOrderParams {
     return baseParams
@@ -122,7 +140,12 @@ export abstract class BaseExchange implements RestClientInterface {
     try {
       return (await this.exchange.cancelOrder(id, symbol)) as Order
     } catch (error) {
-      logger.error(`[${this.exchangeId}] Error canceling order ${id} for ${symbol}:`, error)
+      logger.error({ msg: 'Failed to cancel order on exchange', function: 'BaseExchange.cancelOrder',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        orderId: id,
+        symbol,
+        error, })
       throw error
     }
   }

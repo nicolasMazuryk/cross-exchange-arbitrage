@@ -6,8 +6,11 @@ import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
 import { OrderInfo } from '../../types/account'
 import { OrderbookManager } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
+import { TraceContext } from '../../utils/traceContext'
 import config from '../../utils/config'
+
+const logger = new Logger('trade-executor')
 
 // Generate UUID for trade IDs
 function generateTradeId(): string {
@@ -64,7 +67,7 @@ export class TradeExecutor extends EventEmitter {
     this.restClients = restClients
     this.orderbookManager = orderbookManager
     this.marketMetadataServices = marketMetadataServices
-    logger.info('TradeExecutor initialized')
+    logger.info({ msg: 'TradeExecutor initialized' })
   }
 
   /**
@@ -75,7 +78,16 @@ export class TradeExecutor extends EventEmitter {
     const tradeId = generateTradeId()
     const startTime = Date.now()
 
-    // Lock the pair for processing
+    // Check if pair is already being processed
+    if (this.isPairProcessing(opportunity.normalizedPair)) {
+      logger.debug({ msg: 'Skipping trade - pair already being processed', function: 'TradeExecutor.executeTrade',
+        normalizedPair: opportunity.normalizedPair,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange
+        })
+      return this.createErrorResult(opportunity, tradeId, 'pre-check', `Pair ${opportunity.normalizedPair} is already being processed`)
+    }
+
     this.processingPairs.add(opportunity.normalizedPair)
 
     try {
@@ -85,7 +97,9 @@ export class TradeExecutor extends EventEmitter {
         return this.createErrorResult(opportunity, tradeId, 'pre-check', [...validation.errors, ...validation.warnings].join('; '))
       }
 
-      // logger.info(`💰 [${tradeId}] Starting trade execution`, { opportunity })
+      logger.debug({ msg: 'Starting trade execution', function: 'TradeExecutor.executeTrade',
+        tradeId,
+        opportunity })
 
       // Execute the trade pair
       const entryTradeResult = await this.executeTradePair(tradeId, tradeParams)
@@ -93,15 +107,16 @@ export class TradeExecutor extends EventEmitter {
       const latencyMs = Date.now() - startTime
       entryTradeResult.latencyMs = latencyMs
 
-      // Emit trade result event
-      this.emit('tradeCompleted', entryTradeResult)
-      
       return entryTradeResult
-
     } catch (error) {
-      logger.error(`[${tradeId}] Trade execution failed`, {
-        error: error instanceof Error ? error.message : String(error),
-        params: tradeParams
+      logger.error({
+        msg: 'Trade execution failed',
+        function: 'TradeExecutor.executeTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange,
+        error
       })
 
       return this.createErrorResult(opportunity, tradeId, 'entry', error instanceof Error ? error.message : String(error))
@@ -155,15 +170,34 @@ export class TradeExecutor extends EventEmitter {
       warnings.push(`Active orders found on ${opportunity.sellExchange} for ${opportunity.sellExchangeSymbol}`)
     }
 
-    // Check position limits using config value
+    // Calculate what the position would be AFTER executing this trade
     const buyPosition = this.accountStateManager.getPosition(opportunity.buyExchange, opportunity.buyExchangeSymbol, 'LONG')
-    const sellPosition = this.accountStateManager.getPosition(opportunity.sellExchange, opportunity.sellExchangeSymbol, 'SHORT')
-
-    if (buyPosition && Math.abs(buyPosition.size * buyPosition.entryPrice) > config.trading.orderAmountUsd * config.trading.positionLimitMultiplier) {
-      warnings.push(`Large position detected on ${opportunity.buyExchange}: ${buyPosition.size}`)
+    let buyPositionAfterTradeUsd: number
+    if (buyPosition) {
+      // Existing LONG position - add new trade volume
+      const existingPositionUsd = Math.abs(buyPosition.size) * buyPosition.entryPrice
+      buyPositionAfterTradeUsd = existingPositionUsd + opportunity.orderAmountUsd
+    } else {
+      // No existing position - this trade creates a new LONG position
+      buyPositionAfterTradeUsd = opportunity.orderAmountUsd
     }
-    if (sellPosition && Math.abs(sellPosition.size * sellPosition.entryPrice) > config.trading.orderAmountUsd * config.trading.positionLimitMultiplier) {
-      warnings.push(`Large position detected on ${opportunity.sellExchange}: ${sellPosition.size}`)
+    
+    const sellPosition = this.accountStateManager.getPosition(opportunity.sellExchange, opportunity.sellExchangeSymbol, 'SHORT')
+    let sellPositionAfterTradeUsd: number
+    if (sellPosition) {
+      // Existing SHORT position - add new trade volume (size is absolute value)
+      const existingPositionUsd = Math.abs(sellPosition.size) * sellPosition.entryPrice
+      sellPositionAfterTradeUsd = existingPositionUsd + opportunity.orderAmountUsd
+    } else {
+      // No existing position - this trade creates a new SHORT position
+      sellPositionAfterTradeUsd = opportunity.orderAmountUsd
+    }
+
+    if (buyPositionAfterTradeUsd > config.trading.maxPositionAmountUsd) {
+      errors.push(`Max position USD limit would be exceeded on ${opportunity.buyExchange}: position after trade ${buyPositionAfterTradeUsd.toFixed(2)} USD > max position limit ${config.trading.maxPositionAmountUsd.toFixed(2)} USD, new trade USD: ${opportunity.orderAmountUsd.toFixed(2)}`)
+    }
+    if (sellPositionAfterTradeUsd > config.trading.maxPositionAmountUsd) {
+      errors.push(`Max position USD limit would be exceeded on ${opportunity.sellExchange}: position after trade ${sellPositionAfterTradeUsd.toFixed(2)} USD > max position limit ${config.trading.maxPositionAmountUsd.toFixed(2)} USD, new trade USD: ${opportunity.orderAmountUsd.toFixed(2)}`)
     }
 
     return {
@@ -179,18 +213,27 @@ export class TradeExecutor extends EventEmitter {
    * Get current orderbook prices for a trade
    */
   private getCurrentOrderbookPrices(opportunity: ArbitrageOpportunity): { buyPrice: number, sellPrice: number } {
-    const buyTopOfBook = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)
-    const sellTopOfBook = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)
-    
-    if (!buyTopOfBook || !sellTopOfBook) {
-      throw new Error(`No orderbook data available for ${opportunity.normalizedPair} on ${opportunity.buyExchange} or ${opportunity.sellExchange}`)
-    }
-    
-    // For BUY orders, use ask price (we're buying from the ask side)
-    // For SELL orders, use bid price (we're selling to the bid side)
-    return {
-      buyPrice: buyTopOfBook.bestAsk.price,
-      sellPrice: sellTopOfBook.bestBid.price
+    try {
+      const buyTopOfBook = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)
+      const sellTopOfBook = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)
+      
+      if (!buyTopOfBook || !sellTopOfBook) {
+        throw new Error(`No orderbook data available for ${opportunity.normalizedPair} on ${opportunity.buyExchange} or ${opportunity.sellExchange}`)
+      }
+      
+      // For BUY orders, use ask price (we're buying from the ask side)
+      // For SELL orders, use bid price (we're selling to the bid side)
+      return {
+        buyPrice: buyTopOfBook.bestAsk.price,
+        sellPrice: sellTopOfBook.bestBid.price
+      }
+    } catch (error) {
+      logger.error({ msg: 'Failed to get current orderbook prices', function: 'TradeExecutor.getCurrentOrderbookPrices',
+        normalizedPair: opportunity.normalizedPair,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange,
+        error })
+      throw error
     }
   }
 
@@ -223,7 +266,7 @@ export class TradeExecutor extends EventEmitter {
     const buyClientOrderId = `${tradeId}BUY`
     const sellClientOrderId = `${tradeId}SELL`
 
-    logger.debug(`[${tradeId}] Placing orders in parallel`, {
+    logger.debug({ msg: 'Placing orders in parallel', tradeId,
       buyExchange: opportunity.buyExchange,
       sellExchange: opportunity.sellExchange,
       normalizedPair: opportunity.normalizedPair,
@@ -232,8 +275,7 @@ export class TradeExecutor extends EventEmitter {
       buyExchangeVolume: opportunity.buyExchangeVolume,
       sellExchangeVolume: opportunity.sellExchangeVolume,
       buyPrice,
-      sellPrice
-    })
+      sellPrice })
 
     try {
       // Place orders in parallel
@@ -285,11 +327,22 @@ export class TradeExecutor extends EventEmitter {
       }
 
     } catch (error) {
+      logger.error({ msg: 'Error executing trade pair', function: 'TradeExecutor.executeTradePair',
+        tradeId,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange,
+        normalizedPair: opportunity.normalizedPair,
+        orderAmountUsd: opportunity.orderAmountUsd,
+        normalizedVolume: opportunity.normalizedVolume,
+        buyExchangeVolume: opportunity.buyExchangeVolume,
+        sellExchangeVolume: opportunity.sellExchangeVolume,
+        buyPrice,
+        sellPrice,
+        error })
       // Rollback logic: cancel any successful orders and handle filled legs
       await this.rollbackFailedTrade(tradeId, tradeParams, buyClient, sellClient)
-      throw error
-
-      // return this.createErrorResult(opportunity, tradeId, 'entry', error instanceof Error ? error.message : String(error))
+      
+      return this.createErrorResult(opportunity, tradeId, 'entry', error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -303,75 +356,149 @@ export class TradeExecutor extends EventEmitter {
     sellClient: RestClientInterface
   ): Promise<void> {
     const { opportunity } = tradeParams
-    logger.warn(`[${tradeId}] Rolling back failed trade`, { normalizedPair: opportunity.normalizedPair })
+    logger.warn({ msg: 'Rolling back failed trade', function: 'TradeExecutor.rollbackFailedTrade',
+      tradeId,
+      normalizedPair: opportunity.normalizedPair,
+      opportunity })
 
-    // Check which legs were filled
-    const buyOrder = this.accountStateManager.getOrderByClientOrderId(opportunity.buyExchange, `${tradeId}BUY`)
-    const sellOrder = this.accountStateManager.getOrderByClientOrderId(opportunity.sellExchange, `${tradeId}SELL`)
+    try {
+      // Check which legs were filled
+      const buyOrder = this.accountStateManager.getOrderByClientOrderId(opportunity.buyExchange, `${tradeId}BUY`)
+      const sellOrder = this.accountStateManager.getOrderByClientOrderId(opportunity.sellExchange, `${tradeId}SELL`)
 
-    const cancelPromises: Promise<void>[] = []
-    const closePromises: Promise<void>[] = []
+      const cancelPromises: Promise<void>[] = []
+      const closePromises: Promise<void>[] = []
 
-    // Handle buy leg
-    if (buyOrder) {
-      if (buyOrder.status === 'FILLED') {
-        // Buy leg was filled, need to close the position
-        logger.info(`[${tradeId}] Buy leg was filled, closing position`)
-        const closeBuyPrice = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)?.bestBid.price
-          closePromises.push(
-            buyClient.createOrder(opportunity.buyExchangeSymbol, 'MARKET', 'SELL', opportunity.buyExchangeVolume, closeBuyPrice, true, `${buyOrder.clientOrderId}CLOSE`)
+      // Handle buy leg
+      if (buyOrder) {
+        if (buyOrder.status === 'FILLED') {
+          // Buy leg was filled, need to close the position
+          logger.info({ msg: 'Buy leg was filled, closing position', function: 'TradeExecutor.rollbackFailedTrade',
+            tradeId,
+            buyOrderId: buyOrder.id,
+            exchange: opportunity.buyExchange,
+            symbol: opportunity.buyExchangeSymbol,
+            volume: opportunity.buyExchangeVolume, })
+          const closeBuyPrice = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)?.bestBid.price
+            closePromises.push(
+              buyClient.createOrder(opportunity.buyExchangeSymbol, 'MARKET', 'SELL', opportunity.buyExchangeVolume, closeBuyPrice, true, `${buyOrder.clientOrderId}CLOSE`)
+                .then(() => {
+                  logger.info({ msg: 'Closed buy position', function: 'TradeExecutor.rollbackFailedTrade',
+                    tradeId,
+                    buyOrderId: buyOrder.id,
+                    exchange: opportunity.buyExchange,
+                    symbol: opportunity.buyExchangeSymbol,
+                    volume: opportunity.buyExchangeVolume, })
+                })
+                .catch(error => {
+                  logger.error({ msg: 'Failed to close buy position', function: 'TradeExecutor.rollbackFailedTrade',
+                    tradeId,
+                    buyOrderId: buyOrder.id,
+                    exchange: opportunity.buyExchange,
+                    symbol: opportunity.buyExchangeSymbol,
+                    volume: opportunity.buyExchangeVolume,
+                    error })
+                })
+            )
+        } else if (buyOrder.status === 'NEW' || buyOrder.status === 'PARTIALLY_FILLED') {
+          // Cancel unfilled buy order
+          cancelPromises.push(
+            buyClient.cancelOrder(buyOrder.id, buyOrder.symbol)
               .then(() => {
-                logger.info(`[${tradeId}] Closed buy position`)
+                logger.info({ msg: 'Canceled buy order', function: 'TradeExecutor.rollbackFailedTrade',
+                  tradeId,
+                  buyOrderId: buyOrder.id,
+                  exchange: opportunity.buyExchange,
+                  symbol: opportunity.buyExchangeSymbol,
+                  volume: opportunity.buyExchangeVolume, })
               })
               .catch(error => {
-                logger.error(`[${tradeId}] Failed to close buy position`, { error })
+                logger.error({ msg: 'Failed to cancel buy order', function: 'TradeExecutor.rollbackFailedTrade',
+                  tradeId,
+                  buyOrderId: buyOrder.id,
+                  exchange: opportunity.buyExchange,
+                  symbol: opportunity.buyExchangeSymbol,
+                  volume: opportunity.buyExchangeVolume,
+                  error })
               })
           )
-      } else if (buyOrder.status === 'NEW' || buyOrder.status === 'PARTIALLY_FILLED') {
-        // Cancel unfilled buy order
-        cancelPromises.push(
-          buyClient.cancelOrder(buyOrder.id, buyOrder.symbol)
-            .then(() => {
-              logger.info(`[${tradeId}] Canceled buy order ${buyOrder.id}`)
-            })
-            .catch(error => {
-              logger.error(`[${tradeId}] Failed to cancel buy order ${buyOrder.id}`, { error })
-            })
-        )
+        }
       }
-    }
 
-    // Handle sell leg
-    if (sellOrder) {
-      if (sellOrder.status === 'FILLED') {
-        // Sell leg was filled, need to close the position
-        logger.info(`[${tradeId}] Sell leg was filled, closing position`)
-        const closeSellPrice = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)?.bestAsk.price
-          closePromises.push(
-            sellClient.createOrder(opportunity.sellExchangeSymbol, 'MARKET', 'BUY', opportunity.sellExchangeVolume, closeSellPrice, true, `${sellOrder.clientOrderId}CLOSE`)
+      // Handle sell leg
+      if (sellOrder) {
+        if (sellOrder.status === 'FILLED') {
+          // Sell leg was filled, need to close the position
+          logger.info({ msg: 'Sell leg was filled, closing position', function: 'TradeExecutor.rollbackFailedTrade',
+            tradeId,
+            sellOrderId: sellOrder.id,
+            exchange: opportunity.sellExchange,
+            symbol: opportunity.sellExchangeSymbol,
+            volume: opportunity.sellExchangeVolume, })
+          const closeSellPrice = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)?.bestAsk.price
+            closePromises.push(
+              sellClient.createOrder(opportunity.sellExchangeSymbol, 'MARKET', 'BUY', opportunity.sellExchangeVolume, closeSellPrice, true, `${sellOrder.clientOrderId}CLOSE`)
+                .then(() => {
+                  logger.info({ msg: 'Closed sell position', function: 'TradeExecutor.rollbackFailedTrade',
+                    tradeId,
+                    sellOrderId: sellOrder.id,
+                    exchange: opportunity.sellExchange,
+                    symbol: opportunity.sellExchangeSymbol,
+                    volume: opportunity.sellExchangeVolume, })
+                })
+                .catch(error => {
+                  logger.error({ msg: 'Failed to close sell position', function: 'TradeExecutor.rollbackFailedTrade',
+                    tradeId,
+                    sellOrderId: sellOrder.id,
+                    exchange: opportunity.sellExchange,
+                    symbol: opportunity.sellExchangeSymbol,
+                    volume: opportunity.sellExchangeVolume,
+                    error })
+                })
+            )
+        } else if (sellOrder.status === 'NEW' || sellOrder.status === 'PARTIALLY_FILLED') {
+          // Cancel unfilled sell order
+          cancelPromises.push(
+            sellClient.cancelOrder(sellOrder.id, sellOrder.symbol)
               .then(() => {
-                logger.info(`[${tradeId}] Closed sell position`)
+                logger.info({ msg: 'Canceled sell order', function: 'TradeExecutor.rollbackFailedTrade',
+                  tradeId,
+                  sellOrderId: sellOrder.id,
+                  exchange: opportunity.sellExchange,
+                  symbol: opportunity.sellExchangeSymbol,
+                  volume: opportunity.sellExchangeVolume, })
               })
               .catch(error => {
-                logger.error(`[${tradeId}] Failed to close sell position`, { error })
+                logger.error({ msg: 'Failed to cancel sell order', function: 'TradeExecutor.rollbackFailedTrade',
+                  tradeId,
+                  sellOrderId: sellOrder.id,
+                  exchange: opportunity.sellExchange,
+                  symbol: opportunity.sellExchangeSymbol,
+                  volume: opportunity.sellExchangeVolume,
+                  error })
               })
           )
-      } else if (sellOrder.status === 'NEW' || sellOrder.status === 'PARTIALLY_FILLED') {
-        // Cancel unfilled sell order
-        cancelPromises.push(
-          sellClient.cancelOrder(sellOrder.id, sellOrder.symbol)
-            .then(() => {
-              logger.info(`[${tradeId}] Canceled sell order ${sellOrder.id}`)
-            })
-            .catch(error => {
-              logger.error(`[${tradeId}] Failed to cancel sell order ${sellOrder.id}`, { error })
-            })
-        )
+        }
       }
-    }
 
-    // Execute all rollback operations in parallel
-    await Promise.allSettled([...cancelPromises, ...closePromises])
+      // Execute all rollback operations in parallel
+      await Promise.allSettled([...cancelPromises, ...closePromises])
+
+      logger.info({ msg: 'Trade rollback completed', function: 'TradeExecutor.rollbackFailedTrade',
+        tradeId,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange,
+        normalizedPair: opportunity.normalizedPair,
+        buyOrderId: buyOrder?.id,
+        sellOrderId: sellOrder?.id, })
+    } catch (error) {
+      logger.error({ msg: 'Error during trade rollback', function: 'TradeExecutor.rollbackFailedTrade',
+        tradeId,
+        buyExchange: opportunity.buyExchange,
+        sellExchange: opportunity.sellExchange,
+        normalizedPair: opportunity.normalizedPair,
+        error })
+    }
   }
 
   /**

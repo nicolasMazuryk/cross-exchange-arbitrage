@@ -4,15 +4,33 @@ import fs from 'fs'
 import path from 'path'
 
 // Load environment variables
-dotenv.config()
+try {
+  dotenv.config()
+} catch (error) {
+  console.error({ msg: 'Failed to load environment variables from .env', function: 'config.loadEnv',
+    error, })
+  throw error
+}
 
-// Load YAML config
-const configPath = path.join(process.cwd(), 'config', `${process.env.NODE_ENV || 'development'}.yaml`)
-const yamlConfig = parse(fs.readFileSync(configPath, 'utf8'))
+// Load YAML config with error handling
+let yamlConfig: any = {}
+try {
+  const configPath = path.join(process.cwd(), 'config', `${process.env.NODE_ENV || 'development'}.yaml`)
+  const configContent = fs.readFileSync(configPath, 'utf8')
+  yamlConfig = parse(configContent)
+
+  console.info({ msg: 'Configuration loaded successfully', function: 'config.loadYamlConfig',
+    environment: process.env.NODE_ENV || 'development', })
+} catch (error) {
+  console.error({ msg: 'Failed to load YAML configuration file', function: 'config.loadYamlConfig',
+    error, })
+  throw error
+}
 
 interface AppConfig {
-  environment: string
+  name: string
   version: string
+  environment: string
   logLevel: string
 }
 
@@ -47,7 +65,7 @@ interface ArbitrageConfig {
 interface TradingConfig {
   orderAmountUsd: number
   minBalanceBufferPercent: number
-  positionLimitMultiplier: number
+  maxPositionAmountUsd: number
   orderConfirmationTimeoutMs: number
   monitor: {
     maxHoldTimeMs: number
@@ -56,6 +74,11 @@ interface TradingConfig {
     exitMinConsecutiveSnapshots: number
     exitCandidateCleanupMs: number
   }
+}
+
+interface RedisConfig {
+  url: string
+  keyPrefix: string
 }
 
 interface AccountSyncConfig {
@@ -98,6 +121,7 @@ interface StrategyConfig {
 
 interface Config {
   app: AppConfig
+  redis: RedisConfig
   exchanges: {
     binance: ExchangeConfiguration
     bybit: ExchangeConfiguration
@@ -114,9 +138,14 @@ interface Config {
 
 const config: Config = {
   app: {
-    environment: process.env.NODE_ENV || 'development',
-    version: process.env.APP_VERSION || '0.0.0',
-    logLevel: process.env.LOG_LEVEL || 'debug',
+    name: yamlConfig?.app?.name,
+    version: yamlConfig?.app?.version,
+    environment: yamlConfig?.app?.environment,
+    logLevel: yamlConfig?.app?.logLevel,
+  },
+  redis: {
+    url: yamlConfig?.redis?.url,
+    keyPrefix: yamlConfig?.redis?.keyPrefix
   },
   exchanges: {
     binance: {
@@ -166,7 +195,7 @@ const config: Config = {
       ignoredMarkets: yamlConfig?.exchanges?.bitget?.ignoredMarkets || []
     },
   },
-  trackedPairs: yamlConfig?.trackedPairs || ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'],
+  trackedPairs: yamlConfig?.trackedPairs,
   arbitrage: {
     blacklistPairs: yamlConfig?.arbitrage?.blacklistPairs || [],
     minConfidenceScore: yamlConfig?.arbitrage?.minConfidenceScore,
@@ -182,7 +211,7 @@ const config: Config = {
   trading: {
     orderAmountUsd: yamlConfig?.trading?.orderAmountUsd,
     minBalanceBufferPercent: yamlConfig?.trading?.minBalanceBufferPercent,
-    positionLimitMultiplier: yamlConfig?.trading?.positionLimitMultiplier,
+    maxPositionAmountUsd: yamlConfig?.trading?.maxPositionAmountUsd,
     orderConfirmationTimeoutMs: yamlConfig?.trading?.orderConfirmationTimeoutMs,
     monitor: yamlConfig?.trading?.monitor
   },
@@ -220,5 +249,7 @@ const config: Config = {
     }
   }
 }
+
+export { yamlConfig }
 
 export default config

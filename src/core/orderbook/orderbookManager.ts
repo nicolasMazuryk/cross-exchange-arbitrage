@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
 import config from '../../utils/config'
+
+const logger = new Logger('orderbook-manager')
 
 export interface OrderBookLevel {
   price: number
@@ -19,6 +21,7 @@ export interface OrderBookUpdate {
   finalUpdateId: number
   sequence?: number
   prevFinalUpdateId?: number
+  traceId: string
 }
 
 export interface OrderBook {
@@ -35,6 +38,7 @@ export interface TopOfBook {
   bestAsk: OrderBookLevel
   spreadPercent: number
   timestamp: number
+  traceId: string
 }
 
 export class OrderbookManager extends EventEmitter {
@@ -48,49 +52,61 @@ export class OrderbookManager extends EventEmitter {
   }
 
   public updateOrderbook(update: OrderBookUpdate): void {
-    const { exchange, symbol, bids, asks, finalUpdateId, timestamp, type } = update
+    try {
+      const { exchange, symbol, bids, asks, finalUpdateId, timestamp, type, traceId } = update
 
-    // Initialize exchange maps if they don't exist
-    if (!this.orderbooks.has(exchange)) {
-      this.orderbooks.set(exchange, new Map())
-      this.topOfBooks.set(exchange, new Map())
-    }
-
-    const exchangeOrderbooks = this.orderbooks.get(exchange)!
-    const exchangeTopOfBook = this.topOfBooks.get(exchange)!
-
-    // Process the update based on its type
-    if (type === 'snapshot') {
-      exchangeOrderbooks.set(symbol, { bids, asks, finalUpdateId, timestamp })
-    } else if (type === 'delta') {
-      this.handleDeltaUpdate(update)
-    }
-
-    // Get the updated orderbook
-    const updatedOrderbook = exchangeOrderbooks.get(symbol)!
-    const bestBid = updatedOrderbook.bids[0]
-    const bestAsk = updatedOrderbook.asks[0]
-
-    if (bestBid && bestAsk) {
-      const symbolTopOfBook = exchangeTopOfBook.get(symbol)
-      const spreadPercent = ((bestAsk.price - bestBid.price) / bestBid.price) * 100
-
-      const newTopOfBook: TopOfBook = {
-        exchange,
-        symbol,
-        bestBid,
-        bestAsk,
-        spreadPercent,
-        timestamp,
+      // Initialize exchange maps if they don't exist
+      if (!this.orderbooks.has(exchange)) {
+        this.orderbooks.set(exchange, new Map())
+        this.topOfBooks.set(exchange, new Map())
       }
-      exchangeTopOfBook.set(symbol, newTopOfBook)
 
-      if (
-        symbolTopOfBook &&
-        (symbolTopOfBook.bestBid.price !== bestBid.price || symbolTopOfBook.bestAsk.price !== bestAsk.price)
-      ) {
-        this.emit('topOfBookUpdate', newTopOfBook)
+      const exchangeOrderbooks = this.orderbooks.get(exchange)!
+      const exchangeTopOfBook = this.topOfBooks.get(exchange)!
+
+      // Process the update based on its type
+      if (type === 'snapshot') {
+        exchangeOrderbooks.set(symbol, { bids, asks, finalUpdateId, timestamp })
+      } else if (type === 'delta') {
+        this.handleDeltaUpdate(update)
       }
+
+      // Get the updated orderbook
+      const updatedOrderbook = exchangeOrderbooks.get(symbol)!
+      const bestBid = updatedOrderbook.bids[0]
+      const bestAsk = updatedOrderbook.asks[0]
+
+      if (bestBid && bestAsk) {
+        const symbolTopOfBook = exchangeTopOfBook.get(symbol)
+        const spreadPercent = ((bestAsk.price - bestBid.price) / bestBid.price) * 100
+
+        const newTopOfBook: TopOfBook = {
+          exchange,
+          symbol,
+          bestBid,
+          bestAsk,
+          spreadPercent,
+          timestamp,
+          traceId,
+        }
+        exchangeTopOfBook.set(symbol, newTopOfBook)
+
+        if (
+          symbolTopOfBook &&
+          (symbolTopOfBook.bestBid.price !== bestBid.price || symbolTopOfBook.bestAsk.price !== bestAsk.price)
+        ) {
+          this.emit('topOfBookUpdate', newTopOfBook)
+        }
+      }
+    } catch (error) {
+      logger.error({ msg: 'Failed to update orderbook', event: 'orderbook_update_failed',
+        function: 'OrderbookManager.updateOrderbook',
+        exchange: update.exchange,
+        symbol: update.symbol,
+        updateType: update.type,
+        updateId: update.finalUpdateId,
+        timestamp: update.timestamp,
+        error, })
     }
   }
 
@@ -100,13 +116,21 @@ export class OrderbookManager extends EventEmitter {
     const symbolOrderbook = exchangeOrderbooks.get(symbol)
 
     if (!symbolOrderbook) {
-      logger.warn(`Received delta update for non-existent orderbook: ${exchange}:${symbol}`)
+      logger.warn({ msg: 'Received delta update for non-existent orderbook', function: 'OrderbookManager.handleDeltaUpdate',
+        exchange,
+        symbol,
+        finalUpdateId,
+        timestamp })
       return
     }
 
     // If this is a snapshot re-broadcast (same update ID), treat it as a snapshot
     if (finalUpdateId === symbolOrderbook.finalUpdateId) {
-      logger.info(`Received snapshot re-broadcast for ${exchange}:${symbol}`)
+      logger.warn({ msg: 'Received snapshot re-broadcast', function: 'OrderbookManager.handleDeltaUpdate',
+        exchange,
+        symbol,
+        finalUpdateId,
+        timestamp })
       exchangeOrderbooks.set(symbol, { bids, asks, finalUpdateId, timestamp })
       return
     }
@@ -124,6 +148,12 @@ export class OrderbookManager extends EventEmitter {
       finalUpdateId,
       timestamp,
     })
+
+    logger.trace({ msg: 'Processed delta update for orderbook', function: 'OrderbookManager.handleDeltaUpdate',
+      exchange,
+      symbol,
+      finalUpdateId,
+      timestamp, })
   }
 
   private processDeltaLevels(

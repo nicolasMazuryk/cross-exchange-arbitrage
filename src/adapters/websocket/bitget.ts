@@ -3,6 +3,7 @@ import { BasePublicWebSocketClient } from './base'
 import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './types'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
+import { TraceContext } from '../../utils/traceContext'
 
 const EXCHANGE_NAME = 'bitget'
 
@@ -32,7 +33,8 @@ class BitgetMessageParser implements PublicWebSocketMessageParser {
             quantity: parseFloat(quantity),
             amount: parseFloat(price) * parseFloat(quantity),
         })),
-        finalUpdateId: orderbookData.seq
+        finalUpdateId: orderbookData.seq,
+        traceId: '', // Will be set by the message handler
     }
   }
 }
@@ -56,47 +58,88 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected setupEventHandlers(batch: StreamBatch): void {
     batch.client.on('open', (data: any) => {
-      // logger.info(`[${this.exchangeName}] WebSocket connection opened for batch ${batch.id} with ${batch.symbols.length} symbols: ${data.wsKey}`)
+      logger.debug({ msg: 'WebSocket connection opened', function: 'BitgetPublicWebSocketClient.setupEventHandlers.open',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        symbolCount: batch.symbols.length,
+        wsKey: data.wsKey
+      })
       batch.isConnected = true
     })
 
     batch.client.on('close', async () => {
-      logger.warn(`[${this.exchangeName}] WebSocket connection closed for batch ${batch.id}`)
+      logger.warn({
+        msg: 'WebSocket connection closed',
+        exchange: this.exchangeName,
+        batchId: batch.id
+      })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('response', (data: any) => {
-        // logger.info(`[${this.exchangeName}] WebSocket reply received:`, data)
+      logger.debug({ msg: 'WebSocket reply received', function: 'BitgetPublicWebSocketClient.setupEventHandlers.response',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        data
+      })
     })
   
     batch.client.on('reconnect', (data: any) => {
-        logger.info(`[${this.exchangeName}] WebSocket automatically reconnecting for batch ${batch.id} ...`, {
-            wsKey: data?.wsKey,
-    })
-    batch.isConnected = false
+      logger.info({
+        msg: 'WebSocket automatically reconnecting',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        wsKey: data?.wsKey,
+      })
+      batch.isConnected = false
     })
 
     batch.client.on('reconnected', (data: any) => {
-        logger.info(`[${this.exchangeName}] WebSocket reconnected successfully for batch ${batch.id}`, { wsKey: data?.wsKey })
-        batch.isConnected = true
+      logger.info({
+        msg: 'WebSocket reconnected successfully',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        wsKey: data?.wsKey
+      })
+      batch.isConnected = true
     })
 
     batch.client.on('exception', async (error: any) => {
-      logger.error(`[${this.exchangeName}] WebSocket error for batch ${batch.id}:`, JSON.stringify(error))
+      logger.error({
+        msg: 'WebSocket error',
+        exchange: this.exchangeName,
+        batchId: batch.id,
+        error: JSON.stringify(error)
+      })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('update', (data: any) => {
-      try {
-        if (this.messageParser.isOrderBookMessage(data)) {
-          const update = this.messageParser.parseOrderBookUpdate(data)
-          this.emit('orderbookUpdate', update)
+      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async (traceId) => {
+        try {
+          if (this.messageParser.isOrderBookMessage(data)) {
+            const update = this.messageParser.parseOrderBookUpdate(data)
+            update.traceId = traceId
+            this.emit('orderbookUpdate', update)
+          }
+        } catch (error) {
+          logger.error({
+            msg: 'Error parsing WebSocket message',
+            exchange: this.exchangeName,
+            batchId: batch.id,
+            error
+          })
         }
-      } catch (error) {
-        logger.error(`[${this.exchangeName}] Error parsing WebSocket message for batch ${batch.id}:`, error)
-      }
+      }).catch(error => {
+        logger.error({
+          msg: 'Error in trace context for WebSocket message',
+          function: 'BitgetPublicWebSocketClient.setupEventHandlers.update',
+          exchange: this.exchangeName,
+          error,
+        })
+      })
     })
   }
 

@@ -4,10 +4,12 @@ import { WebSocketConfig, PrivateWebSocketMessageParser } from '../types'
 import { RestClientInterface } from '../../rest/types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../../types/account'
 import { OrderSide, OrderType, OrderStatus, PositionSide, MarketType } from '../../../types/exchange'
-import logger from '../../../utils/logger'
+import { Logger } from '../../../utils/logger'
 import { convertExchangeSymbolToUnifiedSymbol } from '../../../utils/utils'
 
 const EXCHANGE_NAME = 'okx'
+
+const logger = new Logger(`ws-private-${EXCHANGE_NAME}`)
 
 export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
@@ -34,45 +36,57 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', () => {
-      // logger.info(`[${this.exchangeName}] Account WebSocket connection opened`)
+      logger.debug({ msg: 'Account WebSocket connection opened', function: 'OKXPrivateWebSocketClient.setupEventHandlers.open',
+        exchange: this.exchangeName })
       this.isConnected = true
     })
 
     this.client.on('close', () => {
-        logger.warn(`[${this.exchangeName}] Account WebSocket connection closed`)
-        this.isConnected = false
-        this.handleConnectionError()
+      logger.warn({
+        msg: 'Account WebSocket connection closed',
+        function: 'OKXPrivateWebSocketClient.setupEventHandlers.close',
+        exchange: this.exchangeName
+      })
+      this.isConnected = false
+      this.handleConnectionError()
     })
 
     this.client.on('response', (data: any) => {
-        // logger.info(`[${this.exchangeName}] Account WebSocket reply received:`, data)
-      })
+      logger.debug({ msg: 'Account WebSocket reply received', function: 'OKXPrivateWebSocketClient.setupEventHandlers.response',
+        exchange: this.exchangeName,
+        data, })
+    })
 
     this.client.on('reconnect', (data: any) => {
-        logger.info(`[${this.exchangeName}] Account WebSocket reconnecting...`, {
-            wsKey: data?.wsKey,
-        })
-        this.isConnected = false
+      logger.info({ msg: 'Account WebSocket reconnecting...', function: 'OKXPrivateWebSocketClient.setupEventHandlers.reconnect',
+          exchange: this.exchangeName,
+          wsKey: data?.wsKey })
+      this.isConnected = false
     })
 
     this.client.on('reconnected', (data: any) => {
-        logger.info(`[${this.exchangeName}] Account WebSocket reconnected`, {
-            wsKey: data?.wsKey,
-        })
-        this.isConnected = true
+      logger.info({ msg: 'Account WebSocket reconnected', function: 'OKXPrivateWebSocketClient.setupEventHandlers.reconnected',
+          exchange: this.exchangeName,
+          wsKey: data?.wsKey })
+      this.isConnected = true
     })
 
     this.client.on('error', (error: any) => {
-        logger.error(`[${this.exchangeName}] Account WebSocket error:`, error)
-        this.isConnected = false
-        this.handleConnectionError()
+      logger.error({ msg: 'Account WebSocket error', function: 'OKXPrivateWebSocketClient.setupEventHandlers.error',
+          exchange: this.exchangeName,
+          error })
+      this.isConnected = false
+      this.handleConnectionError()
     })
 
     this.client.on('update', (data: any) => {
       try {
         this.handleMessage(data)
       } catch (error) {
-        logger.error(`[${this.exchangeName}] Error parsing Account WebSocket message:`, error)
+        logger.error({ msg: 'Error parsing Account WebSocket message', function: 'OKXPrivateWebSocketClient.setupEventHandlers.update',
+            exchange: this.exchangeName,
+            data,
+            error })
       }
     })
   }
@@ -92,92 +106,93 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
         instType: 'SWAP'
       }
     ])
-    logger.info(`[${this.exchangeName}] Subscribed to account WebSocket streams`)
+    logger.info({ msg: 'Subscribed to account WebSocket streams', function: 'OKXPrivateWebSocketClient.subscribeToAccountStreams',
+        exchange: this.exchangeName })
   }
 }
 
 class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
   parseBalanceUpdate(data: any): BalanceInfo[] {
-      const balances: BalanceInfo[] = []
-      
-      if (data.data && Array.isArray(data.data)) {
-        for (const account of data.data) {
-          if (account.details && Array.isArray(account.details)) {
-            for (const detail of account.details) {
-              balances.push({
-                asset: detail.ccy,
-                total: parseFloat(detail.cashBal),
-                available: parseFloat(detail.availBal)
-              })
-            }
+    const balances: BalanceInfo[] = []
+    
+    if (data.data && Array.isArray(data.data)) {
+      for (const account of data.data) {
+        if (account.details && Array.isArray(account.details)) {
+          for (const detail of account.details) {
+            balances.push({
+              asset: detail.ccy,
+              total: parseFloat(detail.cashBal),
+              available: parseFloat(detail.availBal)
+            })
           }
         }
       }
+    }
 
-      return balances
+    return balances
   }
 
   parsePositionUpdate(data: any, restClient: RestClientInterface): PositionInfo[] {
-      const positions: PositionInfo[] = []
+    const positions: PositionInfo[] = []
+    
+    if (data.data && Array.isArray(data.data)) {
+      // Get trading markets to access contractSize
+      const markets = restClient.getTradingMarkets()
       
-      if (data.data && Array.isArray(data.data)) {
-        // Get trading markets to access contractSize
-        const markets = restClient.getTradingMarkets()
-        
-        for (const position of data.data) {
-            const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, MarketType.FUTURES, 'USDT')
-            const contracts = Math.abs(parseFloat(position.pos))
-            const contractSize = markets[symbol]?.contractSize || 1
-            // Calculate real position size: contracts * contractSize
-            const size = contracts * contractSize
+      for (const position of data.data) {
+        const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, MarketType.FUTURES, 'USDT')
+        const contracts = Math.abs(parseFloat(position.pos))
+        const contractSize = markets[symbol]?.contractSize || 1
+        // Calculate real position size: contracts * contractSize
+        const size = contracts * contractSize
 
-            positions.push({
-              id: position.posId,
-              symbol: symbol,
-              side: position.posSide.toUpperCase(),
-              size: size,
-              entryPrice: parseFloat(position.avgPx) || 0,
-              leverage: parseFloat(position.lever) || 1,
-              unrealizedPnL: parseFloat(position.upl) || 0,
-              timestamp: Number(position.cTime) || 0,
-              date: new Date(Number(position.cTime))
-            })
-        }
+        positions.push({
+          id: position.posId,
+          symbol: symbol,
+          side: position.posSide.toUpperCase(),
+          size: size,
+          entryPrice: parseFloat(position.avgPx) || 0,
+          leverage: parseFloat(position.lever) || 1,
+          unrealizedPnL: parseFloat(position.upl) || 0,
+          timestamp: Number(position.cTime) || 0,
+          date: new Date(Number(position.cTime))
+        })
       }
+    }
 
-      return positions
+    return positions
   }
 
   parseOrderUpdate(data: any, restClient: RestClientInterface): OrderInfo[] {
-      const orders: OrderInfo[] = []
-      
-      if (data.data && Array.isArray(data.data)) {        
-        for (const order of data.data) {
-          const symbol = convertExchangeSymbolToUnifiedSymbol(order.instId, MarketType.FUTURES, 'USDT')
-          const contracts = Math.abs(parseFloat(order.sz))
-          const contractSize = restClient.getTradingMarkets()[symbol]?.contractSize || 1
-          // Calculate real position size: contracts * contractSize
-          const size = contracts * contractSize
+    const orders: OrderInfo[] = []
+    
+    if (data.data && Array.isArray(data.data)) {        
+      for (const order of data.data) {
+        const symbol = convertExchangeSymbolToUnifiedSymbol(order.instId, MarketType.FUTURES, 'USDT')
+        const contracts = Math.abs(parseFloat(order.sz))
+        const contractSize = restClient.getTradingMarkets()[symbol]?.contractSize || 1
+        // Calculate real position size: contracts * contractSize
+        const size = contracts * contractSize
 
-          orders.push({
-            id: order.ordId,
-            clientOrderId: order.clOrdId,
-            symbol: symbol,
-            exchange: EXCHANGE_NAME,
-            orderSide: order.side.toUpperCase() as OrderSide,
-            positionSide: order.posSide.toUpperCase() as PositionSide,
-            type: order.ordType.toUpperCase() as OrderType,
-            price: parseFloat(order.px) || 0,
-            averagePrice: parseFloat(order.avgPx) || 0,
-            quantity: size,
-            status: this.normalizeOrderStatus(order.state),
-            timestamp: parseInt(order.cTime),
-            date: new Date(parseInt(order.cTime))
-          })
-        }
+        orders.push({
+          id: order.ordId,
+          clientOrderId: order.clOrdId,
+          symbol: symbol,
+          exchange: EXCHANGE_NAME,
+          orderSide: order.side.toUpperCase() as OrderSide,
+          positionSide: order.posSide.toUpperCase() as PositionSide,
+          type: order.ordType.toUpperCase() as OrderType,
+          price: parseFloat(order.px) || 0,
+          averagePrice: parseFloat(order.avgPx) || 0,
+          quantity: size,
+          status: this.normalizeOrderStatus(order.state),
+          timestamp: parseInt(order.cTime),
+          date: new Date(parseInt(order.cTime))
+        })
       }
+    }
 
-      return orders
+    return orders
   }
 
   isBalanceMessage(data: any): boolean {

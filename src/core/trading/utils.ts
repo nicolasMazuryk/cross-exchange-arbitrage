@@ -2,8 +2,10 @@ import { RestClientInterface } from '../../adapters/rest/types'
 import { AccountStateManager } from '../state/accountStateManager'
 import { OrderSide } from '../../types/exchange'
 import { OrderInfo } from '../../types/account'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
 import config from '../../utils/config'
+
+const logger = new Logger('trading-utils')
 
 /**
  * Place order and monitor for confirmation via account state
@@ -19,15 +21,28 @@ export async function placeOrderAndMonitor(
   exchange: string,
   accountStateManager: AccountStateManager
 ): Promise<OrderInfo> {
-  // Place the order
-  const order = await client.createOrder(symbol, 'MARKET', side, amount, price, isReduceOnly, clientOrderId)
-  
-  const orderInfo = await monitorOrderConfirmation(order.id, exchange, accountStateManager)
+  try {
+    // Place the order
+    const order = await client.createOrder(symbol, 'MARKET', side, amount, price, isReduceOnly, clientOrderId)
+    
+    const orderInfo = await monitorOrderConfirmation(order.id, exchange, accountStateManager)
 
-  orderInfo.expectedPrice = price
-  orderInfo.exchange = exchange
+    orderInfo.expectedPrice = price
+    orderInfo.exchange = exchange
 
-  return orderInfo
+    return orderInfo
+  } catch (error) {
+    logger.error({ msg: 'Failed to place and monitor order', function: 'placeOrderAndMonitor',
+      exchange,
+      symbol,
+      side,
+      amount,
+      price,
+      isReduceOnly,
+      clientOrderId,
+      error })
+    throw error
+  }
 }
 
 /**
@@ -40,22 +55,37 @@ export async function monitorOrderConfirmation(
 ): Promise<OrderInfo> {
   const startTime = Date.now()
   
-  while (Date.now() - startTime < config.trading.orderConfirmationTimeoutMs) {
-    // Check if order is in account state
-    const accountOrder = accountStateManager.getOrder(exchange, orderId)
-    
-    if (accountOrder && accountOrder.status === 'FILLED') {
-      logger.debug(`Order ${orderId} confirmed as FILLED`)
-      return accountOrder
+  try {
+    while (Date.now() - startTime < config.trading.orderConfirmationTimeoutMs) {
+      // Check if order is in account state
+      const accountOrder = accountStateManager.getOrder(exchange, orderId)
+      
+      if (accountOrder && accountOrder.status === 'FILLED') {
+        logger.debug({ msg: 'Order confirmed as FILLED', function: 'monitorOrderConfirmation',
+          orderId,
+          exchange })
+        return accountOrder
+      }
+      
+      // Wait before next check
+      await delay(100)
     }
     
-    // Wait before next check
-    await delay(100)
+    // If we reach here, order confirmation timed out
+    const timeoutError = new Error(`Order confirmation timeout for ${orderId}`)
+    logger.error({ msg: 'Order confirmation timed out', function: 'monitorOrderConfirmation',
+      orderId,
+      exchange,
+      timeoutMs: config.trading.orderConfirmationTimeoutMs,
+      error: timeoutError })
+    throw timeoutError
+  } catch (error) {
+    logger.error({ msg: 'Error monitoring order confirmation', function: 'monitorOrderConfirmation',
+      orderId,
+      exchange,
+      error })
+    throw error
   }
-  
-  // If we reach here, order confirmation timed out
-  logger.warn(`Order ${orderId} confirmation timed out`)
-  throw new Error(`Order confirmation timeout for ${orderId}`)
 }
 
 /**

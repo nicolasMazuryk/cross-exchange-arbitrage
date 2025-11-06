@@ -4,11 +4,13 @@ import { WebSocketConfig, PrivateWebSocketMessageParser } from '../types'
 import { RestClientInterface } from '../../rest/types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../../types/account'
 import { OrderType, OrderStatus, PositionSide } from '../../../types/exchange'
-import logger from '../../../utils/logger'
+import { Logger } from '../../../utils/logger'
 import { MarketType } from '../../../types/exchange'
 import { convertExchangeSymbolToUnifiedSymbol, getOrderSide, positionId } from '../../../utils/utils'
 
 const EXCHANGE_NAME = 'bitget'
+
+const logger = new Logger(`ws-private-${EXCHANGE_NAME}`)
 
 export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
@@ -29,41 +31,54 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', (data: any) => {
-      // logger.info(`[${this.exchangeName}] Account WebSocket connection opened: ${data.wsKey}`)
+      logger.debug({ msg: 'Account WebSocket connection opened', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.open',
+        exchange: this.exchangeName,
+        wsKey: data?.wsKey, })
       this.isConnected = true
     })
 
     this.client.on('close', () => {
-        logger.warn(`[${this.exchangeName}] Account WebSocket connection closed`)
-        this.isConnected = false
-        this.handleConnectionError()
+      logger.warn({ msg: 'WebSocket connection closed', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.close',
+        exchange: this.exchangeName, })
+      this.isConnected = false
+      this.handleConnectionError()
     })
 
     this.client.on('response', (data: any) => {
-        // logger.info(`[${this.exchangeName}] Account WebSocket reply received:`, data)
+      logger.debug({ msg: 'Account WebSocket reply received', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.response',
+        exchange: this.exchangeName,
+        data, })
     })
 
     this.client.on('reconnect', (data: any) => {
-        logger.info(`[${this.exchangeName}] Account WebSocket reconnecting...`, { wsKey: data?.wsKey })
-        this.isConnected = false
+      logger.info({ msg: 'WebSocket reconnecting', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.reconnect',
+        exchange: this.exchangeName,
+        wsKey: data?.wsKey, })
+      this.isConnected = false
     })
 
     this.client.on('reconnected', (data: any) => {
-        logger.info(`[${this.exchangeName}] Account WebSocket reconnected`, { wsKey: data?.wsKey })
-        this.isConnected = true
+      logger.info({ msg: 'WebSocket reconnected', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.reconnected',
+        exchange: this.exchangeName,
+        wsKey: data?.wsKey, })
+      this.isConnected = true
     })
 
     this.client.on('exception', (error: any) => {
-        logger.error(`[${this.exchangeName}] Account WebSocket error:`, JSON.stringify(error))
-        this.isConnected = false
-        this.handleConnectionError()
+      logger.error({ msg: 'WebSocket error', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.error',
+        exchange: this.exchangeName,
+        error, })
+      this.isConnected = false
+      this.handleConnectionError()
     })
 
     this.client.on('update', (data: any) => {
       try {
         this.handleMessage(data)
       } catch (error) {
-        logger.error(`[${this.exchangeName}] Error parsing Account WebSocket message:`, error)
+        logger.error({ msg: 'Error parsing Account WebSocket message', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.update',
+          exchange: this.exchangeName,
+          error, })
       }
     })
   }
@@ -71,53 +86,54 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
   protected async subscribeToAccountStreams(): Promise<void> {
     // Subscribe to account updates for USDT futures
     this.client.subscribeTopic('USDT-FUTURES', 'account', 'default')
-    
+
     // Subscribe to positions updates for USDT futures
     this.client.subscribeTopic('USDT-FUTURES', 'positions', 'default')
-    
+
     // Subscribe to orders updates for USDT futures
     this.client.subscribeTopic('USDT-FUTURES', 'orders', 'default')
-    
-    logger.info(`[${this.exchangeName}] Subscribed to account WebSocket streams`)
+
+    logger.info({ msg: 'Subscribed to account WebSocket streams', function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
+      exchange: this.exchangeName, })
   }
 }
 
 class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
   parseBalanceUpdate(data: any): BalanceInfo[] {
-      const balances: BalanceInfo[] = []
-      
-      if (data.data && Array.isArray(data.data)) {
-        for (const wallet of data.data) {
-            balances.push({
-              asset: wallet.marginCoin,
-              total: parseFloat(wallet.equity),
-              available: parseFloat(wallet.maxOpenPosAvailable)
-            })
-        }
-      }
+    const balances: BalanceInfo[] = []
 
-      return balances
+    if (data.data && Array.isArray(data.data)) {
+      for (const wallet of data.data) {
+        balances.push({
+          asset: wallet.marginCoin,
+          total: parseFloat(wallet.equity),
+          available: parseFloat(wallet.maxOpenPosAvailable),
+        })
+      }
+    }
+
+    return balances
   }
 
   parsePositionUpdate(data: any): PositionInfo[] {
     const positions: PositionInfo[] = []
-      
+
     if (data.data && Array.isArray(data.data)) {
       for (const position of data.data) {
         const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, MarketType.FUTURES, 'USDT')
         const positionSide = position.holdSide.toUpperCase() as PositionSide
 
-          positions.push({
-            id: positionId(symbol, positionSide),
-            symbol: symbol,
-            side: positionSide,
-            size: Math.abs(parseFloat(position.total)),
-            entryPrice: parseFloat(position.openPriceAvg) || 0,
-            leverage: parseFloat(position.leverage) || 1,
-            unrealizedPnL: parseFloat(position.unrealizedPL) || 0,
-            timestamp: Number(position.cTime),
-            date: new Date(Number(position.cTime))
-          })
+        positions.push({
+          id: positionId(symbol, positionSide),
+          symbol: symbol,
+          side: positionSide,
+          size: Math.abs(parseFloat(position.total)),
+          entryPrice: parseFloat(position.openPriceAvg) || 0,
+          leverage: parseFloat(position.leverage) || 1,
+          unrealizedPnL: parseFloat(position.unrealizedPL) || 0,
+          timestamp: Number(position.cTime),
+          date: new Date(Number(position.cTime)),
+        })
       }
     }
 
@@ -126,7 +142,7 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
 
   parseOrderUpdate(data: any): OrderInfo[] {
     const orders: OrderInfo[] = []
-      
+
     if (data.data && Array.isArray(data.data)) {
       for (const order of data.data) {
         orders.push({
@@ -142,7 +158,7 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
           quantity: parseFloat(order.size),
           status: this.normalizeOrderStatus(order.status),
           timestamp: parseInt(order.cTime),
-          date: new Date(Number(order.cTime))
+          date: new Date(Number(order.cTime)),
         })
       }
     }

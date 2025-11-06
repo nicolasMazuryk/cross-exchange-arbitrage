@@ -46,4 +46,5 @@ export interface AccountStateUpdate {
   type: 'balance' | 'position' | 'order'
   data: BalanceInfo[] | PositionInfo[] | OrderInfo[]
   timestamp: number
+  traceId: string
 } 

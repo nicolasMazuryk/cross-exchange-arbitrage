@@ -1,8 +1,10 @@
 import { EventEmitter } from 'events'
 import { BalanceInfo, PositionInfo, OrderInfo, AccountState, AccountStateUpdate } from '../../types/account'
 import { OrderStatus, PositionSide } from '../../types/exchange'
-import logger from '../../utils/logger'
+import { Logger } from '../../utils/logger'
 import config from '../../utils/config'
+
+const logger = new Logger('account-state-manager')
 
 interface ExchangeState {
   balances: BalanceInfo[]
@@ -20,7 +22,7 @@ export class AccountStateManager extends EventEmitter {
 
   constructor() {
     super()
-    logger.info('AccountStateManager initialized')
+    logger.info({ msg: 'AccountStateManager initialized' })
   }
 
   // Getter methods
@@ -70,7 +72,7 @@ export class AccountStateManager extends EventEmitter {
 
     state.lastUpdate.balances = Date.now()
 
-    // logger.debug(`[${exchange}] Updated balances: ${balances.length} assets`)
+    // logger.debug({ msg: `[${exchange}] Updated balances: ${balances.length} assets` })
     this.emit('stateUpdate', { exchange, type: 'balance', data: state.balances, timestamp: Date.now() })
   }
 
@@ -102,7 +104,7 @@ export class AccountStateManager extends EventEmitter {
 
     state.lastUpdate.positions = Date.now()
 
-    logger.debug(`[${exchange}] Updated positions: ${state.positions.length} positions`)
+    logger.debug({ msg: `[${exchange}] Updated positions: ${state.positions.length} positions` })
     this.emit('stateUpdate', { exchange, type: 'position', data: state.positions, timestamp: Date.now() })
   }
 
@@ -131,7 +133,7 @@ export class AccountStateManager extends EventEmitter {
 
     state.lastUpdate.orders = Date.now()
 
-    logger.debug(`[${exchange}] Updated orders: ${state.orders.length} orders`)
+    logger.debug({ msg: `[${exchange}] Updated orders: ${state.orders.length} orders` })
     this.emit('stateUpdate', { exchange, type: 'order', data: state.orders, timestamp: Date.now() })
   }
 
@@ -217,7 +219,7 @@ export class AccountStateManager extends EventEmitter {
   // Clear state for an exchange (useful for testing or reconnection)
   clearExchangeState(exchange: string): void {
     this.exchangeStates.delete(exchange)
-    logger.info(`[${exchange}] Cleared account state`)
+    logger.debug({ msg: `[${exchange}] Cleared account state` })
   }
 
   // Get summary statistics

@@ -9,6 +9,7 @@ dist/
 build/
 
 zzz/
+zzz_temp/
 
 # Environment variables
 .env
@@ -30,4 +31,7 @@ logs/
 *.log
 
 # Test coverage
-coverage/ 
+coverage/
+
+# Redis data
+redis-data/ 
