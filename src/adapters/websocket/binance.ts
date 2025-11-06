@@ -64,7 +64,7 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
         function: 'BinancePublicWebSocketClient.setupEventHandlers.open',
         exchange: this.exchangeName,
         batchId: batch.id,
-        symbolCount: batch.symbols.length
+        symbolCount: batch.symbols.length,
       })
       batch.isConnected = true
     })
@@ -75,17 +75,19 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
         function: 'BinancePublicWebSocketClient.setupEventHandlers.close',
         exchange: this.exchangeName,
         batchId: batch.id,
-        symbolCount: batch.symbols.length
+        symbolCount: batch.symbols.length,
       })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('reply', (data: any) => {
-      logger.debug({ msg: 'WebSocket reply received', function: 'BinancePublicWebSocketClient.setupEventHandlers.reply',
+      logger.debug({
+        msg: 'WebSocket reply received',
+        function: 'BinancePublicWebSocketClient.setupEventHandlers.reply',
         exchange: this.exchangeName,
         batchId: batch.id,
-        data
+        data,
       })
     })
 
@@ -96,7 +98,7 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
         exchange: this.exchangeName,
         batchId: batch.id,
         symbolCount: batch.symbols.length,
-        wsKey: data?.wsKey
+        wsKey: data?.wsKey,
       })
       batch.isConnected = false
     })
@@ -108,7 +110,7 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
         exchange: this.exchangeName,
         batchId: batch.id,
         symbolCount: batch.symbols.length,
-        wsKey: data?.wsKey
+        wsKey: data?.wsKey,
       })
       batch.isConnected = true
     })
@@ -127,7 +129,7 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('message', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async (traceId) => {
+      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
         try {
           if (this.messageParser.isOrderBookMessage(data)) {
             const update = this.messageParser.parseOrderBookUpdate(data)

@@ -32,12 +32,11 @@ export class State {
       this.redis = new Redis(config.redis.url, {
         maxRetriesPerRequest: 3,
         enableReadyCheck: true,
-        lazyConnect: false
+        lazyConnect: false,
       })
 
-      this.redis.on('error', (error) => {
-        logger.error({ msg: 'Redis connection error', function: 'State.connect',
-          error })
+      this.redis.on('error', error => {
+        logger.error({ msg: 'Redis connection error', function: 'State.connect', error })
         this.isConnected = false
       })
 
@@ -61,8 +60,7 @@ export class State {
 
       logger.info({ msg: 'Redis state service connected', function: 'State.connect' })
     } catch (error) {
-      logger.error({ msg: 'Failed to connect to Redis', function: 'State.connect',
-        error })
+      logger.error({ msg: 'Failed to connect to Redis', function: 'State.connect', error })
       this.isConnected = false
       throw error
     }
@@ -92,8 +90,7 @@ export class State {
    */
   async set<T>(key: string, value: T): Promise<void> {
     if (!this.isRedisConnected() || !this.redis) {
-      logger.error({ msg: 'Redis not connected, skipping set', function: 'State.set',
-        key })
+      logger.error({ msg: 'Redis not connected, skipping set', function: 'State.set', key })
       return
     }
 
@@ -103,12 +100,9 @@ export class State {
 
       await this.redis.set(fullKey, serialized)
 
-      logger.debug({ msg: `"${key}" saved to Redis`, function: 'State.set',
-        key: fullKey })
+      logger.debug({ msg: `"${key}" saved to Redis`, function: 'State.set', key: fullKey })
     } catch (error) {
-      logger.error({ msg: `"${key}" failed to save to Redis`, function: 'State.set',
-        key,
-        error })
+      logger.error({ msg: `"${key}" failed to save to Redis`, function: 'State.set', key, error })
       throw error
     }
   }
@@ -118,8 +112,7 @@ export class State {
    */
   async get<T>(key: string): Promise<T | null> {
     if (!this.isRedisConnected() || !this.redis) {
-      logger.error({ msg: 'Redis not connected, returning null', function: 'State.get',
-        key })
+      logger.error({ msg: 'Redis not connected, returning null', function: 'State.get', key })
       return null
     }
 
@@ -128,21 +121,17 @@ export class State {
       const serialized = await this.redis.get(fullKey)
 
       if (!serialized) {
-        logger.debug({ msg: 'No data found in Redis', function: 'State.get',
-          key: fullKey })
+        logger.debug({ msg: 'No data found in Redis', function: 'State.get', key: fullKey })
         return null
       }
 
       const value: T = JSON.parse(serialized)
 
-      logger.debug({ msg: `"${key}" loaded from Redis`, function: 'State.get',
-        key: fullKey })
+      logger.debug({ msg: `"${key}" loaded from Redis`, function: 'State.get', key: fullKey })
 
       return value
     } catch (error) {
-      logger.error({ msg: `"${key}" failed to load from Redis`, function: 'State.get',
-        key,
-        error })
+      logger.error({ msg: `"${key}" failed to load from Redis`, function: 'State.get', key, error })
       return null
     }
   }
@@ -152,8 +141,7 @@ export class State {
    */
   async delete(key: string): Promise<void> {
     if (!this.isRedisConnected() || !this.redis) {
-      logger.error({ msg: 'Redis not connected, skipping delete', function: 'State.delete',
-        key })
+      logger.error({ msg: 'Redis not connected, skipping delete', function: 'State.delete', key })
       return
     }
 
@@ -161,12 +149,9 @@ export class State {
       const fullKey = `${this.keyPrefix}${key}`
       await this.redis.del(fullKey)
 
-      logger.debug({ msg: `"${key}" deleted from Redis`, function: 'State.delete',
-        key: fullKey })
+      logger.debug({ msg: `"${key}" deleted from Redis`, function: 'State.delete', key: fullKey })
     } catch (error) {
-      logger.error({ msg: `"${key}" failed to delete from Redis`, function: 'State.delete',
-        key,
-        error })
+      logger.error({ msg: `"${key}" failed to delete from Redis`, function: 'State.delete', key, error })
       throw error
     }
   }
@@ -177,8 +162,7 @@ export class State {
   async saveTrackedTrade(trade: TrackedTrade): Promise<void> {
     const key = `tracked-trades:${trade.id}`
     await this.set<TrackedTrade>(key, trade)
-    logger.debug({ msg: 'Tracked trade saved', function: 'State.saveTrackedTrade',
-      tradeId: trade.id })
+    logger.debug({ msg: 'Tracked trade saved', function: 'State.saveTrackedTrade', tradeId: trade.id })
   }
 
   /**
@@ -215,20 +199,20 @@ export class State {
             const trade: TrackedTrade = JSON.parse(serialized)
             trades.push(trade)
           } catch (error) {
-            logger.error({ msg: 'Failed to parse tracked trade', function: 'State.loadAllTrackedTrades',
-              key,
-              error })
+            logger.error({ msg: 'Failed to parse tracked trade', function: 'State.loadAllTrackedTrades', key, error })
           }
         }
       }
 
-      logger.debug({ msg: 'Tracked trades loaded from Redis', function: 'State.loadAllTrackedTrades',
-        tradeCount: trades.length })
+      logger.debug({
+        msg: 'Tracked trades loaded from Redis',
+        function: 'State.loadAllTrackedTrades',
+        tradeCount: trades.length,
+      })
 
       return trades
     } catch (error) {
-      logger.error({ msg: 'Failed to load tracked trades from Redis', function: 'State.loadAllTrackedTrades',
-        error })
+      logger.error({ msg: 'Failed to load tracked trades from Redis', function: 'State.loadAllTrackedTrades', error })
       return []
     }
   }
@@ -240,9 +224,12 @@ export class State {
     const allTrades = await this.loadAllTrackedTrades()
     const openTrades = allTrades.filter(trade => trade.status === 'open')
 
-    logger.info({ msg: 'Open tracked trades loaded from Redis', function: 'State.loadOpenTrackedTrades',
+    logger.info({
+      msg: 'Open tracked trades loaded from Redis',
+      function: 'State.loadOpenTrackedTrades',
       totalTrades: allTrades.length,
-      openTrades: openTrades.length })
+      openTrades: openTrades.length,
+    })
 
     return openTrades
   }
@@ -253,9 +240,12 @@ export class State {
   async updateTrackedTrade(trade: TrackedTrade): Promise<void> {
     const key = `tracked-trades:${trade.id}`
     await this.set<TrackedTrade>(key, trade)
-    logger.debug({ msg: 'Tracked trade updated', function: 'State.updateTrackedTrade',
+    logger.debug({
+      msg: 'Tracked trade updated',
+      function: 'State.updateTrackedTrade',
       tradeId: trade.id,
-      status: trade.status })
+      status: trade.status,
+    })
   }
 
   /**
@@ -264,7 +254,6 @@ export class State {
   async removeTrackedTrade(tradeId: string): Promise<void> {
     const key = `tracked-trades:${tradeId}`
     await this.delete(key)
-    logger.debug({ msg: 'Tracked trade removed', function: 'State.removeTrackedTrade',
-      tradeId })
+    logger.debug({ msg: 'Tracked trade removed', function: 'State.removeTrackedTrade', tradeId })
   }
 }

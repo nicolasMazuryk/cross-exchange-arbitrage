@@ -30,43 +30,60 @@ export class BinancePrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', () => {
-      logger.debug({ msg: 'Account WebSocket connection opened', function: 'BinancePrivateWebSocketClient.setupEventHandlers.open',
+      logger.debug({
+        msg: 'Account WebSocket connection opened',
+        function: 'BinancePrivateWebSocketClient.setupEventHandlers.open',
         exchange: this.exchangeName,
       })
       this.isConnected = true
     })
 
     this.client.on('close', () => {
-      logger.warn({ msg: 'Account WebSocket connection closed', function: 'BinancePrivateWebSocketClient.setupEventHandlers.close',
-        exchange: this.exchangeName, })
+      logger.warn({
+        msg: 'Account WebSocket connection closed',
+        function: 'BinancePrivateWebSocketClient.setupEventHandlers.close',
+        exchange: this.exchangeName,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
 
     this.client.on('reply', (data: any) => {
-      logger.debug({ msg: 'Account WebSocket reply received', function: 'BinancePrivateWebSocketClient.setupEventHandlers.reply',
+      logger.debug({
+        msg: 'Account WebSocket reply received',
+        function: 'BinancePrivateWebSocketClient.setupEventHandlers.reply',
         exchange: this.exchangeName,
-        data, })
+        data,
+      })
     })
 
     this.client.on('reconnecting', (data: any) => {
-      logger.info({ msg: 'Account WebSocket reconnecting...', function: 'BinancePrivateWebSocketClient.setupEventHandlers.reconnecting',
+      logger.info({
+        msg: 'Account WebSocket reconnecting...',
+        function: 'BinancePrivateWebSocketClient.setupEventHandlers.reconnecting',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = false
     })
 
     this.client.on('reconnected', (data: any) => {
-      logger.info({ msg: 'Account WebSocket reconnected', function: 'BinancePrivateWebSocketClient.setupEventHandlers.reconnected',
+      logger.info({
+        msg: 'Account WebSocket reconnected',
+        function: 'BinancePrivateWebSocketClient.setupEventHandlers.reconnected',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = true
     })
 
     this.client.on('error', (error: any) => {
-      logger.error({ msg: 'Account WebSocket error', function: 'BinancePrivateWebSocketClient.setupEventHandlers.error',
+      logger.error({
+        msg: 'Account WebSocket error',
+        function: 'BinancePrivateWebSocketClient.setupEventHandlers.error',
         exchange: this.exchangeName,
-        error, })
+        error,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
@@ -75,17 +92,23 @@ export class BinancePrivateWebSocketClient extends BasePrivateWebSocketClient {
       try {
         this.handleMessage(data)
       } catch (error) {
-        logger.error({ msg: 'Error parsing Account WebSocket message', function: 'BinancePrivateWebSocketClient.setupEventHandlers.message',
+        logger.error({
+          msg: 'Error parsing Account WebSocket message',
+          function: 'BinancePrivateWebSocketClient.setupEventHandlers.message',
           exchange: this.exchangeName,
-          error, })
+          error,
+        })
       }
     })
   }
 
   protected async subscribeToAccountStreams(): Promise<void> {
     this.client.subscribeUsdFuturesUserDataStream()
-    logger.info({ msg: 'Subscribed to account WebSocket streams', function: 'BinancePrivateWebSocketClient.subscribeToAccountStreams',
-      exchange: this.exchangeName, })
+    logger.info({
+      msg: 'Subscribed to account WebSocket streams',
+      function: 'BinancePrivateWebSocketClient.subscribeToAccountStreams',
+      exchange: this.exchangeName,
+    })
   }
 }
 
@@ -118,7 +141,7 @@ class BinancePrivateMessageParser implements PrivateWebSocketMessageParser {
       if (data.a && data.a.P) {
         for (const position of data.a.P) {
           const size = parseFloat(position.pa)
-          const side = size > 0 ? 'LONG' : 'SHORT' as PositionSide
+          const side = size > 0 ? 'LONG' : ('SHORT' as PositionSide)
           if (size !== 0) {
             positions.push({
               id: positionId(position.s, side),

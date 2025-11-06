@@ -26,21 +26,21 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
         candidateCleanupMs: 5000,
         minConfidenceScore: 0.7,
         maxMarketSpread: 0.003,
-        maxAnomalySpreadThreshold: 0.10,
+        maxAnomalySpreadThreshold: 0.1,
         maxOrderbookAge: 2000,
-        orderAmountToleranceMin: 0.60,
-        orderAmountToleranceMax: 1.40
+        orderAmountToleranceMin: 0.6,
+        orderAmountToleranceMax: 1.4,
       },
       trading: {
-        orderAmount: 10
-      }
+        orderAmount: 10,
+      },
     }
 
     // Create mock orderbook manager
     mockOrderbookManager = {
       on: jest.fn(),
       getAllOrderbooks: jest.fn(),
-      emit: jest.fn()
+      emit: jest.fn(),
     } as any
 
     // Create mock market metadata service
@@ -50,30 +50,30 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
       normalizePrice: jest.fn(),
       denormalizeAmount: jest.fn(),
       normalizeAmount: jest.fn(),
-      getMetadata: jest.fn()
+      getMetadata: jest.fn(),
     } as any
 
     const exchangeConfigs: ExchangeMeta[] = [
       {
         name: 'binance',
         isHealthy: true,
-        feeModel: { maker: 0.0002, taker: 0.0005 }
+        feeModel: { maker: 0.0002, taker: 0.0005 },
       },
       {
         name: 'bybit',
         isHealthy: true,
-        feeModel: { maker: 0.0002, taker: 0.00055 }
-      }
+        feeModel: { maker: 0.0002, taker: 0.00055 },
+      },
     ]
 
     const marketMetadataServices = new Map([
       ['binance', mockMarketMetadataService],
-      ['bybit', mockMarketMetadataService]
+      ['bybit', mockMarketMetadataService],
     ])
 
     // Mock funding service
     const mockFundingService = {
-      getSymbolFundingData: jest.fn().mockReturnValue(undefined)
+      getSymbolFundingData: jest.fn().mockReturnValue(undefined),
     } as any
 
     arbitrageEngine = new ArbitrageEngine(
@@ -94,7 +94,7 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
         bestBid: { price: 50000, quantity: 1, amount: 50000 },
         bestAsk: { price: 50001, quantity: 1, amount: 50001 },
         spread: 0.002,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }
 
       // Mock market metadata service responses
@@ -113,27 +113,39 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
         contractSize: 1,
         pricePrecision: 2,
         amountPrecision: 3,
-        minAmount: 0.0001
+        minAmount: 0.0001,
       } as MarketMetadata)
 
       // Mock orderbook data
       const mockOrderbooks = new Map([
-        ['binance', new Map([
-          ['BTCUSDT', {
-            bids: [{ price: 50000, quantity: 1, amount: 50000 }],
-            asks: [{ price: 50001, quantity: 1, amount: 50001 }],
-            timestamp: Date.now(),
-            finalUpdateId: 1
-          } as OrderBook]
-        ])],
-        ['bybit', new Map([
-          ['BTCUSDT', {
-            bids: [{ price: 50002, quantity: 1, amount: 50002 }],
-            asks: [{ price: 50003, quantity: 1, amount: 50003 }],
-            timestamp: Date.now(),
-            finalUpdateId: 1
-          } as OrderBook]
-        ])]
+        [
+          'binance',
+          new Map([
+            [
+              'BTCUSDT',
+              {
+                bids: [{ price: 50000, quantity: 1, amount: 50000 }],
+                asks: [{ price: 50001, quantity: 1, amount: 50001 }],
+                timestamp: Date.now(),
+                finalUpdateId: 1,
+              } as OrderBook,
+            ],
+          ]),
+        ],
+        [
+          'bybit',
+          new Map([
+            [
+              'BTCUSDT',
+              {
+                bids: [{ price: 50002, quantity: 1, amount: 50002 }],
+                asks: [{ price: 50003, quantity: 1, amount: 50003 }],
+                timestamp: Date.now(),
+                finalUpdateId: 1,
+              } as OrderBook,
+            ],
+          ]),
+        ],
       ])
 
       mockOrderbookManager.getAllOrderbooks.mockReturnValue(mockOrderbooks)
@@ -156,7 +168,7 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
         bestBid: { price: 50000, quantity: 1, amount: 50000 },
         bestAsk: { price: 50001, quantity: 1, amount: 50001 },
         spread: 0.002,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }
 
       // Mock market metadata service responses
@@ -175,27 +187,39 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
         contractSize: 1,
         pricePrecision: 2,
         amountPrecision: 3,
-        minAmount: 0.0001
+        minAmount: 0.0001,
       } as MarketMetadata)
 
       // Mock orderbook data with profitable spread (0.2% spread which is above 0.15% threshold)
       const mockOrderbooks = new Map([
-        ['binance', new Map([
-          ['BTCUSDT', {
-            bids: [{ price: 50000, quantity: 1, amount: 50000 }],
-            asks: [{ price: 50001, quantity: 1, amount: 50001 }],
-            timestamp: Date.now(),
-            finalUpdateId: 1
-          } as OrderBook]
-        ])],
-        ['bybit', new Map([
-          ['BTCUSDT', {
-            bids: [{ price: 50100, quantity: 1, amount: 50100 }], // Higher bid for 0.2% profit
-            asks: [{ price: 50101, quantity: 1, amount: 50101 }],
-            timestamp: Date.now(),
-            finalUpdateId: 1
-          } as OrderBook]
-        ])]
+        [
+          'binance',
+          new Map([
+            [
+              'BTCUSDT',
+              {
+                bids: [{ price: 50000, quantity: 1, amount: 50000 }],
+                asks: [{ price: 50001, quantity: 1, amount: 50001 }],
+                timestamp: Date.now(),
+                finalUpdateId: 1,
+              } as OrderBook,
+            ],
+          ]),
+        ],
+        [
+          'bybit',
+          new Map([
+            [
+              'BTCUSDT',
+              {
+                bids: [{ price: 50100, quantity: 1, amount: 50100 }], // Higher bid for 0.2% profit
+                asks: [{ price: 50101, quantity: 1, amount: 50101 }],
+                timestamp: Date.now(),
+                finalUpdateId: 1,
+              } as OrderBook,
+            ],
+          ]),
+        ],
       ])
 
       mockOrderbookManager.getAllOrderbooks.mockReturnValue(mockOrderbooks)
@@ -204,7 +228,8 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
       const emitSpy = jest.spyOn(arbitrageEngine, 'emit')
 
       // Trigger the scan multiple times to build persistence
-      for (let i = 0; i < 5; i++) { // Increased to 5 scans
+      for (let i = 0; i < 5; i++) {
+        // Increased to 5 scans
         arbitrageEngine['scanOpportunities'](mockTopOfBook)
       }
 
@@ -214,4 +239,4 @@ describe('ArbitrageEngine - Temporal Persistence Validation', () => {
       expect(true).toBe(true) // Test passes - persistence validation is working
     })
   })
-}) 
+})

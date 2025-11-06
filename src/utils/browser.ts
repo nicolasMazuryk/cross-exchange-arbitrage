@@ -16,7 +16,7 @@ export class Browser {
   private async initBrowser(): Promise<void> {
     try {
       if (!this.browser) {
-        this.browser = await chromium.launch({ 
+        this.browser = await chromium.launch({
           headless: true,
           args: [
             '--no-sandbox',
@@ -60,28 +60,29 @@ export class Browser {
             '--disable-renderer-backgrounding',
             '--disable-backgrounding-occluded-windows',
             '--disable-ipc-flooding-protection',
-            '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          ]
+            '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          ],
         })
         logger.trace({ msg: 'Browser instance launched successfully', function: 'Browser.initBrowser' })
       }
-      
+
       if (!this.context) {
         this.context = await this.browser.newContext({
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          userAgent:
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           viewport: { width: 1920, height: 1080 },
           ignoreHTTPSErrors: true,
           javaScriptEnabled: true,
           locale: 'en-US',
           timezoneId: 'America/New_York',
-          geolocation: { latitude: 40.7128, longitude: -74.0060 },
+          geolocation: { latitude: 40.7128, longitude: -74.006 },
           permissions: ['geolocation'],
           extraHTTPHeaders: {
-            'Accept': 'application/json, text/plain, */*',
+            Accept: 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
+            Pragma: 'no-cache',
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-origin',
@@ -89,76 +90,64 @@ export class Browser {
             'Sec-Ch-Ua-Mobile': '?0',
             'Sec-Ch-Ua-Platform': '"macOS"',
             'Upgrade-Insecure-Requests': '1',
-            'DNT': '1'
-          }
+            DNT: '1',
+          },
         })
         logger.trace({ msg: 'Browser context created successfully', function: 'Browser.initBrowser' })
       }
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize browser', function: 'Browser.initBrowser',
-        error, })
+      logger.error({ msg: 'Failed to initialize browser', function: 'Browser.initBrowser', error })
       throw error
     }
   }
 
   public async fetchJson(url: string, timeoutMs: number = 30000): Promise<any> {
     let page: Page | null = null
-    
+
     try {
       await this.initBrowser()
-      
+
       if (!this.context) {
         throw new Error('Browser context not initialized')
       }
 
       page = await this.context.newPage()
-      logger.trace({ msg: 'Fetching JSON data via browser', function: 'Browser.fetchJson',
-        url,
-        timeoutMs })
-      
+      logger.trace({ msg: 'Fetching JSON data via browser', function: 'Browser.fetchJson', url, timeoutMs })
+
       page.setDefaultTimeout(timeoutMs)
-      
+
       // Simple navigation without stealth
-      await page.goto(url, { 
+      await page.goto(url, {
         waitUntil: 'networkidle',
-        timeout: timeoutMs 
+        timeout: timeoutMs,
       })
-      
+
       // Wait for content
-    //   await page.waitForTimeout(1000)
-      
+      //   await page.waitForTimeout(1000)
+
       // Get the page content
       const content = await page.textContent('body')
-      
+
       if (!content) {
         throw new Error('No content received from page')
       }
-      
+
       // Try to parse as JSON
       try {
         const json = JSON.parse(content)
-        logger.trace({ msg: 'Successfully fetched and parsed JSON', function: 'Browser.fetchJson',
-          url, })
+        logger.trace({ msg: 'Successfully fetched and parsed JSON', function: 'Browser.fetchJson', url })
         return json
       } catch (parseError) {
-        logger.error({ msg: 'Failed to parse JSON response', function: 'Browser.fetchJson',
-          url,
-          error: parseError, })
+        logger.error({ msg: 'Failed to parse JSON response', function: 'Browser.fetchJson', url, error: parseError })
         throw parseError
       }
-      
     } catch (error) {
-      logger.error({ msg: 'Error fetching data via browser', function: 'Browser.fetchJson',
-        url,
-        timeoutMs,
-        error, })
+      logger.error({ msg: 'Error fetching data via browser', function: 'Browser.fetchJson', url, timeoutMs, error })
       throw error
     } finally {
       if (page) {
         await page.close().catch(err => {
-          logger.error({ msg: 'Error closing browser page', function: 'Browser.fetchJson',
-            url,
-            error: err, })
+          logger.error({ msg: 'Error closing browser page', function: 'Browser.fetchJson', url, error: err })
         })
       }
     }
@@ -174,17 +163,16 @@ export class Browser {
         this.context = null
         logger.trace({ msg: 'Browser context closed', function: 'Browser.close' })
       }
-      
+
       if (this.browser) {
         await this.browser.close()
         this.browser = null
         logger.trace({ msg: 'Browser instance closed', function: 'Browser.close' })
       }
-      
+
       logger.trace({ msg: 'Browser resources cleaned up successfully', function: 'Browser.close' })
     } catch (error) {
-      logger.error({ msg: 'Error closing browser', function: 'Browser.close',
-        error, })
+      logger.error({ msg: 'Error closing browser', function: 'Browser.close', error })
       throw error
     }
   }
@@ -220,8 +208,7 @@ export async function closeBrowser(): Promise<void> {
       globalBrowser = null
     }
   } catch (error) {
-    logger.error({ msg: 'Error closing global browser instance', function: 'closeBrowser',
-      error, })
+    logger.error({ msg: 'Error closing global browser instance', function: 'closeBrowser', error })
     throw error
   }
 }
@@ -234,9 +221,7 @@ export async function fetchJsonFromUrl(url: string): Promise<any> {
     const browser = getBrowser()
     return await browser.fetchJson(url)
   } catch (error) {
-    logger.error({ msg: 'Error in fetchJsonFromUrl', function: 'fetchJsonFromUrl',
-      url,
-      error, })
+    logger.error({ msg: 'Error in fetchJsonFromUrl', function: 'fetchJsonFromUrl', url, error })
     throw error
   }
 }

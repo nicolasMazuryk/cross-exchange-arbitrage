@@ -13,13 +13,12 @@ const asyncLocalStorage = new AsyncLocalStorage<TraceCtx>()
 
 /**
  * TraceContext
- * 
+ *
  * Provides context propagation for distributed tracing using AsyncLocalStorage.
  * Ensures traceId and spanId are automatically attached to all logs within
  * a traced operation, enabling end-to-end reconstruction of arbitrage cycles.
  */
 export class TraceContext {
-
   static getContext(): TraceCtx | undefined {
     return asyncLocalStorage.getStore()
   }
@@ -31,7 +30,7 @@ export class TraceContext {
   ): Promise<T> {
     const traceId = randomUUID()
     const spanId = randomUUID()
-    
+
     const context: TraceCtx = {
       traceId,
       spanId,
@@ -49,7 +48,7 @@ export class TraceContext {
     metadata?: Record<string, any>
   ): T {
     const spanId = randomUUID()
-    
+
     const context: TraceCtx = {
       traceId,
       spanId,
@@ -60,11 +59,9 @@ export class TraceContext {
     return asyncLocalStorage.run(context, callback)
   }
 
-  static async runWithSpan<T>(
-    callback: (spanId: string) => Promise<T>
-  ): Promise<T> {
+  static async runWithSpan<T>(callback: (spanId: string) => Promise<T>): Promise<T> {
     const currentContext = asyncLocalStorage.getStore()
-    
+
     if (!currentContext) {
       throw new Error('Cannot create span without parent trace context')
     }
@@ -81,7 +78,7 @@ export class TraceContext {
 
   static updateMetadata(metadata: Record<string, any>): void {
     const currentContext = asyncLocalStorage.getStore()
-    
+
     if (currentContext) {
       currentContext.metadata = {
         ...currentContext.metadata,
@@ -92,7 +89,7 @@ export class TraceContext {
 
   static getTraceFields(): Partial<TraceCtx> {
     const context = asyncLocalStorage.getStore()
-    
+
     if (!context) {
       return {}
     }
@@ -105,4 +102,3 @@ export class TraceContext {
     }
   }
 }
-

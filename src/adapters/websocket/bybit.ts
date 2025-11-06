@@ -55,10 +55,12 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected setupEventHandlers(batch: StreamBatch): void {
     batch.client.on('open', () => {
-      logger.info({ msg: 'WebSocket connection opened', function: 'BybitPublicWebSocketClient.setupEventHandlers.open',
+      logger.info({
+        msg: 'WebSocket connection opened',
+        function: 'BybitPublicWebSocketClient.setupEventHandlers.open',
         exchange: this.exchangeName,
         batchId: batch.id,
-        symbolCount: batch.symbols.length
+        symbolCount: batch.symbols.length,
       })
       batch.isConnected = true
     })
@@ -67,17 +69,19 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
       logger.warn({
         msg: 'WebSocket connection closed',
         exchange: this.exchangeName,
-        batchId: batch.id
+        batchId: batch.id,
       })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('response', (data: any) => {
-      logger.info({ msg: 'WebSocket reply received', function: 'BybitPublicWebSocketClient.setupEventHandlers.response',
+      logger.info({
+        msg: 'WebSocket reply received',
+        function: 'BybitPublicWebSocketClient.setupEventHandlers.response',
         exchange: this.exchangeName,
         batchId: batch.id,
-        data
+        data,
       })
     })
 
@@ -96,7 +100,7 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
         msg: 'WebSocket reconnected successfully',
         exchange: this.exchangeName,
         batchId: batch.id,
-        wsKey: data?.wsKey
+        wsKey: data?.wsKey,
       })
       batch.isConnected = true
     })
@@ -106,14 +110,14 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
         msg: 'WebSocket error',
         exchange: this.exchangeName,
         batchId: batch.id,
-        error
+        error,
       })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('update', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async (traceId) => {
+      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
         try {
           if (this.messageParser.isOrderBookMessage(data)) {
             const update = this.messageParser.parseOrderBookUpdate(data)
@@ -125,7 +129,7 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
             msg: 'Error parsing WebSocket message',
             exchange: this.exchangeName,
             batchId: batch.id,
-            error
+            error,
           })
         }
       }).catch(error => {

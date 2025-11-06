@@ -49,7 +49,7 @@ export class AccountStateManager extends EventEmitter {
     return {
       balances: state.balances,
       positions: state.positions,
-      orders: state.orders
+      orders: state.orders,
     }
   }
 
@@ -61,7 +61,7 @@ export class AccountStateManager extends EventEmitter {
       this.exchangeStates.set(exchange, state)
     }
 
-    for (const balance of [ ...balances ]) {
+    for (const balance of [...balances]) {
       const existingIndex = state.balances.findIndex(b => b.asset === balance.asset)
       if (existingIndex >= 0) {
         state.balances[existingIndex] = balance
@@ -84,9 +84,9 @@ export class AccountStateManager extends EventEmitter {
     }
 
     // Handle position updates
-    for (const position of [ ...positions ]) {
+    for (const position of [...positions]) {
       const existingIndex = state.positions.findIndex(p => p.id === position.id)
-      
+
       if (position.size > 0) {
         // Position has size, add or update
         if (existingIndex >= 0) {
@@ -115,7 +115,7 @@ export class AccountStateManager extends EventEmitter {
       this.exchangeStates.set(exchange, state)
     }
 
-    for (const order of [ ...orders ]) {
+    for (const order of [...orders]) {
       const existingIndex = state.orders.findIndex(o => o.id === order.id)
 
       // if (this.isTerminalOrderStatus(order.status)) {
@@ -123,11 +123,11 @@ export class AccountStateManager extends EventEmitter {
       //     state.orders.splice(existingIndex, 1)
       //   }
       // } else {
-        if (existingIndex >= 0) {
-          state.orders[existingIndex] = order
-        } else {
-          state.orders.push(order)
-        }
+      if (existingIndex >= 0) {
+        state.orders[existingIndex] = order
+      } else {
+        state.orders.push(order)
+      }
       // }
     }
 
@@ -223,14 +223,14 @@ export class AccountStateManager extends EventEmitter {
   }
 
   // Get summary statistics
-  getStateSummary(): Record<string, { balances: number, positions: number, orders: number }> {
-    const summary: Record<string, { balances: number, positions: number, orders: number }> = {}
-    
+  getStateSummary(): Record<string, { balances: number; positions: number; orders: number }> {
+    const summary: Record<string, { balances: number; positions: number; orders: number }> = {}
+
     for (const [exchange, state] of this.exchangeStates.entries()) {
       summary[exchange] = {
         balances: state.balances.length,
         positions: state.positions.length,
-        orders: state.orders.length
+        orders: state.orders.length,
       }
     }
 
@@ -245,8 +245,8 @@ export class AccountStateManager extends EventEmitter {
       lastUpdate: {
         balances: 0,
         positions: 0,
-        orders: 0
-      }
+        orders: 0,
+      },
     }
   }
-} 
+}

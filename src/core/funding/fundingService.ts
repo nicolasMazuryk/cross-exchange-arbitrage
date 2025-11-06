@@ -37,7 +37,7 @@ export class FundingService extends EventEmitter {
       if (this.isRunning) {
         logger.warn({
           msg: 'FundingService is already running',
-          function: 'FundingService.start'
+          function: 'FundingService.start',
         })
         return
       }
@@ -47,7 +47,7 @@ export class FundingService extends EventEmitter {
         msg: 'Starting FundingService',
         function: 'FundingService.start',
         exchangeCount: this.exchangeAdapters.size,
-        fetchIntervalSeconds: this.fundingConfig.fetchIntervalMs / 1000
+        fetchIntervalSeconds: this.fundingConfig.fetchIntervalMs / 1000,
       })
 
       const fetchWithTrace = async (contextName: string) => {
@@ -59,7 +59,7 @@ export class FundingService extends EventEmitter {
           logger.error({
             msg: `Error fetching funding rates during "${contextName}"`,
             function: 'FundingService.start',
-            error
+            error,
           })
         }
       }
@@ -75,7 +75,7 @@ export class FundingService extends EventEmitter {
       logger.info({
         msg: 'FundingService started successfully',
         function: 'FundingService.start',
-        intervalMs: this.fundingConfig.fetchIntervalMs
+        intervalMs: this.fundingConfig.fetchIntervalMs,
       })
     } catch (error) {
       logger.fatal({
@@ -95,7 +95,7 @@ export class FundingService extends EventEmitter {
       if (!this.isRunning) {
         logger.warn({
           msg: 'FundingService is not running',
-          function: 'FundingService.stop'
+          function: 'FundingService.stop',
         })
         return
       }
@@ -117,7 +117,7 @@ export class FundingService extends EventEmitter {
 
       logger.info({
         msg: 'FundingService stopped successfully',
-        function: 'FundingService.stop'
+        function: 'FundingService.stop',
       })
     } catch (error) {
       logger.error({
@@ -134,12 +134,12 @@ export class FundingService extends EventEmitter {
    */
   private async fetchAllFundingRates(): Promise<void> {
     try {
-      const promises = Array.from(this.exchangeAdapters.keys()).map(exchangeName => 
+      const promises = Array.from(this.exchangeAdapters.keys()).map(exchangeName =>
         this.fetchExchangeFundingRates(exchangeName)
       )
 
       const results = await Promise.allSettled(promises)
-      
+
       // Log any failed fetches
       results.forEach((result, index) => {
         if (result.status === 'rejected') {
@@ -187,7 +187,7 @@ export class FundingService extends EventEmitter {
         fundingCount: fundingSymbols.length,
         marketCount: marketSymbols.length,
         fundingOnlyCount: fundingOnly.length,
-        marketOnlyCount: marketOnly.length
+        marketOnlyCount: marketOnly.length,
       })
 
       if (fundingOnly.length > 0) {
@@ -195,7 +195,7 @@ export class FundingService extends EventEmitter {
           msg: 'Funding symbols not in market metadata',
           function: 'FundingService.compareSymbolsConsistency',
           exchange: exchangeName,
-          fundingOnly
+          fundingOnly,
         })
       }
       if (marketOnly.length > 0) {
@@ -203,7 +203,7 @@ export class FundingService extends EventEmitter {
           msg: 'Market metadata symbols not in funding',
           function: 'FundingService.compareSymbolsConsistency',
           exchange: exchangeName,
-          marketOnly
+          marketOnly,
         })
       }
     }
@@ -217,7 +217,7 @@ export class FundingService extends EventEmitter {
       logger.trace({
         msg: 'Fetching funding rates',
         function: 'FundingService.fetchExchangeFundingRates',
-        exchange: exchangeName
+        exchange: exchangeName,
       })
 
       const exchangeAdapter = this.exchangeAdapters.get(exchangeName)
@@ -225,7 +225,7 @@ export class FundingService extends EventEmitter {
         logger.error({
           msg: 'No funding data adapter available',
           function: 'FundingService.fetchExchangeFundingRates',
-          exchange: exchangeName
+          exchange: exchangeName,
         })
         return
       }
@@ -240,7 +240,7 @@ export class FundingService extends EventEmitter {
         msg: 'Fetched funding rates',
         function: 'FundingService.fetchExchangeFundingRates',
         exchange: exchangeName,
-        symbolCount: parsedFunding.size
+        symbolCount: parsedFunding.size,
       })
 
       // this.compareSymbolsConsistency(exchangeName)
@@ -249,7 +249,7 @@ export class FundingService extends EventEmitter {
         msg: 'Error fetching funding rates',
         function: 'FundingService.fetchExchangeFundingRates',
         exchange: exchangeName,
-        error
+        error,
       })
 
       // Update state with empty map on error
@@ -290,10 +290,10 @@ export class FundingService extends EventEmitter {
    * Compare symbols between funding data and market metadata, returns both data and report
    */
   public compareFundingSymbolsWithMarketMetadataSymbols(): {
-    data: Map<string, { fundingOnly: string[], marketOnly: string[], matched: string[] }>,
+    data: Map<string, { fundingOnly: string[]; marketOnly: string[]; matched: string[] }>
     report: string
   } {
-    const comparison = new Map<string, { fundingOnly: string[], marketOnly: string[], matched: string[] }>()
+    const comparison = new Map<string, { fundingOnly: string[]; marketOnly: string[]; matched: string[] }>()
     let report = '\n=== Symbol Comparison Report ===\n'
 
     for (const [exchangeName, marketMetadataService] of this.marketMetadataServices) {
@@ -330,21 +330,21 @@ export class FundingService extends EventEmitter {
     return buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp
   }
 
-    /**
+  /**
    * Check if funding times are synchronized between exchanges for exit
    */
   public isFundingSynchronizedExit(buyFunding: ParsedFunding, sellFunding: ParsedFunding): boolean {
-    return buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp && buyFunding.fundingInterval === sellFunding.fundingInterval
+    return (
+      buyFunding.nextFundingTimestamp === sellFunding.nextFundingTimestamp &&
+      buyFunding.fundingInterval === sellFunding.fundingInterval
+    )
   }
 
   /**
    * Find the next synchronization timestamp for ASYNC funding
    * Returns the timestamp when both exchanges will have funding events at the same time
    */
-  public findNextSyncTimestamp(
-    buyFunding: ParsedFunding,
-    sellFunding: ParsedFunding
-  ): number {
+  public findNextSyncTimestamp(buyFunding: ParsedFunding, sellFunding: ParsedFunding): number {
     const now = Date.now()
     const buyIntervalMs = buyFunding.fundingInterval * 60 * 60 * 1000
     const sellIntervalMs = sellFunding.fundingInterval * 60 * 60 * 1000
@@ -374,7 +374,7 @@ export class FundingService extends EventEmitter {
    */
   public calculateCumulativeFundingRate(
     targetTimestamp: number,
-    fundingEvents: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }>
+    fundingEvents: Array<{ timestamp: number; buyExchangeFundingRate: number; sellExchangeFundingRate: number }>
   ): number {
     let cumulativeFundingRate = 0
 
@@ -399,12 +399,12 @@ export class FundingService extends EventEmitter {
     buyFunding: ParsedFunding,
     sellFunding: ParsedFunding,
     projectionHours: number
-  ): Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }> {
-    const events: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }> = []
+  ): Array<{ timestamp: number; buyExchangeFundingRate: number; sellExchangeFundingRate: number }> {
+    const events: Array<{ timestamp: number; buyExchangeFundingRate: number; sellExchangeFundingRate: number }> = []
 
     // Use the first next closest funding event time as startTime
     const startTime = Math.min(buyFunding.nextFundingTimestamp, sellFunding.nextFundingTimestamp)
-    const endTime = startTime + (projectionHours * 60 * 60 * 1000)
+    const endTime = startTime + projectionHours * 60 * 60 * 1000
 
     // Generate buy exchange funding events
     const buyEvents = this.generateExchangeFundingEvents(buyFunding, startTime, endTime)
@@ -412,7 +412,7 @@ export class FundingService extends EventEmitter {
     const sellEvents = this.generateExchangeFundingEvents(sellFunding, startTime, endTime)
 
     // Merge and sort all events by timestamp
-    const allEvents = new Map<number, { buyExchangeFundingRate: number, sellExchangeFundingRate: number }>()
+    const allEvents = new Map<number, { buyExchangeFundingRate: number; sellExchangeFundingRate: number }>()
 
     // Add buy exchange events
     for (const event of buyEvents) {
@@ -433,7 +433,7 @@ export class FundingService extends EventEmitter {
       events.push({
         timestamp,
         buyExchangeFundingRate: funding.buyExchangeFundingRate,
-        sellExchangeFundingRate: funding.sellExchangeFundingRate
+        sellExchangeFundingRate: funding.sellExchangeFundingRate,
       })
     }
 
@@ -447,8 +447,8 @@ export class FundingService extends EventEmitter {
     funding: ParsedFunding,
     startTime: number,
     endTime: number
-  ): Array<{ timestamp: number, fundingRate: number }> {
-    const events: Array<{ timestamp: number, fundingRate: number }> = []
+  ): Array<{ timestamp: number; fundingRate: number }> {
+    const events: Array<{ timestamp: number; fundingRate: number }> = []
     const intervalMs = funding.fundingInterval * 60 * 60 * 1000 // Convert hours to milliseconds
 
     // Find the first funding event after start time
@@ -461,7 +461,7 @@ export class FundingService extends EventEmitter {
     while (nextFundingTime <= endTime) {
       events.push({
         timestamp: nextFundingTime,
-        fundingRate: funding.fundingRate
+        fundingRate: funding.fundingRate,
       })
       nextFundingTime += intervalMs
     }

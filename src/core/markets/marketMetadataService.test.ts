@@ -5,7 +5,7 @@ import * as ccxt from 'ccxt'
 const createMockMarket = (symbol: string, contractSize?: number, precision?: any): ccxt.Market => {
   const defaultContractSize = contractSize || 1
   const defaultPrecision = precision || { price: 8, amount: 8 }
-  
+
   return {
     id: symbol,
     symbol,
@@ -24,16 +24,16 @@ const createMockMarket = (symbol: string, contractSize?: number, precision?: any
     limits: {
       amount: {
         min: 0.001,
-        max: undefined
+        max: undefined,
       },
       price: {
         min: 0.0001,
-        max: 1000000
+        max: 1000000,
       },
       cost: {
         min: 1,
-        max: undefined
-      }
+        max: undefined,
+      },
     },
     info: {},
     type: 'swap',
@@ -46,7 +46,7 @@ const createMockMarket = (symbol: string, contractSize?: number, precision?: any
     expiryDatetime: undefined,
     strike: undefined,
     optionType: undefined,
-    created: undefined
+    created: undefined,
   }
 }
 
@@ -59,7 +59,7 @@ describe('MarketMetadataService', () => {
       createMockMarket('1000PEPE/USDT', 1000, { price: 8, amount: 100 }),
       createMockMarket('MOG/USDT', 1, { price: 8, amount: 0.1 }),
       createMockMarket('1000MOG/USDT', 1000, { price: 8, amount: 100 }),
-      createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 })
+      createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 }),
     ]
 
     service = new MarketMetadataService('binance', mockMarkets, [])
@@ -105,20 +105,20 @@ describe('MarketMetadataService', () => {
   describe('Price Normalization', () => {
     it('should normalize prices to base scale', () => {
       const basePrice = 0.000012825
-      
+
       // Regular symbol (no scale)
       expect(service.normalizePrice(0.000012825, 'PEPE/USDT')).toBe(basePrice)
-      
+
       // Scaled symbol
       expect(service.normalizePrice(0.012825, '1000PEPE/USDT')).toBe(basePrice)
     })
 
     it('should denormalize prices to exchange scale', () => {
       const basePrice = 0.000012825
-      
+
       // Regular symbol (no scale)
       expect(service.denormalizePrice(basePrice, 'PEPE/USDT')).toBe(basePrice)
-      
+
       // Scaled symbol
       expect(service.denormalizePrice(basePrice, '1000PEPE/USDT')).toBe(0.012825)
     })
@@ -128,17 +128,17 @@ describe('MarketMetadataService', () => {
     it('should normalize amounts to base units', () => {
       // Regular symbol
       expect(service.normalizeAmount(1000, 'PEPE/USDT')).toBe(1000)
-      
+
       // Scaled symbol: 1 contract * 1000 contractSize / 1000 priceScale = 1 base unit
       expect(service.normalizeAmount(1, '1000PEPE/USDT')).toBe(1)
     })
 
     it('should denormalize amounts to exchange-specific contracts', () => {
       const baseAmount = 1000
-      
+
       // Regular symbol
       expect(service.denormalizeAmount(baseAmount, 'PEPE/USDT')).toBe(1000)
-      
+
       // Scaled symbol: 1000 base units * 1000 priceScale / 1000 contractSize = 1000 contracts
       expect(service.denormalizeAmount(baseAmount, '1000PEPE/USDT')).toBe(1000)
     })
@@ -208,19 +208,19 @@ describe('MarketMetadataService', () => {
       const mockMarkets = [
         createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 }),
         createMockMarket('ETH/USDT', 1, { price: 2, amount: 0.01 }),
-        createMockMarket('MOG/USDT', 1, { price: 8, amount: 0.1 })
+        createMockMarket('MOG/USDT', 1, { price: 8, amount: 0.1 }),
       ]
-      
+
       const ignoredMarkets = ['ETH/USDT', 'MOG/USDT']
       const serviceWithIgnored = new MarketMetadataService('binance', mockMarkets, ignoredMarkets)
-      
+
       // Should only have BTC/USDT available
       const availableSymbols = serviceWithIgnored.getAvailableSymbols()
       expect(availableSymbols).toHaveLength(1)
       expect(availableSymbols).toContain('BTC/USDT')
       expect(availableSymbols).not.toContain('ETH/USDT')
       expect(availableSymbols).not.toContain('MOG/USDT')
-      
+
       // Should not have symbol mappings for ignored markets
       const symbolMappings = serviceWithIgnored.getSymbolMappings()
       expect(symbolMappings.has('BTC/USDT')).toBe(true)
@@ -231,11 +231,11 @@ describe('MarketMetadataService', () => {
     it('should work with empty ignored markets list', () => {
       const mockMarkets = [
         createMockMarket('BTC/USDT', 1, { price: 2, amount: 0.001 }),
-        createMockMarket('ETH/USDT', 1, { price: 2, amount: 0.01 })
+        createMockMarket('ETH/USDT', 1, { price: 2, amount: 0.01 }),
       ]
-      
+
       const serviceWithEmptyIgnored = new MarketMetadataService('binance', mockMarkets, [])
-      
+
       // Should have all markets available
       const availableSymbols = serviceWithEmptyIgnored.getAvailableSymbols()
       expect(availableSymbols).toHaveLength(2)
@@ -243,4 +243,4 @@ describe('MarketMetadataService', () => {
       expect(availableSymbols).toContain('ETH/USDT')
     })
   })
-}) 
+})

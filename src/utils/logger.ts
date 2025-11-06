@@ -3,7 +3,6 @@ import path from 'path'
 import { TraceContext } from './traceContext'
 import { yamlConfig } from './config'
 
-
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace'
 
 export interface LogData {
@@ -136,7 +135,7 @@ export class Logger {
   trace(data: LogData): void {
     this.logger.trace(this.enrichWithContext(data))
   }
-  
+
   child(bindings: LogData): Logger {
     return new Logger(this.module, this.logger.child(bindings))
   }

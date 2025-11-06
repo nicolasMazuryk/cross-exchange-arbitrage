@@ -99,14 +99,17 @@ export class OrderbookManager extends EventEmitter {
         }
       }
     } catch (error) {
-      logger.error({ msg: 'Failed to update orderbook', event: 'orderbook_update_failed',
+      logger.error({
+        msg: 'Failed to update orderbook',
+        event: 'orderbook_update_failed',
         function: 'OrderbookManager.updateOrderbook',
         exchange: update.exchange,
         symbol: update.symbol,
         updateType: update.type,
         updateId: update.finalUpdateId,
         timestamp: update.timestamp,
-        error, })
+        error,
+      })
     }
   }
 
@@ -116,21 +119,27 @@ export class OrderbookManager extends EventEmitter {
     const symbolOrderbook = exchangeOrderbooks.get(symbol)
 
     if (!symbolOrderbook) {
-      logger.warn({ msg: 'Received delta update for non-existent orderbook', function: 'OrderbookManager.handleDeltaUpdate',
+      logger.warn({
+        msg: 'Received delta update for non-existent orderbook',
+        function: 'OrderbookManager.handleDeltaUpdate',
         exchange,
         symbol,
         finalUpdateId,
-        timestamp })
+        timestamp,
+      })
       return
     }
 
     // If this is a snapshot re-broadcast (same update ID), treat it as a snapshot
     if (finalUpdateId === symbolOrderbook.finalUpdateId) {
-      logger.warn({ msg: 'Received snapshot re-broadcast', function: 'OrderbookManager.handleDeltaUpdate',
+      logger.warn({
+        msg: 'Received snapshot re-broadcast',
+        function: 'OrderbookManager.handleDeltaUpdate',
         exchange,
         symbol,
         finalUpdateId,
-        timestamp })
+        timestamp,
+      })
       exchangeOrderbooks.set(symbol, { bids, asks, finalUpdateId, timestamp })
       return
     }
@@ -149,11 +158,14 @@ export class OrderbookManager extends EventEmitter {
       timestamp,
     })
 
-    logger.trace({ msg: 'Processed delta update for orderbook', function: 'OrderbookManager.handleDeltaUpdate',
+    logger.trace({
+      msg: 'Processed delta update for orderbook',
+      function: 'OrderbookManager.handleDeltaUpdate',
       exchange,
       symbol,
       finalUpdateId,
-      timestamp, })
+      timestamp,
+    })
   }
 
   private processDeltaLevels(

@@ -38,7 +38,7 @@ export interface PrivateWebSocketClientInterface {
 export interface PublicWebSocketMessageParser {
   parseOrderBookUpdate(data: any): OrderBookUpdate
   isOrderBookMessage(data: any): boolean
-} 
+}
 
 export interface PrivateWebSocketMessageParser {
   parseBalanceUpdate(data: any): BalanceInfo[]

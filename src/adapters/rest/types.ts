@@ -21,7 +21,15 @@ export interface RestClientInterface {
   getTradingMarkets(): Dictionary<Market>
 
   // Trading
-  createOrder(symbol: string, type: string, side: string, amount: number, price?: number, reduceOnly?: boolean, clientOrderId?: string): Promise<Order>
+  createOrder(
+    symbol: string,
+    type: string,
+    side: string,
+    amount: number,
+    price?: number,
+    reduceOnly?: boolean,
+    clientOrderId?: string
+  ): Promise<Order>
   cancelOrder(id: string, symbol: string): Promise<Order>
 
   // Account

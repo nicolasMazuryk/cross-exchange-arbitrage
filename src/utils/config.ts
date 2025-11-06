@@ -7,8 +7,7 @@ import path from 'path'
 try {
   dotenv.config()
 } catch (error) {
-  console.error({ msg: 'Failed to load environment variables from .env', function: 'config.loadEnv',
-    error, })
+  console.error({ msg: 'Failed to load environment variables from .env', function: 'config.loadEnv', error })
   throw error
 }
 
@@ -19,11 +18,13 @@ try {
   const configContent = fs.readFileSync(configPath, 'utf8')
   yamlConfig = parse(configContent)
 
-  console.info({ msg: 'Configuration loaded successfully', function: 'config.loadYamlConfig',
-    environment: process.env.NODE_ENV || 'development', })
+  console.info({
+    msg: 'Configuration loaded successfully',
+    function: 'config.loadYamlConfig',
+    environment: process.env.NODE_ENV || 'development',
+  })
 } catch (error) {
-  console.error({ msg: 'Failed to load YAML configuration file', function: 'config.loadYamlConfig',
-    error, })
+  console.error({ msg: 'Failed to load YAML configuration file', function: 'config.loadYamlConfig', error })
   throw error
 }
 
@@ -145,7 +146,7 @@ const config: Config = {
   },
   redis: {
     url: yamlConfig?.redis?.url,
-    keyPrefix: yamlConfig?.redis?.keyPrefix
+    keyPrefix: yamlConfig?.redis?.keyPrefix,
   },
   exchanges: {
     binance: {
@@ -155,9 +156,9 @@ const config: Config = {
       reconnectInterval: yamlConfig?.exchanges?.binance?.reconnectInterval,
       fees: {
         maker: yamlConfig?.exchanges?.binance?.fees?.maker,
-        taker: yamlConfig?.exchanges?.binance?.fees?.taker
+        taker: yamlConfig?.exchanges?.binance?.fees?.taker,
       },
-      ignoredMarkets: yamlConfig?.exchanges?.binance?.ignoredMarkets || []
+      ignoredMarkets: yamlConfig?.exchanges?.binance?.ignoredMarkets || [],
     },
     bybit: {
       apiKey: process.env.BYBIT_API_KEY || '',
@@ -166,9 +167,9 @@ const config: Config = {
       reconnectInterval: yamlConfig?.exchanges?.bybit?.reconnectInterval,
       fees: {
         maker: yamlConfig?.exchanges?.bybit?.fees?.maker,
-        taker: yamlConfig?.exchanges?.bybit?.fees?.taker
+        taker: yamlConfig?.exchanges?.bybit?.fees?.taker,
       },
-      ignoredMarkets: yamlConfig?.exchanges?.bybit?.ignoredMarkets || []
+      ignoredMarkets: yamlConfig?.exchanges?.bybit?.ignoredMarkets || [],
     },
     okx: {
       apiKey: process.env.OKX_API_KEY || '',
@@ -178,9 +179,9 @@ const config: Config = {
       reconnectInterval: yamlConfig?.exchanges?.okx?.reconnectInterval,
       fees: {
         maker: yamlConfig?.exchanges?.okx?.fees?.maker,
-        taker: yamlConfig?.exchanges?.okx?.fees?.taker
+        taker: yamlConfig?.exchanges?.okx?.fees?.taker,
       },
-      ignoredMarkets: yamlConfig?.exchanges?.okx?.ignoredMarkets || []
+      ignoredMarkets: yamlConfig?.exchanges?.okx?.ignoredMarkets || [],
     },
     bitget: {
       apiKey: process.env.BITGET_API_KEY || '',
@@ -190,9 +191,9 @@ const config: Config = {
       reconnectInterval: yamlConfig?.exchanges?.bitget?.reconnectInterval,
       fees: {
         maker: yamlConfig?.exchanges?.bitget?.fees?.maker,
-        taker: yamlConfig?.exchanges?.bitget?.fees?.taker
+        taker: yamlConfig?.exchanges?.bitget?.fees?.taker,
       },
-      ignoredMarkets: yamlConfig?.exchanges?.bitget?.ignoredMarkets || []
+      ignoredMarkets: yamlConfig?.exchanges?.bitget?.ignoredMarkets || [],
     },
   },
   trackedPairs: yamlConfig?.trackedPairs,
@@ -206,24 +207,24 @@ const config: Config = {
     orderAmountToleranceMaxPercent: yamlConfig?.arbitrage?.orderAmountToleranceMaxPercent,
     minPersistenceMs: yamlConfig?.arbitrage?.minPersistenceMs,
     minConsecutiveSnapshots: yamlConfig?.arbitrage?.minConsecutiveSnapshots,
-    candidateCleanupMs: yamlConfig?.arbitrage?.candidateCleanupMs
+    candidateCleanupMs: yamlConfig?.arbitrage?.candidateCleanupMs,
   },
   trading: {
     orderAmountUsd: yamlConfig?.trading?.orderAmountUsd,
     minBalanceBufferPercent: yamlConfig?.trading?.minBalanceBufferPercent,
     maxPositionAmountUsd: yamlConfig?.trading?.maxPositionAmountUsd,
     orderConfirmationTimeoutMs: yamlConfig?.trading?.orderConfirmationTimeoutMs,
-    monitor: yamlConfig?.trading?.monitor
+    monitor: yamlConfig?.trading?.monitor,
   },
   accountSync: {
     maxStateAgeMs: yamlConfig?.accountSync?.maxStateAgeMs,
-    snapshotIntervalMs: yamlConfig?.accountSync?.snapshotIntervalMs
+    snapshotIntervalMs: yamlConfig?.accountSync?.snapshotIntervalMs,
   },
   funding: {
     fetchIntervalMs: yamlConfig?.funding?.fetchIntervalMs,
     maxDataAgeMs: yamlConfig?.funding?.maxDataAgeMs,
     supportedExchanges: yamlConfig?.funding?.supportedExchanges,
-    projectionHours: yamlConfig?.funding?.projectionHours
+    projectionHours: yamlConfig?.funding?.projectionHours,
   },
   strategy: {
     funding: {
@@ -234,7 +235,7 @@ const config: Config = {
       minTotalProfitPercent: yamlConfig?.strategy?.funding?.minTotalProfitPercent,
       convergenceThresholdPercent: yamlConfig?.strategy?.funding?.convergenceThresholdPercent,
       minFundingProfitAsyncSyncExitPercent: yamlConfig?.strategy?.funding?.minFundingProfitAsyncSyncExitPercent,
-      spreadWideningThresholdPercent: yamlConfig?.strategy?.funding?.spreadWideningThresholdPercent
+      spreadWideningThresholdPercent: yamlConfig?.strategy?.funding?.spreadWideningThresholdPercent,
     },
     spread: {
       enabled: yamlConfig?.strategy?.spread?.enabled ?? false,
@@ -245,9 +246,9 @@ const config: Config = {
       minTotalProfitPercent: yamlConfig?.strategy?.spread?.minTotalProfitPercent,
       negativeFundingMultiplier: yamlConfig?.strategy?.spread?.negativeFundingMultiplier,
       convergenceThresholdPercent: yamlConfig?.strategy?.spread?.convergenceThresholdPercent,
-      spreadWideningThresholdPercent: yamlConfig?.strategy?.spread?.spreadWideningThresholdPercent
-    }
-  }
+      spreadWideningThresholdPercent: yamlConfig?.strategy?.spread?.spreadWideningThresholdPercent,
+    },
+  },
 }
 
 export { yamlConfig }

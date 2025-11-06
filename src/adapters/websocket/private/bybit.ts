@@ -30,43 +30,60 @@ export class BybitPrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', () => {
-      logger.debug({ msg: 'Account WebSocket connection opened', function: 'BybitPrivateWebSocketClient.setupEventHandlers.open',
-        exchange: this.exchangeName
+      logger.debug({
+        msg: 'Account WebSocket connection opened',
+        function: 'BybitPrivateWebSocketClient.setupEventHandlers.open',
+        exchange: this.exchangeName,
       })
       this.isConnected = true
     })
 
     this.client.on('close', () => {
-      logger.warn({ msg: 'Account WebSocket connection closed', function: 'BybitPrivateWebSocketClient.setupEventHandlers.close',
-        exchange: this.exchangeName })
+      logger.warn({
+        msg: 'Account WebSocket connection closed',
+        function: 'BybitPrivateWebSocketClient.setupEventHandlers.close',
+        exchange: this.exchangeName,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
 
     this.client.on('response', (data: any) => {
-      logger.debug({ msg: 'Account WebSocket reply received', function: 'BybitPrivateWebSocketClient.setupEventHandlers.response',
+      logger.debug({
+        msg: 'Account WebSocket reply received',
+        function: 'BybitPrivateWebSocketClient.setupEventHandlers.response',
         exchange: this.exchangeName,
-        data, })
+        data,
+      })
     })
 
     this.client.on('reconnect', (data: any) => {
-      logger.info({ msg: 'Account WebSocket reconnecting...', function: 'BybitPrivateWebSocketClient.setupEventHandlers.reconnect',
+      logger.info({
+        msg: 'Account WebSocket reconnecting...',
+        function: 'BybitPrivateWebSocketClient.setupEventHandlers.reconnect',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = false
     })
 
     this.client.on('reconnected', (data: any) => {
-      logger.info({ msg: 'Account WebSocket reconnected', function: 'BybitPrivateWebSocketClient.setupEventHandlers.reconnected',
+      logger.info({
+        msg: 'Account WebSocket reconnected',
+        function: 'BybitPrivateWebSocketClient.setupEventHandlers.reconnected',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = true
     })
 
     this.client.on('exception', (error: any) => {
-      logger.error({ msg: 'WebSocket connection error', function: 'BybitPrivateWebSocketClient.setupEventHandlers.exception',
+      logger.error({
+        msg: 'WebSocket connection error',
+        function: 'BybitPrivateWebSocketClient.setupEventHandlers.exception',
         exchange: this.exchangeName,
-        error, })
+        error,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
@@ -75,18 +92,24 @@ export class BybitPrivateWebSocketClient extends BasePrivateWebSocketClient {
       try {
         this.handleMessage(data)
       } catch (error) {
-        logger.error({ msg: 'Error parsing Account WebSocket message', function: 'BybitPrivateWebSocketClient.setupEventHandlers.update',
+        logger.error({
+          msg: 'Error parsing Account WebSocket message',
+          function: 'BybitPrivateWebSocketClient.setupEventHandlers.update',
           exchange: this.exchangeName,
           data,
-          error, })
+          error,
+        })
       }
     })
   }
 
   protected async subscribeToAccountStreams(): Promise<void> {
     this.client.subscribeV5(['order', 'position', 'wallet'], 'linear')
-    logger.info({ msg: 'Subscribed to account WebSocket streams', function: 'BybitPrivateWebSocketClient.subscribeToAccountStreams',
-      exchange: this.exchangeName })
+    logger.info({
+      msg: 'Subscribed to account WebSocket streams',
+      function: 'BybitPrivateWebSocketClient.subscribeToAccountStreams',
+      exchange: this.exchangeName,
+    })
   }
 }
 
@@ -99,7 +122,7 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
         balances.push({
           asset: wallet.coin[0].coin,
           total: parseFloat(wallet.totalEquity),
-          available: parseFloat(wallet.totalAvailableBalance)
+          available: parseFloat(wallet.totalAvailableBalance),
         })
       }
     }
@@ -123,7 +146,7 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
           leverage: parseFloat(position.leverage) || 1,
           unrealizedPnL: parseFloat(position.unrealisedPnl) || 0,
           timestamp: Number(position.createdTime) || 0,
-          date: new Date(Number(position.createdTime))
+          date: new Date(Number(position.createdTime)),
         })
       }
     }
@@ -149,7 +172,7 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
           quantity: parseFloat(order.qty),
           status: this.normalizeOrderStatus(order.orderStatus),
           timestamp: parseInt(order.createdTime),
-          date: new Date(parseInt(order.createdTime))
+          date: new Date(parseInt(order.createdTime)),
         })
       }
     }
@@ -189,4 +212,4 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
         return 'UNKNOWN'
     }
   }
-} 
+}

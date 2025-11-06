@@ -47,4 +47,4 @@ export interface AccountStateUpdate {
   data: BalanceInfo[] | PositionInfo[] | OrderInfo[]
   timestamp: number
   traceId: string
-} 
+}

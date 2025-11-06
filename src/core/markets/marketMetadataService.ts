@@ -4,8 +4,8 @@ import { Logger } from '../../utils/logger'
 const logger = new Logger('market-metadata-service')
 
 export interface MarketMetadata {
-  symbol: string              // Exchange-specific symbol (e.g., 1000PEPEUSDT)
-  normalizedSymbol: string    // Cross-exchange normalized symbol (e.g., PEPEUSDT)
+  symbol: string // Exchange-specific symbol (e.g., 1000PEPEUSDT)
+  normalizedSymbol: string // Cross-exchange normalized symbol (e.g., PEPEUSDT)
   contractSize: number
   pricePrecision: number
   amountPrecision: number
@@ -34,7 +34,7 @@ export class MarketMetadataService {
   private initializeMarkets(markets: ccxt.Market[]): void {
     for (const market of markets) {
       if (!market) continue
-      
+
       // Only process USDT perpetual futures
       if (!this.isValidFuturesMarket(market)) {
         continue
@@ -56,11 +56,11 @@ export class MarketMetadataService {
         maxPrice: market.limits?.price?.max,
         minAmount: market.limits?.amount?.min,
         maxAmount: market.limits?.amount?.max,
-        minCost: market.limits?.cost?.min
+        minCost: market.limits?.cost?.min,
       }
 
       this.markets.set(market.symbol, metadata)
-      
+
       this.symbolMappings.set(normalizedSymbol, market.symbol)
     }
   }
@@ -70,17 +70,17 @@ export class MarketMetadataService {
    */
   private isValidFuturesMarket(market: ccxt.Market): boolean {
     if (!market) return false
-    
+
     const isActiveCondition = ['bitget'].includes(this.exchangeId) ? true : market.active
-    
+
     return Boolean(
       isActiveCondition &&
-      market.contract &&
-      market.swap &&
-      market.linear &&
-      !market.future &&
-      !market.inverse &&
-      market.quote === 'USDT'
+        market.contract &&
+        market.swap &&
+        market.linear &&
+        !market.future &&
+        !market.inverse &&
+        market.quote === 'USDT'
     )
   }
 
@@ -103,10 +103,10 @@ export class MarketMetadataService {
   normalizeSymbol(displaySymbol: string): string {
     if (displaySymbol.startsWith('1000') || displaySymbol.startsWith('1000000')) {
       // Remove common prefixes that indicate contract size
-    const normalized = displaySymbol
-      .replace(/^(\d+)([A-Z]+)\/([A-Z]+:[A-Z]+)$/, (match, p1, p2, p3) => p2 + '/' + p3)  // 1000000BABYDOGE/USDT:USDT → BABYDOGE/USDT:USDT
-      .replace(/^(\d+)([A-Z]+)\/([A-Z]+)$/, (match, p1, p2, p3) => p2 + '/' + p3)  // 1000PEPE/USDT → PEPE/USDT
-      .replace(/^(\d+)([A-Z]+)([A-Z]+)$/, (match, p1, p2, p3) => p2 + p3)     // 1000PEPEUSDT → PEPEUSDT (fallback)
+      const normalized = displaySymbol
+        .replace(/^(\d+)([A-Z]+)\/([A-Z]+:[A-Z]+)$/, (match, p1, p2, p3) => p2 + '/' + p3) // 1000000BABYDOGE/USDT:USDT → BABYDOGE/USDT:USDT
+        .replace(/^(\d+)([A-Z]+)\/([A-Z]+)$/, (match, p1, p2, p3) => p2 + '/' + p3) // 1000PEPE/USDT → PEPE/USDT
+        .replace(/^(\d+)([A-Z]+)([A-Z]+)$/, (match, p1, p2, p3) => p2 + p3) // 1000PEPEUSDT → PEPEUSDT (fallback)
       return normalized
     }
 
@@ -116,9 +116,9 @@ export class MarketMetadataService {
   /**
    * Get exchange-specific symbol from normalized symbol
    */
-    denormalizeSymbol(normalizedSymbol: string): string | undefined {
-      return this.symbolMappings.get(normalizedSymbol)
-    }
+  denormalizeSymbol(normalizedSymbol: string): string | undefined {
+    return this.symbolMappings.get(normalizedSymbol)
+  }
 
   /**
    * Extract price scale multiplier from symbol name
@@ -160,11 +160,14 @@ export class MarketMetadataService {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
       const error = new Error(`No metadata found for symbol: ${symbol}`)
-      logger.error({ msg: 'Failed to normalize amount - metadata not found', function: 'MarketMetadataService.normalizeAmount',
+      logger.error({
+        msg: 'Failed to normalize amount - metadata not found',
+        function: 'MarketMetadataService.normalizeAmount',
         exchange: this.exchangeId,
         symbol,
         contractAmount,
-        error })
+        error,
+      })
       throw error
     }
 
@@ -186,11 +189,14 @@ export class MarketMetadataService {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
       const error = new Error(`No metadata found for symbol: ${symbol}`)
-      logger.error({ msg: 'Failed to denormalize amount - metadata not found', function: 'MarketMetadataService.denormalizeAmount',
+      logger.error({
+        msg: 'Failed to denormalize amount - metadata not found',
+        function: 'MarketMetadataService.denormalizeAmount',
         exchange: this.exchangeId,
         symbol,
         normalizedAmount,
-        error })
+        error,
+      })
       throw error
     }
 
@@ -212,11 +218,14 @@ export class MarketMetadataService {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
       const error = new Error(`No metadata found for symbol: ${symbol}`)
-      logger.error({ msg: 'Failed to round amount - metadata not found', function: 'MarketMetadataService.roundAmount',
+      logger.error({
+        msg: 'Failed to round amount - metadata not found',
+        function: 'MarketMetadataService.roundAmount',
         exchange: this.exchangeId,
         symbol,
         amount,
-        error })
+        error,
+      })
       throw error
     }
 
@@ -248,7 +257,7 @@ export class MarketMetadataService {
   ): { amount: number; price: number } {
     return {
       amount: this.denormalizeAmount(normalizedAmount, symbol),
-      price: this.denormalizePrice(normalizedPrice, symbol)
+      price: this.denormalizePrice(normalizedPrice, symbol),
     }
   }
-} 
+}

@@ -24,15 +24,21 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
       for (let i = 0; i < batches.length; i++) {
         await this.createPublicWebSocketConnection(batches[i], i)
       }
-      logger.info({ msg: 'Initialized WebSocket client', function: 'BasePublicWebSocketClient.initialize',
+      logger.info({
+        msg: 'Initialized WebSocket client',
+        function: 'BasePublicWebSocketClient.initialize',
         exchange: this.exchangeName,
         symbolCount: symbols.length,
-        batchCount: batches.length, })
+        batchCount: batches.length,
+      })
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize WebSocket client', function: 'BasePublicWebSocketClient.initialize',
+      logger.error({
+        msg: 'Failed to initialize WebSocket client',
+        function: 'BasePublicWebSocketClient.initialize',
         exchange: this.exchangeName,
         marketCount: Object.keys(markets).length,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -45,7 +51,11 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
     return batches
   }
 
-  protected async createPublicWebSocketConnection(symbols: string[], batchIndex: number, isReconnect: boolean = false): Promise<void> {
+  protected async createPublicWebSocketConnection(
+    symbols: string[],
+    batchIndex: number,
+    isReconnect: boolean = false
+  ): Promise<void> {
     try {
       const client = this.createClient()
 
@@ -75,18 +85,24 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
       await this.subscribeToSymbols(batch)
       if (!isReconnect) this.streamBatches.push(batch)
 
-      logger.debug({ msg: 'Created WebSocket connection for batch', function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
-        exchange: this.exchangeName,
-        batchIndex,
-        symbolCount: symbols.length,
-        isReconnect, })
-    } catch (error) {
-      logger.error({ msg: 'Failed to create WebSocket connection', function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
+      logger.debug({
+        msg: 'Created WebSocket connection for batch',
+        function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
         exchange: this.exchangeName,
         batchIndex,
         symbolCount: symbols.length,
         isReconnect,
-        error, })
+      })
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to create WebSocket connection',
+        function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
+        exchange: this.exchangeName,
+        batchIndex,
+        symbolCount: symbols.length,
+        isReconnect,
+        error,
+      })
       throw error
     }
   }
@@ -118,50 +134,72 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   }
 
   protected async handleConnectionError(batch: StreamBatch): Promise<void> {
-    logger.warn({ msg: 'Handling connection error. Reconnecting WebSocket', function: 'BasePublicWebSocketClient.handleConnectionError',
+    logger.warn({
+      msg: 'Handling connection error. Reconnecting WebSocket',
+      function: 'BasePublicWebSocketClient.handleConnectionError',
       exchange: this.exchangeName,
       batchId: batch.id,
       symbolCount: batch.symbols.length,
-      reconnectInterval: this.config.reconnectInterval, })
+      reconnectInterval: this.config.reconnectInterval,
+    })
     try {
       await wait(this.config.reconnectInterval)
       await this.createPublicWebSocketConnection(batch.symbols, batch.id, true)
     } catch (error) {
-      logger.error({ msg: 'Failed to reconnect WebSocket, will retry', function: 'BasePublicWebSocketClient.handleConnectionError',
+      logger.error({
+        msg: 'Failed to reconnect WebSocket, will retry',
+        function: 'BasePublicWebSocketClient.handleConnectionError',
         exchange: this.exchangeName,
         batchId: batch.id,
         symbolCount: batch.symbols.length,
         reconnectInterval: this.config.reconnectInterval,
-        error, })
+        error,
+      })
       await this.handleConnectionError(batch)
     }
   }
 
   public close(): void {
     try {
-      logger.info({ msg: 'Closing all WebSocket connections', function: 'BasePublicWebSocketClient.close', exchange: this.exchangeName, })
-      
+      logger.info({
+        msg: 'Closing all WebSocket connections',
+        function: 'BasePublicWebSocketClient.close',
+        exchange: this.exchangeName,
+      })
+
       this.streamBatches.forEach(batch => {
         try {
           this.cleanupClient(batch)
-          logger.debug({ msg: 'Closed WebSocket connection for batch', function: 'BasePublicWebSocketClient.close',
+          logger.debug({
+            msg: 'Closed WebSocket connection for batch',
+            function: 'BasePublicWebSocketClient.close',
             exchange: this.exchangeName,
             batchId: batch.id,
-            symbolCount: batch.symbols.length, })
+            symbolCount: batch.symbols.length,
+          })
         } catch (error) {
-          logger.error({ msg: 'Failed to close WebSocket batch', function: 'BasePublicWebSocketClient.close',
+          logger.error({
+            msg: 'Failed to close WebSocket batch',
+            function: 'BasePublicWebSocketClient.close',
             exchange: this.exchangeName,
             batchId: batch.id,
-            error, })
+            error,
+          })
         }
       })
       this.streamBatches = []
-      logger.info({ msg: 'All WebSocket connections closed', function: 'BasePublicWebSocketClient.close',
-        exchange: this.exchangeName, })
-    } catch (error) {
-      logger.error({ msg: 'Failed to close WebSocket connections', function: 'BasePublicWebSocketClient.close',
+      logger.info({
+        msg: 'All WebSocket connections closed',
+        function: 'BasePublicWebSocketClient.close',
         exchange: this.exchangeName,
-        error, })
+      })
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to close WebSocket connections',
+        function: 'BasePublicWebSocketClient.close',
+        exchange: this.exchangeName,
+        error,
+      })
       // Don't throw - allow graceful shutdown to continue
     }
   }

@@ -1,1 +1,1 @@
-export { MarketMetadataService, MarketMetadata } from './marketMetadataService' 
+export { MarketMetadataService, MarketMetadata } from './marketMetadataService'

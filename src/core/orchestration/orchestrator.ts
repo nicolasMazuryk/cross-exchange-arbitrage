@@ -16,19 +16,14 @@ import { MarketMetadataService } from '../markets/marketMetadataService'
 import { FundingService } from '../funding/fundingService'
 
 // REST adapters
-import {
-  BinanceExchange,
-  BybitExchange,
-  OkxExchange,
-  BitgetExchange
-} from '../../adapters/rest'
+import { BinanceExchange, BybitExchange, OkxExchange, BitgetExchange } from '../../adapters/rest'
 
 // Public WebSocket adapters
 import {
   BinancePublicWebSocketClient,
   BybitPublicWebSocketClient,
   OkxPublicWebSocketClient,
-  BitgetPublicWebSocketClient
+  BitgetPublicWebSocketClient,
 } from '../../adapters/websocket'
 
 // Private WebSocket adapters
@@ -80,7 +75,7 @@ export class Orchestrator extends EventEmitter {
       return
     }
 
-    logger.info({ msg: '🚀 Initializing ArbiNet Orchestrator...', function: 'Orchestrator.initialize', })
+    logger.info({ msg: '🚀 Initializing ArbiNet Orchestrator...', function: 'Orchestrator.initialize' })
 
     try {
       // Stage 1: Initialize REST clients
@@ -110,8 +105,7 @@ export class Orchestrator extends EventEmitter {
       this.isInitialized = true
       logger.info({ msg: '✅ ArbiNet Orchestrator initialized successfully', function: 'Orchestrator.initialize' })
     } catch (error) {
-      logger.error({ msg: '❌ Failed to initialize Orchestrator', function: 'Orchestrator.initialize',
-        error })
+      logger.error({ msg: '❌ Failed to initialize Orchestrator', function: 'Orchestrator.initialize', error })
       await this.shutdown()
       throw error
     }
@@ -126,14 +120,14 @@ export class Orchestrator extends EventEmitter {
         client: new BinanceExchange({
           apiKey: config.exchanges.binance.apiKey,
           apiSecret: config.exchanges.binance.apiSecret,
-        })
+        }),
       },
       {
         id: 'bybit',
         client: new BybitExchange({
           apiKey: config.exchanges.bybit.apiKey,
           apiSecret: config.exchanges.bybit.apiSecret,
-        })
+        }),
       },
       {
         id: 'okx',
@@ -141,7 +135,7 @@ export class Orchestrator extends EventEmitter {
           apiKey: config.exchanges.okx.apiKey,
           apiSecret: config.exchanges.okx.apiSecret,
           apiPass: config.exchanges.okx.apiPass,
-        })
+        }),
       },
       {
         id: 'bitget',
@@ -149,8 +143,8 @@ export class Orchestrator extends EventEmitter {
           apiKey: config.exchanges.bitget.apiKey,
           apiSecret: config.exchanges.bitget.apiSecret,
           apiPass: config.exchanges.bitget.apiPass,
-        })
-      }
+        }),
+      },
     ]
 
     // Load markets for all exchanges
@@ -158,31 +152,40 @@ export class Orchestrator extends EventEmitter {
       exchanges.map(async ({ id, client }) => {
         try {
           await client.loadMarkets()
-          
+
           // Initialize market metadata service
           const markets = Object.values((client as any).exchange.markets || {})
           const ignoredMarkets = config.exchanges[id as keyof typeof config.exchanges]?.ignoredMarkets || []
           const marketMetadataService = new MarketMetadataService(id, markets as any[], ignoredMarkets)
-          
-          this.exchangeServices.set(id, { 
-            rest: client, 
-            marketMetadata: marketMetadataService 
+
+          this.exchangeServices.set(id, {
+            rest: client,
+            marketMetadata: marketMetadataService,
           })
-          
-          logger.info({ msg: 'REST client initialized', function: 'Orchestrator.initializeRestClients',
+
+          logger.info({
+            msg: 'REST client initialized',
+            function: 'Orchestrator.initializeRestClients',
             exchange: id,
-            marketCount: marketMetadataService.getAvailableSymbols().length })
+            marketCount: marketMetadataService.getAvailableSymbols().length,
+          })
         } catch (error) {
-          logger.error({ msg: 'Failed to initialize REST client', function: 'Orchestrator.initializeRestClients',
+          logger.error({
+            msg: 'Failed to initialize REST client',
+            function: 'Orchestrator.initializeRestClients',
             exchange: id,
-            error })
+            error,
+          })
           throw error
         }
       })
     )
 
-    logger.info({ msg: '✅ All REST clients initialized', function: 'Orchestrator.initializeRestClients',
-      exchangeCount: exchanges.length })
+    logger.info({
+      msg: '✅ All REST clients initialized',
+      function: 'Orchestrator.initializeRestClients',
+      exchangeCount: exchanges.length,
+    })
   }
 
   private async initializeCoreServices(): Promise<void> {
@@ -200,33 +203,33 @@ export class Orchestrator extends EventEmitter {
           isHealthy: true,
           feeModel: {
             maker: config.exchanges.binance.fees.maker,
-            taker: config.exchanges.binance.fees.taker
-          }
+            taker: config.exchanges.binance.fees.taker,
+          },
         },
         {
           name: 'bybit',
           isHealthy: true,
           feeModel: {
             maker: config.exchanges.bybit.fees.maker,
-            taker: config.exchanges.bybit.fees.taker
-          }
+            taker: config.exchanges.bybit.fees.taker,
+          },
         },
         {
           name: 'okx',
           isHealthy: true,
           feeModel: {
             maker: config.exchanges.okx.fees.maker,
-            taker: config.exchanges.okx.fees.taker
-          }
+            taker: config.exchanges.okx.fees.taker,
+          },
         },
         {
           name: 'bitget',
           isHealthy: true,
           feeModel: {
             maker: config.exchanges.bitget.fees.maker,
-            taker: config.exchanges.bitget.fees.taker
-          }
-        }
+            taker: config.exchanges.bitget.fees.taker,
+          },
+        },
       ]
 
       // Create market metadata services map
@@ -247,7 +250,7 @@ export class Orchestrator extends EventEmitter {
       )
 
       // Listen for arbitrage opportunities
-      this.arbitrageEngine.on('opportunities', (opportunities) => {
+      this.arbitrageEngine.on('opportunities', opportunities => {
         // this.emit('arbitrageOpportunities', opportunities)
         // Process opportunities with trading services
         TraceContext.runWithExistingTrace(opportunities[0].traceId, 'arbitrage-opportunities', () => {
@@ -260,8 +263,11 @@ export class Orchestrator extends EventEmitter {
       logger.info({ msg: '✅ Arbitrage Engine initialized', function: 'Orchestrator.initializeCoreServices' })
       logger.info({ msg: '✅ Core services initialized', function: 'Orchestrator.initializeCoreServices' })
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize core services', function: 'Orchestrator.initializeCoreServices',
-        error })
+      logger.error({
+        msg: 'Failed to initialize core services',
+        function: 'Orchestrator.initializeCoreServices',
+        error,
+      })
       throw error
     }
   }
@@ -277,15 +283,21 @@ export class Orchestrator extends EventEmitter {
         await this.state.connect()
         logger.info({ msg: '✅ State Service connected to Redis', function: 'Orchestrator.initializeStateService' })
       } catch (error) {
-        logger.error({ msg: 'Failed to connect to Redis, continuing without persistence', function: 'Orchestrator.initializeStateService',
-          error })
+        logger.error({
+          msg: 'Failed to connect to Redis, continuing without persistence',
+          function: 'Orchestrator.initializeStateService',
+          error,
+        })
         throw error
       }
 
       logger.info({ msg: '✅ State Service initialized', function: 'Orchestrator.initializeStateService' })
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize State Service', function: 'Orchestrator.initializeStateService',
-        error })
+      logger.error({
+        msg: 'Failed to initialize State Service',
+        function: 'Orchestrator.initializeStateService',
+        error,
+      })
       throw error
     }
   }
@@ -296,7 +308,7 @@ export class Orchestrator extends EventEmitter {
 
       // Create ccxt exchange instances for funding rate fetching
       const exchangeAdapters = new Map()
-      
+
       // Add exchanges that support funding rates
       for (const [exchangeId, services] of this.exchangeServices.entries()) {
         if (config.funding.supportedExchanges.includes(exchangeId)) {
@@ -308,7 +320,10 @@ export class Orchestrator extends EventEmitter {
       }
 
       if (exchangeAdapters.size !== this.exchangeServices.size) {
-        logger.error({ msg: '⚠️ Mismatch between exchanges and supported exchanges for funding rate fetching', function: 'Orchestrator.initializeFundingService' })
+        logger.error({
+          msg: '⚠️ Mismatch between exchanges and supported exchanges for funding rate fetching',
+          function: 'Orchestrator.initializeFundingService',
+        })
         throw new Error('Mismatch between exchanges and supported exchanges for funding rate fetching')
       }
 
@@ -321,24 +336,25 @@ export class Orchestrator extends EventEmitter {
       }
 
       // Initialize funding service
-      this.fundingService = new FundingService(
-        exchangeAdapters,
-        marketMetadataServices,
-        config.funding
-      )
+      this.fundingService = new FundingService(exchangeAdapters, marketMetadataServices, config.funding)
 
       // Set up funding service event listeners
-      this.fundingService.on('fundingDataUpdated', (state) => {
-      })
+      this.fundingService.on('fundingDataUpdated', state => {})
 
       // Start the funding service
       this.fundingService.start()
 
-      logger.info({ msg: '✅ Funding Service initialized and started', function: 'Orchestrator.initializeFundingService',
-        exchangeCount: exchangeAdapters.size })
+      logger.info({
+        msg: '✅ Funding Service initialized and started',
+        function: 'Orchestrator.initializeFundingService',
+        exchangeCount: exchangeAdapters.size,
+      })
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize Funding Service', function: 'Orchestrator.initializeFundingService',
-        error })
+      logger.error({
+        msg: 'Failed to initialize Funding Service',
+        function: 'Orchestrator.initializeFundingService',
+        error,
+      })
       throw error
     }
   }
@@ -396,7 +412,7 @@ export class Orchestrator extends EventEmitter {
               convergenceThresholdPercent: config.strategy.funding.convergenceThresholdPercent,
               spreadWideningThresholdPercent: config.strategy.funding.spreadWideningThresholdPercent,
               minFundingProfitPercent: config.strategy.funding.minFundingProfitPercent,
-              minFundingProfitAsyncSyncExitPercent: config.strategy.funding.minFundingProfitAsyncSyncExitPercent
+              minFundingProfitAsyncSyncExitPercent: config.strategy.funding.minFundingProfitAsyncSyncExitPercent,
             },
             spread: {
               enabled: config.strategy.spread.enabled,
@@ -404,9 +420,9 @@ export class Orchestrator extends EventEmitter {
               windowEnd: config.strategy.spread.windowEnd,
               windowEndClose: config.strategy.spread.windowEndClose,
               convergenceThresholdPercent: config.strategy.spread.convergenceThresholdPercent,
-              spreadWideningThresholdPercent: config.strategy.spread.spreadWideningThresholdPercent
-            }
-          }
+              spreadWideningThresholdPercent: config.strategy.spread.spreadWideningThresholdPercent,
+            },
+          },
         },
         this.state
       )
@@ -419,22 +435,31 @@ export class Orchestrator extends EventEmitter {
 
       logger.info({ msg: '✅ Trading services initialized', function: 'Orchestrator.initializeTradingServices' })
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize trading services', function: 'Orchestrator.initializeTradingServices',
-        error })
+      logger.error({
+        msg: 'Failed to initialize trading services',
+        function: 'Orchestrator.initializeTradingServices',
+        error,
+      })
       throw error
     }
   }
 
   private setupTradingEventListeners(): void {
     if (!this.tradeExecutor || !this.tradeMonitor) {
-      logger.error({ msg: 'Trading services not available for event setup', function: 'Orchestrator.setupTradingEventListeners' })
+      logger.error({
+        msg: 'Trading services not available for event setup',
+        function: 'Orchestrator.setupTradingEventListeners',
+      })
       throw new Error('Trading services not available for event setup')
     }
   }
 
   private async processArbitrageOpportunities(opportunities: any[]): Promise<void> {
     if (!this.tradeExecutor || !this.tradeMonitor) {
-      logger.error({ msg: 'Trading services not available for opportunity processing', function: 'Orchestrator.processArbitrageOpportunities' })
+      logger.error({
+        msg: 'Trading services not available for opportunity processing',
+        function: 'Orchestrator.processArbitrageOpportunities',
+      })
       throw new Error('Trading services not available for opportunity processing')
     }
 
@@ -443,7 +468,7 @@ export class Orchestrator extends EventEmitter {
         // Convert opportunity to trade parameters
         const tradeParams = {
           opportunity,
-          timestamp: Date.now()
+          timestamp: Date.now(),
         }
 
         // Execute the trade
@@ -452,32 +477,40 @@ export class Orchestrator extends EventEmitter {
         if (result.success) {
           // Add successful trade to monitoring
           this.tradeMonitor.addTrade(result)
-          
+
           logger.info({
             msg: 'Trade executed successfully',
             function: 'Orchestrator.processArbitrageOpportunities',
             tradeId: result.id,
-            latencyMs: result.latencyMs
+            latencyMs: result.latencyMs,
           })
         } else {
-          logger.warn({ msg: 'Trade execution failed', function: 'Orchestrator.processArbitrageOpportunities',
+          logger.warn({
+            msg: 'Trade execution failed',
+            function: 'Orchestrator.processArbitrageOpportunities',
             tradeId: result.id,
-            error: result.errorDetails?.message
+            error: result.errorDetails?.message,
           })
         }
       } catch (error) {
-        logger.error({ msg: 'Failed to process opportunity', function: 'Orchestrator.processArbitrageOpportunities',
+        logger.error({
+          msg: 'Failed to process opportunity',
+          function: 'Orchestrator.processArbitrageOpportunities',
           normalizedPair: opportunity.normalizedPair,
           buyExchange: opportunity.buyExchange,
           sellExchange: opportunity.sellExchange,
-          error })
+          error,
+        })
       }
     }
   }
 
   private async initializeAccountSyncService(): Promise<void> {
     try {
-      logger.info({ msg: '🔄 Initializing Account Sync Service...', function: 'Orchestrator.initializeAccountSyncService' })
+      logger.info({
+        msg: '🔄 Initializing Account Sync Service...',
+        function: 'Orchestrator.initializeAccountSyncService',
+      })
 
       this.accountSyncService = new AccountSyncService()
 
@@ -494,7 +527,7 @@ export class Orchestrator extends EventEmitter {
           restConfig: {
             apiKey: config.exchanges.binance.apiKey,
             apiSecret: config.exchanges.binance.apiSecret,
-          } as ExchangeConfig
+          } as ExchangeConfig,
         },
         {
           exchangeId: 'bybit',
@@ -510,9 +543,9 @@ export class Orchestrator extends EventEmitter {
             options: {
               defaultType: 'swap', // Use USDT Futures
               defaultSubType: 'linear', // USDT linear contracts
-              defaultSettleType: 'linear' // Linear settlement
-            }
-          } as ExchangeConfig
+              defaultSettleType: 'linear', // Linear settlement
+            },
+          } as ExchangeConfig,
         },
         {
           exchangeId: 'okx',
@@ -530,9 +563,9 @@ export class Orchestrator extends EventEmitter {
             options: {
               defaultType: 'swap', // Use USDT Futures
               defaultSubType: 'linear', // USDT linear contracts
-              defaultSettleType: 'linear' // Linear settlement
-            }
-          } as ExchangeConfig
+              defaultSettleType: 'linear', // Linear settlement
+            },
+          } as ExchangeConfig,
         },
         {
           exchangeId: 'bitget',
@@ -550,43 +583,56 @@ export class Orchestrator extends EventEmitter {
             options: {
               defaultType: 'swap', // Use USDT Futures
               defaultSubType: 'linear', // USDT linear contracts
-              defaultSettleType: 'linear' // Linear settlement
-            }
-          } as ExchangeConfig
-        }
+              defaultSettleType: 'linear', // Linear settlement
+            },
+          } as ExchangeConfig,
+        },
       ]
 
       await this.accountSyncService.initialize(exchangeAccountConfigs)
-      logger.info({ msg: '✅ Account Sync Service initialized', function: 'Orchestrator.initializeAccountSyncService',
-        exchangeCount: exchangeAccountConfigs.length })
+      logger.info({
+        msg: '✅ Account Sync Service initialized',
+        function: 'Orchestrator.initializeAccountSyncService',
+        exchangeCount: exchangeAccountConfigs.length,
+      })
     } catch (error) {
-      logger.error({ msg: 'Failed to initialize Account Sync Service', function: 'Orchestrator.initializeAccountSyncService',
-        error })
+      logger.error({
+        msg: 'Failed to initialize Account Sync Service',
+        function: 'Orchestrator.initializeAccountSyncService',
+        error,
+      })
       throw error
     }
   }
 
   private async initializePublicWebSocketClients(): Promise<void> {
-    logger.info({ msg: '📡 Initializing WebSocket clients...', function: 'Orchestrator.initializePublicWebSocketClients' })
+    logger.info({
+      msg: '📡 Initializing WebSocket clients...',
+      function: 'Orchestrator.initializePublicWebSocketClients',
+    })
 
     // Fetch trading markets for all exchanges
-    const exchangeMarkets = Array.from(this.exchangeServices.entries()).map(
-      ([exchangeId, services]) => {
-        try {
-          const markets = services.rest.getTradingMarkets()
+    const exchangeMarkets = Array.from(this.exchangeServices.entries()).map(([exchangeId, services]) => {
+      try {
+        const markets = services.rest.getTradingMarkets()
 
-          logger.info({ msg: 'Found USDT perpetual futures markets', function: 'Orchestrator.initializePublicWebSocketClients',
-            exchange: exchangeId,
-            marketCount: Object.keys(markets).length })
-          return { exchangeId, markets }
-        } catch (error) {
-          logger.error({ msg: 'Failed to fetch markets', function: 'Orchestrator.initializePublicWebSocketClients',
-            exchange: exchangeId,
-            error })
-          throw error
-        }
+        logger.info({
+          msg: 'Found USDT perpetual futures markets',
+          function: 'Orchestrator.initializePublicWebSocketClients',
+          exchange: exchangeId,
+          marketCount: Object.keys(markets).length,
+        })
+        return { exchangeId, markets }
+      } catch (error) {
+        logger.error({
+          msg: 'Failed to fetch markets',
+          function: 'Orchestrator.initializePublicWebSocketClients',
+          exchange: exchangeId,
+          error,
+        })
+        throw error
       }
-    )
+    })
     const marketsMap = new Map(exchangeMarkets.map(({ exchangeId, markets }) => [exchangeId, markets]))
 
     // Initialize WebSocket clients
@@ -598,7 +644,7 @@ export class Orchestrator extends EventEmitter {
           apiSecret: config.exchanges.binance.apiSecret,
           maxStreamsPerConnection: config.exchanges.binance.maxStreamsPerConnection,
           reconnectInterval: config.exchanges.binance.reconnectInterval,
-        })
+        }),
       },
       {
         id: 'bybit',
@@ -607,7 +653,7 @@ export class Orchestrator extends EventEmitter {
           apiSecret: config.exchanges.bybit.apiSecret,
           maxStreamsPerConnection: config.exchanges.bybit.maxStreamsPerConnection,
           reconnectInterval: config.exchanges.bybit.reconnectInterval,
-        })
+        }),
       },
       {
         id: 'okx',
@@ -617,7 +663,7 @@ export class Orchestrator extends EventEmitter {
           apiPass: config.exchanges.okx.apiPass,
           maxStreamsPerConnection: config.exchanges.okx.maxStreamsPerConnection,
           reconnectInterval: config.exchanges.okx.reconnectInterval,
-        })
+        }),
       },
       {
         id: 'bitget',
@@ -627,8 +673,8 @@ export class Orchestrator extends EventEmitter {
           apiPass: config.exchanges.bitget.apiPass,
           maxStreamsPerConnection: config.exchanges.bitget.maxStreamsPerConnection,
           reconnectInterval: config.exchanges.bitget.reconnectInterval,
-        })
-      }
+        }),
+      },
     ]
 
     // Initialize and connect WebSocket clients
@@ -637,16 +683,22 @@ export class Orchestrator extends EventEmitter {
         try {
           const markets = marketsMap.get(id) || []
           await client.initialize(markets)
-          
+
           const services = this.exchangeServices.get(id)!
           services.ws = client
-          
-          logger.debug({ msg: 'WebSocket client initialized', function: 'Orchestrator.initializePublicWebSocketClients',
-            exchange: id })
-        } catch (error) {
-          logger.error({ msg: 'Failed to initialize WebSocket client', function: 'Orchestrator.initializePublicWebSocketClients',
+
+          logger.debug({
+            msg: 'WebSocket client initialized',
+            function: 'Orchestrator.initializePublicWebSocketClients',
             exchange: id,
-            error })
+          })
+        } catch (error) {
+          logger.error({
+            msg: 'Failed to initialize WebSocket client',
+            function: 'Orchestrator.initializePublicWebSocketClients',
+            exchange: id,
+            error,
+          })
           throw error
         }
       })
@@ -661,14 +713,20 @@ export class Orchestrator extends EventEmitter {
               this.orderbookManager!.updateOrderbook(update)
             })
           })
-          logger.info({ msg: 'WebSocket connected to Orderbook Manager', function: 'Orchestrator.initializePublicWebSocketClients',
-            exchange: exchangeId })
+          logger.info({
+            msg: 'WebSocket connected to Orderbook Manager',
+            function: 'Orchestrator.initializePublicWebSocketClients',
+            exchange: exchangeId,
+          })
         }
       }
     }
 
-    logger.info({ msg: '✅ All WebSocket clients initialized and connected', function: 'Orchestrator.initializePublicWebSocketClients',
-      clientCount: wsClients.length })
+    logger.info({
+      msg: '✅ All WebSocket clients initialized and connected',
+      function: 'Orchestrator.initializePublicWebSocketClients',
+      clientCount: wsClients.length,
+    })
   }
 
   private setupGracefulShutdown(): void {
@@ -680,16 +738,18 @@ export class Orchestrator extends EventEmitter {
       }
 
       this.isShuttingDown = true
-      logger.warn({ msg: 'Received shutdown signal, initiating graceful shutdown', function: 'Orchestrator.setupGracefulShutdown',
-        signal })
+      logger.warn({
+        msg: 'Received shutdown signal, initiating graceful shutdown',
+        function: 'Orchestrator.setupGracefulShutdown',
+        signal,
+      })
 
       try {
         await this.shutdown()
         logger.info({ msg: '✅ Graceful shutdown completed', function: 'Orchestrator.setupGracefulShutdown' })
         process.exit(0)
       } catch (error) {
-        logger.error({ msg: '❌ Error during shutdown', function: 'Orchestrator.setupGracefulShutdown',
-          error })
+        logger.error({ msg: '❌ Error during shutdown', function: 'Orchestrator.setupGracefulShutdown', error })
         process.exit(1)
       }
     }
@@ -698,16 +758,18 @@ export class Orchestrator extends EventEmitter {
     process.on('SIGTERM', () => shutdownHandler('SIGTERM'))
 
     // Handle uncaught exceptions
-    process.on('uncaughtException', (error) => {
-      logger.fatal({ msg: '💥 Uncaught Exception', function: 'Orchestrator.setupGracefulShutdown',
-        error })
+    process.on('uncaughtException', error => {
+      logger.fatal({ msg: '💥 Uncaught Exception', function: 'Orchestrator.setupGracefulShutdown', error })
       shutdownHandler('uncaughtException')
     })
 
     // Handle unhandled promise rejections
-    process.on('unhandledRejection', (reason) => {
-      logger.fatal({ msg: '💥 Unhandled Rejection', function: 'Orchestrator.setupGracefulShutdown',
-        reason: reason instanceof Error ? reason : String(reason) })
+    process.on('unhandledRejection', reason => {
+      logger.fatal({
+        msg: '💥 Unhandled Rejection',
+        function: 'Orchestrator.setupGracefulShutdown',
+        reason: reason instanceof Error ? reason : String(reason),
+      })
       shutdownHandler('unhandledRejection')
     })
 
@@ -755,11 +817,17 @@ export class Orchestrator extends EventEmitter {
     for (const [exchangeId, services] of this.exchangeServices.entries()) {
       if (services.ws) {
         shutdownTasks.push(async () => {
-          logger.info({ msg: 'Shutting down WebSocket client', function: 'Orchestrator.shutdown',
-            exchange: exchangeId })
+          logger.info({
+            msg: 'Shutting down WebSocket client',
+            function: 'Orchestrator.shutdown',
+            exchange: exchangeId,
+          })
           services.ws.close()
-          logger.info({ msg: 'WebSocket client shutdown complete', function: 'Orchestrator.shutdown',
-            exchange: exchangeId })
+          logger.info({
+            msg: 'WebSocket client shutdown complete',
+            function: 'Orchestrator.shutdown',
+            exchange: exchangeId,
+          })
         })
       }
     }
@@ -787,8 +855,7 @@ export class Orchestrator extends EventEmitter {
       try {
         await task()
       } catch (error) {
-        logger.error({ msg: '❌ Error during shutdown task', function: 'Orchestrator.shutdown',
-          error })
+        logger.error({ msg: '❌ Error during shutdown task', function: 'Orchestrator.shutdown', error })
       }
     }
 
@@ -831,7 +898,7 @@ export class Orchestrator extends EventEmitter {
 
   async testOrderCreation(): Promise<void> {
     const exchangeServices = this.getExchangeServices()
-    
+
     for (const [exchangeId, services] of exchangeServices.entries()) {
       if (exchangeId !== 'bybit') continue
 
@@ -843,28 +910,30 @@ export class Orchestrator extends EventEmitter {
           'LIMIT',
           'BUY',
           100,
-          0.012700,
+          0.0127,
           false,
           new Date().getTime().toString()
         )
         await new Promise(resolve => setTimeout(resolve, 20000))
 
         // await services.rest.cancelOrder(openOrder.id, testSymbol)
-        
+
         const closeOrder = await services.rest.createOrder(
           testSymbol,
           'MARKET',
           'SELL',
           100,
-          0.012700,
+          0.0127,
           true,
           new Date().getTime().toString()
         )
-        
       } catch (error) {
-        logger.error({ msg: 'Order creation test failed', function: 'Orchestrator.testOrderCreation',
+        logger.error({
+          msg: 'Order creation test failed',
+          function: 'Orchestrator.testOrderCreation',
           exchange: exchangeId,
-          error })
+          error,
+        })
         continue
       }
     }
@@ -883,4 +952,4 @@ export async function createOrchestrator(): Promise<Orchestrator> {
 }
 
 // Default export for backward compatibility
-export default Orchestrator 
+export default Orchestrator

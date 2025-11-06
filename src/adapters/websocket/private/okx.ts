@@ -26,18 +26,23 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
     }
 
     return new WebsocketClient({
-      accounts: [{
-        apiKey: this.config.apiKey,
-        apiSecret: this.config.apiSecret,
-        apiPass: this.config.apiPass || '',
-      }]
+      accounts: [
+        {
+          apiKey: this.config.apiKey,
+          apiSecret: this.config.apiSecret,
+          apiPass: this.config.apiPass || '',
+        },
+      ],
     })
   }
 
   protected setupEventHandlers(): void {
     this.client.on('open', () => {
-      logger.debug({ msg: 'Account WebSocket connection opened', function: 'OKXPrivateWebSocketClient.setupEventHandlers.open',
-        exchange: this.exchangeName })
+      logger.debug({
+        msg: 'Account WebSocket connection opened',
+        function: 'OKXPrivateWebSocketClient.setupEventHandlers.open',
+        exchange: this.exchangeName,
+      })
       this.isConnected = true
     })
 
@@ -45,36 +50,48 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
       logger.warn({
         msg: 'Account WebSocket connection closed',
         function: 'OKXPrivateWebSocketClient.setupEventHandlers.close',
-        exchange: this.exchangeName
+        exchange: this.exchangeName,
       })
       this.isConnected = false
       this.handleConnectionError()
     })
 
     this.client.on('response', (data: any) => {
-      logger.debug({ msg: 'Account WebSocket reply received', function: 'OKXPrivateWebSocketClient.setupEventHandlers.response',
+      logger.debug({
+        msg: 'Account WebSocket reply received',
+        function: 'OKXPrivateWebSocketClient.setupEventHandlers.response',
         exchange: this.exchangeName,
-        data, })
+        data,
+      })
     })
 
     this.client.on('reconnect', (data: any) => {
-      logger.info({ msg: 'Account WebSocket reconnecting...', function: 'OKXPrivateWebSocketClient.setupEventHandlers.reconnect',
-          exchange: this.exchangeName,
-          wsKey: data?.wsKey })
+      logger.info({
+        msg: 'Account WebSocket reconnecting...',
+        function: 'OKXPrivateWebSocketClient.setupEventHandlers.reconnect',
+        exchange: this.exchangeName,
+        wsKey: data?.wsKey,
+      })
       this.isConnected = false
     })
 
     this.client.on('reconnected', (data: any) => {
-      logger.info({ msg: 'Account WebSocket reconnected', function: 'OKXPrivateWebSocketClient.setupEventHandlers.reconnected',
-          exchange: this.exchangeName,
-          wsKey: data?.wsKey })
+      logger.info({
+        msg: 'Account WebSocket reconnected',
+        function: 'OKXPrivateWebSocketClient.setupEventHandlers.reconnected',
+        exchange: this.exchangeName,
+        wsKey: data?.wsKey,
+      })
       this.isConnected = true
     })
 
     this.client.on('error', (error: any) => {
-      logger.error({ msg: 'Account WebSocket error', function: 'OKXPrivateWebSocketClient.setupEventHandlers.error',
-          exchange: this.exchangeName,
-          error })
+      logger.error({
+        msg: 'Account WebSocket error',
+        function: 'OKXPrivateWebSocketClient.setupEventHandlers.error',
+        exchange: this.exchangeName,
+        error,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
@@ -83,10 +100,13 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
       try {
         this.handleMessage(data)
       } catch (error) {
-        logger.error({ msg: 'Error parsing Account WebSocket message', function: 'OKXPrivateWebSocketClient.setupEventHandlers.update',
-            exchange: this.exchangeName,
-            data,
-            error })
+        logger.error({
+          msg: 'Error parsing Account WebSocket message',
+          function: 'OKXPrivateWebSocketClient.setupEventHandlers.update',
+          exchange: this.exchangeName,
+          data,
+          error,
+        })
       }
     })
   }
@@ -95,26 +115,29 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
     this.client.subscribe([
       {
         channel: 'account',
-        instType: 'SWAP'
+        instType: 'SWAP',
       },
       {
         channel: 'positions',
-        instType: 'SWAP'
+        instType: 'SWAP',
       },
       {
         channel: 'orders',
-        instType: 'SWAP'
-      }
+        instType: 'SWAP',
+      },
     ])
-    logger.info({ msg: 'Subscribed to account WebSocket streams', function: 'OKXPrivateWebSocketClient.subscribeToAccountStreams',
-        exchange: this.exchangeName })
+    logger.info({
+      msg: 'Subscribed to account WebSocket streams',
+      function: 'OKXPrivateWebSocketClient.subscribeToAccountStreams',
+      exchange: this.exchangeName,
+    })
   }
 }
 
 class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
   parseBalanceUpdate(data: any): BalanceInfo[] {
     const balances: BalanceInfo[] = []
-    
+
     if (data.data && Array.isArray(data.data)) {
       for (const account of data.data) {
         if (account.details && Array.isArray(account.details)) {
@@ -122,7 +145,7 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
             balances.push({
               asset: detail.ccy,
               total: parseFloat(detail.cashBal),
-              available: parseFloat(detail.availBal)
+              available: parseFloat(detail.availBal),
             })
           }
         }
@@ -134,11 +157,11 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
 
   parsePositionUpdate(data: any, restClient: RestClientInterface): PositionInfo[] {
     const positions: PositionInfo[] = []
-    
+
     if (data.data && Array.isArray(data.data)) {
       // Get trading markets to access contractSize
       const markets = restClient.getTradingMarkets()
-      
+
       for (const position of data.data) {
         const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, MarketType.FUTURES, 'USDT')
         const contracts = Math.abs(parseFloat(position.pos))
@@ -155,7 +178,7 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
           leverage: parseFloat(position.lever) || 1,
           unrealizedPnL: parseFloat(position.upl) || 0,
           timestamp: Number(position.cTime) || 0,
-          date: new Date(Number(position.cTime))
+          date: new Date(Number(position.cTime)),
         })
       }
     }
@@ -165,8 +188,8 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
 
   parseOrderUpdate(data: any, restClient: RestClientInterface): OrderInfo[] {
     const orders: OrderInfo[] = []
-    
-    if (data.data && Array.isArray(data.data)) {        
+
+    if (data.data && Array.isArray(data.data)) {
       for (const order of data.data) {
         const symbol = convertExchangeSymbolToUnifiedSymbol(order.instId, MarketType.FUTURES, 'USDT')
         const contracts = Math.abs(parseFloat(order.sz))
@@ -187,7 +210,7 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
           quantity: size,
           status: this.normalizeOrderStatus(order.state),
           timestamp: parseInt(order.cTime),
-          date: new Date(parseInt(order.cTime))
+          date: new Date(parseInt(order.cTime)),
         })
       }
     }
@@ -223,4 +246,4 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
         return 'UNKNOWN'
     }
   }
-} 
+}

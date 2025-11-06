@@ -29,7 +29,7 @@ export interface TrackedTrade {
   opportunity: ArbitrageOpportunity
   entryTimestamp: number
   status: 'open' | 'closed' | 'error'
-  strategy: StrategyType  // Track which strategy the trade uses
+  strategy: StrategyType // Track which strategy the trade uses
   entryTrade: TradeResult
   exitTrade?: TradeResult
   exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
@@ -204,14 +204,22 @@ export class TradeMonitor extends EventEmitter {
     // Calculate exit fees for both legs
     const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker')
     const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker')
-    
-    const buyExitFeesUsd = exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (buyFeeRatePercent / 100)
-    const sellExitFeesUsd = exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (sellFeeRatePercent / 100)
-    
+
+    const buyExitFeesUsd =
+      exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (buyFeeRatePercent / 100)
+    const sellExitFeesUsd =
+      exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (sellFeeRatePercent / 100)
+
     // Calculate slippage separately for both buy and sell sides
-    const buySlippageUsd = exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (exitSimulation.buySlippagePercent / 100)
-    const sellSlippageUsd = exitSimulation.avgSellNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (exitSimulation.sellSlippagePercent / 100)
-    
+    const buySlippageUsd =
+      exitSimulation.avgBuyNormalizedExecutionPrice *
+      trade.opportunity.normalizedVolume *
+      (exitSimulation.buySlippagePercent / 100)
+    const sellSlippageUsd =
+      exitSimulation.avgSellNormalizedExecutionPrice *
+      trade.opportunity.normalizedVolume *
+      (exitSimulation.sellSlippagePercent / 100)
+
     trade.feesUsd.exit = buyExitFeesUsd + sellExitFeesUsd
     trade.feesUsd.total = trade.feesUsd.entry + trade.feesUsd.exit
 
@@ -223,14 +231,17 @@ export class TradeMonitor extends EventEmitter {
 
     trade.slippagePercent.exit = exitSimulation.buySlippagePercent + exitSimulation.sellSlippagePercent
     trade.slippagePercent.total = trade.slippagePercent.entry + trade.slippagePercent.exit
-    
+
     // Calculate profit with simulated exit prices
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
     const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
     const buyExchangeExitPrice = exitSimulation.avgBuyNormalizedExecutionPrice // Exit price for the buy leg
-    const sellExchangeExitPrice = exitSimulation.avgSellNormalizedExecutionPrice  // Exit price for the sell leg
-    
-    const orderAmountUsd = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
+    const sellExchangeExitPrice = exitSimulation.avgSellNormalizedExecutionPrice // Exit price for the sell leg
+
+    const orderAmountUsd =
+      ((trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) *
+        trade.opportunity.normalizedVolume) /
+      2
 
     const buyLegDeltaUsd = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
     const sellLegDeltaUsd = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
@@ -241,7 +252,6 @@ export class TradeMonitor extends EventEmitter {
     trade.pnlUsd = trade.deltaProfitUsd - trade.feesUsd.total
     trade.pnlPercent = (trade.pnlUsd / orderAmountUsd) * 100
   }
-
 
   // Exit Persistence Validation Methods
   private generateExitCandidateKey(tradeId: string, exitType: 'convergence' | 'timeout' | 'manual' | 'error'): string {
@@ -263,8 +273,11 @@ export class TradeMonitor extends EventEmitter {
 
     for (const key of keysToRemove) {
       this.exitCandidates.delete(key)
-      logger.trace({ msg: 'Cleaned up stale exit candidate', function: 'TradeMonitor.cleanupStaleExitCandidates',
-        candidateKey: key, })
+      logger.trace({
+        msg: 'Cleaned up stale exit candidate',
+        function: 'TradeMonitor.cleanupStaleExitCandidates',
+        candidateKey: key,
+      })
     }
 
     this.lastExitCleanupTime = now
@@ -300,35 +313,50 @@ export class TradeMonitor extends EventEmitter {
         avgSellNormalizedExecutionPrice,
         pnlPercent,
         buyExchangeConsecutiveSnapshots: updatingExchange === trade.opportunity.buyExchange ? 1 : 0,
-        sellExchangeConsecutiveSnapshots: updatingExchange === trade.opportunity.sellExchange ? 1 : 0
+        sellExchangeConsecutiveSnapshots: updatingExchange === trade.opportunity.sellExchange ? 1 : 0,
       }
       this.exitCandidates.set(candidateKey, newCandidate)
-      
-      logger.trace({ msg: 'New exit candidate detected', function: 'TradeMonitor.validateExitPersistence',
+
+      logger.trace({
+        msg: 'New exit candidate detected',
+        function: 'TradeMonitor.validateExitPersistence',
         candidateKey,
         convergencePercent,
-        pnlPercent, })
+        pnlPercent,
+      })
       return { isValid: false, reason: 'New exit candidate - waiting for persistence', candidate: newCandidate }
     }
 
     // Existing candidate - check if conditions are still valid
-    const convergenceChangeRatio = (convergencePercent - existingCandidate.convergencePercent) / existingCandidate.convergencePercent
-    const buyPriceChangeRatio = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
-    const sellPriceChangeRatio = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
+    const convergenceChangeRatio =
+      (convergencePercent - existingCandidate.convergencePercent) / existingCandidate.convergencePercent
+    const buyPriceChangeRatio =
+      Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) /
+      existingCandidate.avgBuyNormalizedExecutionPrice
+    const sellPriceChangeRatio =
+      Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) /
+      existingCandidate.avgSellNormalizedExecutionPrice
 
     if (convergenceChangeRatio > 0.2) {
-      logger.trace({ msg: 'Exit candidate convergence decreased, resetting', function: 'TradeMonitor.validateExitPersistence',
+      logger.trace({
+        msg: 'Exit candidate convergence decreased, resetting',
+        function: 'TradeMonitor.validateExitPersistence',
         candidateKey,
-        convergenceChangeRatio, })
+        convergenceChangeRatio,
+      })
       this.exitCandidates.delete(candidateKey)
       return { isValid: false, reason: 'Convergence decreased significantly' }
     }
     // If prices changed significantly, reset the candidate
-    if (buyPriceChangeRatio > 0.01 || sellPriceChangeRatio > 0.01) { // 1% price change threshold
-      logger.trace({ msg: 'Exit candidate price changed significantly, resetting', function: 'TradeMonitor.validateExitPersistence',
+    if (buyPriceChangeRatio > 0.01 || sellPriceChangeRatio > 0.01) {
+      // 1% price change threshold
+      logger.trace({
+        msg: 'Exit candidate price changed significantly, resetting',
+        function: 'TradeMonitor.validateExitPersistence',
         candidateKey,
         buyPriceChangeRatio,
-        sellPriceChangeRatio, })
+        sellPriceChangeRatio,
+      })
       this.exitCandidates.delete(candidateKey)
       return { isValid: false, reason: 'Price changed significantly' }
     }
@@ -351,25 +379,33 @@ export class TradeMonitor extends EventEmitter {
     // Check persistence conditions - require both exchanges to have sufficient snapshots
     const persistenceDuration = existingCandidate.lastDetectedAt - existingCandidate.firstDetectedAt
     const hasMinDuration = persistenceDuration >= this.config.exitMinPersistenceMs
-    const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots
+    const hasMinSnapshots =
+      existingCandidate.buyExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots &&
+      existingCandidate.sellExchangeConsecutiveSnapshots >= this.config.exitMinConsecutiveSnapshots
 
     if (hasMinDuration && hasMinSnapshots) {
-      logger.debug({ msg: 'Exit condition validated', function: 'TradeMonitor.validateExitPersistence',
+      logger.debug({
+        msg: 'Exit condition validated',
+        function: 'TradeMonitor.validateExitPersistence',
         candidateKey,
         duration: persistenceDuration,
         buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
         sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
         convergencePercent: convergencePercent.toFixed(3),
-        pnlPercent: pnlPercent.toFixed(3), })
+        pnlPercent: pnlPercent.toFixed(3),
+      })
       this.exitCandidates.delete(candidateKey) // Remove after validation
       return { isValid: true, candidate: existingCandidate }
     }
 
-    logger.trace({ msg: 'Exit candidate still building persistence', function: 'TradeMonitor.validateExitPersistence',
+    logger.trace({
+      msg: 'Exit candidate still building persistence',
+      function: 'TradeMonitor.validateExitPersistence',
       candidateKey,
       duration: persistenceDuration,
       buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
-      sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots, })
+      sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
+    })
     return { isValid: false, reason: 'Building exit persistence', candidate: existingCandidate }
   }
 
@@ -389,8 +425,11 @@ export class TradeMonitor extends EventEmitter {
     // Setup real-time orderbook event listeners
     this.setupOrderbookEventListeners()
 
-    logger.info({ msg: 'TradeMonitor started with real-time orderbook monitoring', function: 'TradeMonitor.start',
-      openTrades: this.trackedTrades })
+    logger.info({
+      msg: 'TradeMonitor started with real-time orderbook monitoring',
+      function: 'TradeMonitor.start',
+      openTrades: this.trackedTrades,
+    })
   }
 
   /**
@@ -424,25 +463,31 @@ export class TradeMonitor extends EventEmitter {
     if (!this.isRunning) return
 
     const { exchange, symbol } = topOfBook
-    
+
     try {
       // Check if this update affects any open trades
       const affectedTrades = this.getTradesForSymbol(exchange, symbol)
-      
+
       if (affectedTrades.length > 0) {
-        logger.trace({ msg: 'Orderbook update affects trades', function: 'TradeMonitor.handleOrderbookUpdate',
+        logger.trace({
+          msg: 'Orderbook update affects trades',
+          function: 'TradeMonitor.handleOrderbookUpdate',
           exchange,
           symbol,
-          affectedTrades: affectedTrades.length })
-        
+          affectedTrades: affectedTrades.length,
+        })
+
         // Process each affected trade
         for (const trade of affectedTrades) {
           // Prevent race conditions by checking if trade is already being processed
           if (this.processingTrades.has(trade.id)) {
-            logger.trace({ msg: 'Trade already being processed, skipping', function: 'TradeMonitor.handleOrderbookUpdate',
+            logger.trace({
+              msg: 'Trade already being processed, skipping',
+              function: 'TradeMonitor.handleOrderbookUpdate',
               tradeId: trade.id,
               exchange,
-              symbol, })
+              symbol,
+            })
             continue
           }
 
@@ -450,21 +495,27 @@ export class TradeMonitor extends EventEmitter {
             this.processingTrades.add(trade.id)
             this.processTradeExitConditions(trade, exchange)
           } catch (error) {
-            logger.error({ msg: 'Error processing trade exit conditions', function: 'TradeMonitor.handleOrderbookUpdate',
+            logger.error({
+              msg: 'Error processing trade exit conditions',
+              function: 'TradeMonitor.handleOrderbookUpdate',
               tradeId: trade.id,
               exchange,
               symbol,
-              error })
+              error,
+            })
           } finally {
             this.processingTrades.delete(trade.id)
           }
         }
       }
     } catch (error) {
-      logger.error({ msg: 'Error handling orderbook update', function: 'TradeMonitor.handleOrderbookUpdate',
+      logger.error({
+        msg: 'Error handling orderbook update',
+        function: 'TradeMonitor.handleOrderbookUpdate',
         exchange,
         symbol,
-        error })
+        error,
+      })
     }
   }
 
@@ -475,9 +526,10 @@ export class TradeMonitor extends EventEmitter {
     const now = Date.now()
     const timeUntilFunding = nextFundingTimestamp - now
     const timeUntilFundingSec = timeUntilFunding / 1000
-    
-    return timeUntilFundingSec <= this.fundingStrategyWindowStart && 
-           timeUntilFundingSec >= this.fundingStrategyWindowEnd
+
+    return (
+      timeUntilFundingSec <= this.fundingStrategyWindowStart && timeUntilFundingSec >= this.fundingStrategyWindowEnd
+    )
   }
 
   /**
@@ -489,10 +541,12 @@ export class TradeMonitor extends EventEmitter {
     const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
     const timeUntilNextFunding = nextFundingTimestamp - now
     const timeUntilNextFundingSec = timeUntilNextFunding / 1000
-    
+
     // For exits: use windowStart and windowEndClose
-    return timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
-           timeUntilNextFundingSec >= this.spreadStrategyWindowEndClose
+    return (
+      timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
+      timeUntilNextFundingSec >= this.spreadStrategyWindowEndClose
+    )
   }
 
   /**
@@ -503,24 +557,25 @@ export class TradeMonitor extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     currentSpreadDifferencePercent: number
-  ): { shouldExit: boolean, reason?: string } {
+  ): { shouldExit: boolean; reason?: string } {
     // Calculate current funding difference
     const fundingDifferencePercent = (-buyFundingData.fundingRate + sellFundingData.fundingRate) * 100
 
     // Exit Condition 1: Funding rates converged (< 0.02%)
     if (fundingDifferencePercent < this.fundingConvergenceThresholdPercent) {
-      return { 
-        shouldExit: true, 
-        reason: `Funding converged: ${(fundingDifferencePercent).toFixed(3)}% < ${(this.fundingConvergenceThresholdPercent).toFixed(3)}%` 
+      return {
+        shouldExit: true,
+        reason: `Funding converged: ${fundingDifferencePercent.toFixed(3)}% < ${this.fundingConvergenceThresholdPercent.toFixed(3)}%`,
       }
     }
 
     // Exit Condition 2: Spread widened excessively (dynamic based on entry spread)
-    const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
+    const spreadWideningThresholdPercent =
+      trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
     if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
-      return { 
-        shouldExit: true, 
-        reason: `Spread widened: ${(currentSpreadDifferencePercent).toFixed(3)}% < ${(spreadWideningThresholdPercent).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfitPercent).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThresholdPercent).toFixed(3)}%)` 
+      return {
+        shouldExit: true,
+        reason: `Spread widened: ${currentSpreadDifferencePercent.toFixed(3)}% < ${spreadWideningThresholdPercent.toFixed(3)}% (entry: ${trade.opportunity.spreadProfitPercent.toFixed(3)}% + threshold: ${this.fundingSpreadWideningThresholdPercent.toFixed(3)}%)`,
       }
     }
 
@@ -535,70 +590,76 @@ export class TradeMonitor extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     currentSpreadDifferencePercent: number
-  ): { shouldExit: boolean, reason?: string } {
-    const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, config.funding.projectionHours)
+  ): { shouldExit: boolean; reason?: string } {
+    const fundingEvents = this.fundingService.generateFundingEvents(
+      buyFundingData,
+      sellFundingData,
+      config.funding.projectionHours
+    )
 
     // Check if currently synchronized (upcoming event is a sync)
     const isNextEventSync = buyFundingData.nextFundingTimestamp === sellFundingData.nextFundingTimestamp
-    
+
     if (!isNextEventSync) {
       // CASE 1: ASYNC - upcoming event is NOT a sync
       // Calculate cumulative funding profit until the next sync event
       const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFundingData, sellFundingData)
-      const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
-        nextSyncTimestamp,
-        fundingEvents
-      )
-      
+      const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(nextSyncTimestamp, fundingEvents)
+
       // Exit Condition: cumulativeFundingRate < 0 (should be profitable before sync)
-      if ((cumulativeFundingRate * 100) < this.fundingConvergenceThresholdPercent) {
-        return { 
-          shouldExit: true, 
-          reason: `ASYNC-ASYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < 0%` 
+      if (cumulativeFundingRate * 100 < this.fundingConvergenceThresholdPercent) {
+        return {
+          shouldExit: true,
+          reason: `ASYNC-ASYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < 0%`,
         }
       }
     } else {
       // CASE 2: SYNC - upcoming event IS a sync, need to look beyond it
       // Find the next sync AFTER the upcoming sync (next + 1)
       const currentSyncTimestamp = buyFundingData.nextFundingTimestamp
-      
+
       // Find the next sync + 1 event
       let nextPlusOneSyncTimestamp = 0
       let foundCurrentSync = false
-      
+
       for (const event of fundingEvents) {
-        if (event.timestamp === currentSyncTimestamp && event.buyExchangeFundingRate !== 0 && event.sellExchangeFundingRate !== 0) {
+        if (
+          event.timestamp === currentSyncTimestamp &&
+          event.buyExchangeFundingRate !== 0 &&
+          event.sellExchangeFundingRate !== 0
+        ) {
           foundCurrentSync = true
           continue // Skip current sync
         }
-        
+
         if (foundCurrentSync && event.buyExchangeFundingRate !== 0 && event.sellExchangeFundingRate !== 0) {
           nextPlusOneSyncTimestamp = event.timestamp
           break
         }
       }
-      
+
       // Calculate cumulative funding rate for all events until nextSyncPlusOne
       const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
         nextPlusOneSyncTimestamp,
         fundingEvents
       )
-      
+
       // Exit Condition: cumulativeFundingRate < minFundingProfitPercent
-      if ((cumulativeFundingRate * 100) < this.fundingMinFundingProfitAsyncSyncExitPercent) {
-        return { 
-          shouldExit: true, 
-          reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${(this.fundingMinFundingProfitAsyncSyncExitPercent).toFixed(3)}%` 
+      if (cumulativeFundingRate * 100 < this.fundingMinFundingProfitAsyncSyncExitPercent) {
+        return {
+          shouldExit: true,
+          reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${this.fundingMinFundingProfitAsyncSyncExitPercent.toFixed(3)}%`,
         }
       }
     }
 
     // Exit Condition: Spread widened excessively (dynamic based on entry spread)
-    const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
+    const spreadWideningThresholdPercent =
+      trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
     if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
-      return { 
-        shouldExit: true, 
-        reason: `Spread widened: ${(currentSpreadDifferencePercent).toFixed(3)}% < ${(spreadWideningThresholdPercent).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfitPercent).toFixed(3)}% + threshold: ${(this.fundingSpreadWideningThresholdPercent).toFixed(3)}%)` 
+      return {
+        shouldExit: true,
+        reason: `Spread widened: ${currentSpreadDifferencePercent.toFixed(3)}% < ${spreadWideningThresholdPercent.toFixed(3)}% (entry: ${trade.opportunity.spreadProfitPercent.toFixed(3)}% + threshold: ${this.fundingSpreadWideningThresholdPercent.toFixed(3)}%)`,
       }
     }
 
@@ -612,7 +673,7 @@ export class TradeMonitor extends EventEmitter {
     trade: TrackedTrade,
     currentSpreadDifferencePercent: number,
     exitSimulation: ExitSlippageSimulationResult
-  ): { shouldExit: boolean, reason?: string } {
+  ): { shouldExit: boolean; reason?: string } {
     // For arbitrage trades, we need to consider the exit prices:
     // - If we bought initially, we need to sell at the bid price
     // - If we sold initially, we need to buy at the ask price
@@ -620,23 +681,23 @@ export class TradeMonitor extends EventEmitter {
     // Calculate convergence for exit prices
     const exitBuyExchangePrice = exitSimulation.avgBuyNormalizedExecutionPrice
     const exitSellExchangePrice = exitSimulation.avgSellNormalizedExecutionPrice
-    
+
     const convergencePercent = ((exitSellExchangePrice - exitBuyExchangePrice) / exitBuyExchangePrice) * 100
 
     // Check convergence threshold
     if (convergencePercent < this.spreadConvergenceThresholdPercent) {
       return {
         shouldExit: true,
-        reason: `SPREAD: Price convergence: ${(convergencePercent).toFixed(3)}% < ${(this.spreadConvergenceThresholdPercent).toFixed(3)}%`
+        reason: `SPREAD: Price convergence: ${convergencePercent.toFixed(3)}% < ${this.spreadConvergenceThresholdPercent.toFixed(3)}%`,
       }
     }
 
     // Check if spread widened excessively (dynamic based on entry spread)
     const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.spreadWideningThresholdPercent
     if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
-      return { 
+      return {
         shouldExit: true,
-        reason: `Spread widened: ${(currentSpreadDifferencePercent).toFixed(3)}% < ${(spreadWideningThresholdPercent).toFixed(3)}% (entry: ${(trade.opportunity.spreadProfitPercent).toFixed(3)}% + threshold: ${(this.spreadWideningThresholdPercent).toFixed(3)}%)` 
+        reason: `Spread widened: ${currentSpreadDifferencePercent.toFixed(3)}% < ${spreadWideningThresholdPercent.toFixed(3)}% (entry: ${trade.opportunity.spreadProfitPercent.toFixed(3)}% + threshold: ${this.spreadWideningThresholdPercent.toFixed(3)}%)`,
       }
     }
 
@@ -648,17 +709,19 @@ export class TradeMonitor extends EventEmitter {
    */
   private getTradesForSymbol(exchange: string, symbol: string): TrackedTrade[] {
     const affectedTrades: TrackedTrade[] = []
-    
+
     for (const trade of this.trackedTrades.values()) {
       if (trade.status !== 'open') continue
-      
+
       // Check if this trade involves the updated exchange and symbol
-      if ((trade.opportunity.buyExchange === exchange && trade.opportunity.buyExchangeSymbol === symbol) ||
-          (trade.opportunity.sellExchange === exchange && trade.opportunity.sellExchangeSymbol === symbol)) {
+      if (
+        (trade.opportunity.buyExchange === exchange && trade.opportunity.buyExchangeSymbol === symbol) ||
+        (trade.opportunity.sellExchange === exchange && trade.opportunity.sellExchangeSymbol === symbol)
+      ) {
         affectedTrades.push(trade)
       }
     }
-    
+
     return affectedTrades
   }
 
@@ -669,11 +732,14 @@ export class TradeMonitor extends EventEmitter {
     // Simulate exit slippage for current orderbook state
     const exitSimulation = this.simulateExitSlippage(trade)
     if (!exitSimulation) {
-      logger.warn({ msg: 'Could not simulate exit slippage', function: 'TradeMonitor.processTradeExitConditions',
-        tradeId: trade.id, })
+      logger.warn({
+        msg: 'Could not simulate exit slippage',
+        function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id,
+      })
       return
     }
-    
+
     const now = Date.now()
     const holdTimeMs = now - trade.entryTimestamp
 
@@ -688,7 +754,10 @@ export class TradeMonitor extends EventEmitter {
     trade.lastUpdateTimestamp = now
 
     // Calculate current spread difference for exit checks
-    const currentSpreadDifferencePercent = ((exitSimulation.avgSellNormalizedExecutionPrice - exitSimulation.avgBuyNormalizedExecutionPrice) / exitSimulation.avgBuyNormalizedExecutionPrice) * 100
+    const currentSpreadDifferencePercent =
+      ((exitSimulation.avgSellNormalizedExecutionPrice - exitSimulation.avgBuyNormalizedExecutionPrice) /
+        exitSimulation.avgBuyNormalizedExecutionPrice) *
+      100
 
     // Get current funding data for all strategies
     const buyFundingData = this.fundingService.getSymbolFundingData(
@@ -701,15 +770,21 @@ export class TradeMonitor extends EventEmitter {
     )
 
     if (!buyFundingData || !sellFundingData) {
-      logger.warn({ msg: 'Cannot check exit: funding data unavailable', function: 'TradeMonitor.processTradeExitConditions',
-        tradeId: trade.id, })
+      logger.warn({
+        msg: 'Cannot check exit: funding data unavailable',
+        function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id,
+      })
       return
     }
 
     // Validate funding data is not outdated
     if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
-      logger.warn({ msg: 'Outdated funding data, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
-        tradeId: trade.id, })
+      logger.warn({
+        msg: 'Outdated funding data, skipping exit check',
+        function: 'TradeMonitor.processTradeExitConditions',
+        tradeId: trade.id,
+      })
       return
     }
 
@@ -719,36 +794,55 @@ export class TradeMonitor extends EventEmitter {
     const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
 
     // Check time window and strategy enabled conditions
-    let strategyExitResult: { shouldExit: boolean, reason?: string } = { shouldExit: false }
+    let strategyExitResult: { shouldExit: boolean; reason?: string } = { shouldExit: false }
 
     if (trade.strategy === 'funding' && this.fundingStrategyEnabled) {
       // Check if target funding event has occurred
       if (now < trade.opportunity.targetFundingTimestamp) {
-        logger.trace({ msg: 'Target funding event not reached yet, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
+        logger.trace({
+          msg: 'Target funding event not reached yet, skipping exit check',
+          function: 'TradeMonitor.processTradeExitConditions',
           tradeId: trade.id,
-          secondsRemaining: Math.round((trade.opportunity.targetFundingTimestamp - now) / 1000) })
+          secondsRemaining: Math.round((trade.opportunity.targetFundingTimestamp - now) / 1000),
+        })
         return
       }
 
       // Check if within funding window
       if (!this.isWithinFundingWindow(nextFundingTimestamp)) {
-        logger.trace({ msg: 'Not within funding window, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
-          tradeId: trade.id, })
+        logger.trace({
+          msg: 'Not within funding window, skipping exit check',
+          function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+        })
         return
       }
 
       // Determine if this is SYNC or ASYNC funding arbitrage
       const isSynchronized = this.fundingService.isFundingSynchronizedExit(buyFundingData, sellFundingData)
-      
+
       if (isSynchronized) {
-        strategyExitResult = this.shouldExitFundingSyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDifferencePercent)
+        strategyExitResult = this.shouldExitFundingSyncTrade(
+          trade,
+          buyFundingData,
+          sellFundingData,
+          currentSpreadDifferencePercent
+        )
       } else {
-        strategyExitResult = this.shouldExitFundingAsyncTrade(trade, buyFundingData, sellFundingData, currentSpreadDifferencePercent)
+        strategyExitResult = this.shouldExitFundingAsyncTrade(
+          trade,
+          buyFundingData,
+          sellFundingData,
+          currentSpreadDifferencePercent
+        )
       }
     } else if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
       if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
-        logger.trace({ msg: 'Not within spread window, skipping exit check', function: 'TradeMonitor.processTradeExitConditions',
-          tradeId: trade.id, })
+        logger.trace({
+          msg: 'Not within spread window, skipping exit check',
+          function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+        })
         return
       }
 
@@ -757,9 +851,12 @@ export class TradeMonitor extends EventEmitter {
 
     // If strategy-specific exit condition is met, execute exit with validation
     if (strategyExitResult.shouldExit) {
-      logger.info({ msg: 'Strategy exit condition met', function: 'TradeMonitor.processTradeExitConditions',
+      logger.info({
+        msg: 'Strategy exit condition met',
+        function: 'TradeMonitor.processTradeExitConditions',
         tradeId: trade.id,
-        reason: strategyExitResult.reason, })
+        reason: strategyExitResult.reason,
+      })
       await this.executeExitTrade(trade, exitSimulation, 'convergence', updatingExchange)
     }
   }
@@ -769,16 +866,22 @@ export class TradeMonitor extends EventEmitter {
    */
   private simulateExitSlippage(trade: TrackedTrade): ExitSlippageSimulationResult | null {
     try {
-      const buyBook = this.orderbookManager.getOrderbook(trade.opportunity.buyExchange, trade.opportunity.buyExchangeSymbol)
-      const sellBook = this.orderbookManager.getOrderbook(trade.opportunity.sellExchange, trade.opportunity.sellExchangeSymbol)
-      
+      const buyBook = this.orderbookManager.getOrderbook(
+        trade.opportunity.buyExchange,
+        trade.opportunity.buyExchangeSymbol
+      )
+      const sellBook = this.orderbookManager.getOrderbook(
+        trade.opportunity.sellExchange,
+        trade.opportunity.sellExchangeSymbol
+      )
+
       if (!buyBook || !sellBook) {
         return null
       }
 
       const buyMetadataService = this.marketMetadataServices.get(trade.opportunity.buyExchange)
       const sellMetadataService = this.marketMetadataServices.get(trade.opportunity.sellExchange)
-      
+
       if (!buyMetadataService || !sellMetadataService) {
         return null
       }
@@ -809,14 +912,17 @@ export class TradeMonitor extends EventEmitter {
         avgSellNormalizedExecutionPrice: sellExitSimulation.avgNormalizedExecutionPrice,
         buySlippagePercent: buyExitSimulation.slippagePercent,
         sellSlippagePercent: sellExitSimulation.slippagePercent,
-        totalSlippagePercent: buyExitSimulation.slippagePercent + sellExitSimulation.slippagePercent
+        totalSlippagePercent: buyExitSimulation.slippagePercent + sellExitSimulation.slippagePercent,
       }
     } catch (error) {
-      logger.error({ msg: 'Error simulating exit slippage', function: 'TradeMonitor.simulateExitSlippage',
+      logger.error({
+        msg: 'Error simulating exit slippage',
+        function: 'TradeMonitor.simulateExitSlippage',
         tradeId: trade.id,
         buyExchange: trade.opportunity.buyExchange,
         sellExchange: trade.opportunity.sellExchange,
-        error })
+        error,
+      })
       return null
     }
   }
@@ -845,7 +951,9 @@ export class TradeMonitor extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
-      logger.warn({ msg: 'Orderbook cannot fill full requested volume', function: 'TradeMonitor.simulateSlippage',
+      logger.warn({
+        msg: 'Orderbook cannot fill full requested volume',
+        function: 'TradeMonitor.simulateSlippage',
         exchange,
         side: isBuy ? 'BUY' : 'SELL',
         exchangeSymbol,
@@ -853,7 +961,8 @@ export class TradeMonitor extends EventEmitter {
         remainingVolume,
         basePrice,
         requestedUsd: exchangeVolume * basePrice,
-        remainingUsd: remainingVolume * basePrice, })
+        remainingUsd: remainingVolume * basePrice,
+      })
     }
 
     const avgExecutionPrice = weightedPrice / exchangeVolume
@@ -864,7 +973,7 @@ export class TradeMonitor extends EventEmitter {
     return {
       avgExecutionPrice,
       avgNormalizedExecutionPrice: metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol),
-      slippagePercent
+      slippagePercent,
     }
   }
 
@@ -873,8 +982,7 @@ export class TradeMonitor extends EventEmitter {
    */
   addTrade(tradeResult: TradeResult): void {
     if (!tradeResult.success || !tradeResult.buyOrder || !tradeResult.sellOrder) {
-      logger.error({ msg: 'Cannot monitor failed trade', function: 'TradeMonitor.addTrade',
-        tradeId: tradeResult.id })
+      logger.error({ msg: 'Cannot monitor failed trade', function: 'TradeMonitor.addTrade', tradeId: tradeResult.id })
       return
     }
 
@@ -883,46 +991,52 @@ export class TradeMonitor extends EventEmitter {
       opportunity: tradeResult.opportunity,
       entryTimestamp: Math.min(tradeResult.buyOrder.timestamp, tradeResult.sellOrder.timestamp),
       status: 'open',
-      strategy: tradeResult.opportunity.strategy,  // Capture strategy type from opportunity
+      strategy: tradeResult.opportunity.strategy, // Capture strategy type from opportunity
       entryTrade: tradeResult,
       lastUpdateTimestamp: Date.now(),
       feesUsd: {
         entry: tradeResult.feesUsd,
         exit: 0, // Will be calculated when position is closed
-        total: tradeResult.feesUsd
+        total: tradeResult.feesUsd,
       },
       slippageUsd: {
         entry: tradeResult.slippageUsd,
         exit: 0, // Will be calculated when position is closed
-        total: tradeResult.slippageUsd
+        total: tradeResult.slippageUsd,
       },
       feesPercent: {
         entry: tradeResult.feesPercent,
         exit: 0, // Will be calculated when position is closed
-        total: tradeResult.feesPercent
+        total: tradeResult.feesPercent,
       },
       slippagePercent: {
         entry: tradeResult.slippagePercent,
         exit: 0, // Will be calculated when position is closed
-        total: tradeResult.slippagePercent
+        total: tradeResult.slippagePercent,
       },
       deltaProfitUsd: 0,
       deltaProfitPercent: 0,
       pnlUsd: 0,
-      pnlPercent: 0
+      pnlPercent: 0,
     }
 
     this.trackedTrades.set(tradeResult.id, trackedTrade)
-    
-    logger.info({ msg: 'Trade added to monitoring', function: 'TradeMonitor.addTrade',
+
+    logger.info({
+      msg: 'Trade added to monitoring',
+      function: 'TradeMonitor.addTrade',
       id: trackedTrade.id,
-      entryTrade: trackedTrade.entryTrade, })
+      entryTrade: trackedTrade.entryTrade,
+    })
 
     // Save trade to Redis
     this.state.saveTrackedTrade(trackedTrade).catch(error => {
-      logger.error({ msg: 'Failed to save trade to Redis', function: 'TradeMonitor.addTrade',
+      logger.error({
+        msg: 'Failed to save trade to Redis',
+        function: 'TradeMonitor.addTrade',
         tradeId: trackedTrade.id,
-        error })
+        error,
+      })
     })
   }
 
@@ -946,15 +1060,16 @@ export class TradeMonitor extends EventEmitter {
   async closeTrade(tradeId: string, reason: 'manual' | 'error' = 'manual'): Promise<boolean> {
     const trade = this.trackedTrades.get(tradeId)
     if (!trade || trade.status !== 'open') {
-      logger.warn({ msg: 'Cannot close trade - not found or already closed', function: 'TradeMonitor.closeTrade',
+      logger.warn({
+        msg: 'Cannot close trade - not found or already closed',
+        function: 'TradeMonitor.closeTrade',
         tradeId,
-        status: trade?.status })
+        status: trade?.status,
+      })
       return false
     }
 
-    logger.info({ msg: 'Manually closing trade', function: 'TradeMonitor.closeTrade',
-      tradeId,
-      reason })
+    logger.info({ msg: 'Manually closing trade', function: 'TradeMonitor.closeTrade', tradeId, reason })
 
     // Clear any pending exit candidates for this trade
     this.clearExitCandidatesForTrade(tradeId)
@@ -963,17 +1078,14 @@ export class TradeMonitor extends EventEmitter {
       // Simulate exit slippage for current orderbook state
       const exitSimulation = this.simulateExitSlippage(trade)
       if (!exitSimulation) {
-        logger.warn({ msg: 'Could not simulate exit slippage', function: 'TradeMonitor.closeTrade',
-          tradeId })
+        logger.warn({ msg: 'Could not simulate exit slippage', function: 'TradeMonitor.closeTrade', tradeId })
         return false
       }
 
       await this.executeExitTrade(trade, exitSimulation, 'manual')
       return true
     } catch (error) {
-      logger.error({ msg: 'Failed to close trade', function: 'TradeMonitor.closeTrade',
-        tradeId,
-        error })
+      logger.error({ msg: 'Failed to close trade', function: 'TradeMonitor.closeTrade', tradeId, error })
       return false
     }
   }
@@ -988,12 +1100,15 @@ export class TradeMonitor extends EventEmitter {
         keysToRemove.push(key)
       }
     }
-    
+
     for (const key of keysToRemove) {
       this.exitCandidates.delete(key)
-      logger.trace({ msg: 'Cleared exit candidate', function: 'TradeMonitor.clearExitCandidatesForTrade',
+      logger.trace({
+        msg: 'Cleared exit candidate',
+        function: 'TradeMonitor.clearExitCandidatesForTrade',
         candidateKey: key,
-        tradeId, })
+        tradeId,
+      })
     }
 
     // Also clear from processing trades set to prevent race conditions
@@ -1003,39 +1118,55 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Get current orderbook prices for a trade with normalization
    */
-  private getCurrentOrderbookPrices(opportunity: ArbitrageOpportunity): { buyPrice: number, sellPrice: number, normalizedBuyPrice: number, normalizedSellPrice: number } {
+  private getCurrentOrderbookPrices(opportunity: ArbitrageOpportunity): {
+    buyPrice: number
+    sellPrice: number
+    normalizedBuyPrice: number
+    normalizedSellPrice: number
+  } {
     try {
       const buyTopOfBook = this.orderbookManager.getTopOfBook(opportunity.buyExchange, opportunity.buyExchangeSymbol)
       const sellTopOfBook = this.orderbookManager.getTopOfBook(opportunity.sellExchange, opportunity.sellExchangeSymbol)
-      
+
       if (!buyTopOfBook || !sellTopOfBook) {
-        throw new Error(`No orderbook data available for ${opportunity.buyExchange} ${opportunity.buyExchangeSymbol} or ${opportunity.sellExchange} ${opportunity.sellExchangeSymbol}`)
+        throw new Error(
+          `No orderbook data available for ${opportunity.buyExchange} ${opportunity.buyExchangeSymbol} or ${opportunity.sellExchange} ${opportunity.sellExchangeSymbol}`
+        )
       }
-      
+
       // Get market metadata services for normalization
       const buyMetadataService = this.marketMetadataServices.get(opportunity.buyExchange)
       const sellMetadataService = this.marketMetadataServices.get(opportunity.sellExchange)
-      
+
       if (!buyMetadataService || !sellMetadataService) {
         throw new Error('Market metadata services not available')
       }
-      
+
       // Normalize prices to base scale for comparison
-      const normalizedBuyPrice = buyMetadataService.normalizePrice(buyTopOfBook.bestBid.price, opportunity.buyExchangeSymbol)
-      const normalizedSellPrice = sellMetadataService.normalizePrice(sellTopOfBook.bestAsk.price, opportunity.sellExchangeSymbol)
-      
+      const normalizedBuyPrice = buyMetadataService.normalizePrice(
+        buyTopOfBook.bestBid.price,
+        opportunity.buyExchangeSymbol
+      )
+      const normalizedSellPrice = sellMetadataService.normalizePrice(
+        sellTopOfBook.bestAsk.price,
+        opportunity.sellExchangeSymbol
+      )
+
       return {
         buyPrice: buyTopOfBook.bestBid.price,
         sellPrice: sellTopOfBook.bestAsk.price,
         normalizedBuyPrice,
-        normalizedSellPrice
+        normalizedSellPrice,
       }
     } catch (error) {
-      logger.error({ msg: 'Failed to get current orderbook prices', function: 'TradeMonitor.getCurrentOrderbookPrices',
+      logger.error({
+        msg: 'Failed to get current orderbook prices',
+        function: 'TradeMonitor.getCurrentOrderbookPrices',
         normalizedPair: opportunity.normalizedPair,
         buyExchange: opportunity.buyExchange,
         sellExchange: opportunity.sellExchange,
-        error })
+        error,
+      })
       throw error
     }
   }
@@ -1052,9 +1183,9 @@ export class TradeMonitor extends EventEmitter {
     // Calculate convergence for exit prices
     const exitExchangeBuyPrice = exitSimulation.avgBuyNormalizedExecutionPrice
     const exitExchangeSellPrice = exitSimulation.avgSellNormalizedExecutionPrice
-    
+
     const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
-    
+
     // Validate exit persistence for convergence
     if (exitReason === 'convergence') {
       const validation = this.validateExitPersistence(
@@ -1066,18 +1197,24 @@ export class TradeMonitor extends EventEmitter {
         trade.pnlPercent,
         updatingExchange!
       )
-      
+
       if (!validation.isValid) {
-        logger.trace({ msg: 'Exit validation failed', function: 'TradeMonitor.executeExitTrade',
+        logger.trace({
+          msg: 'Exit validation failed',
+          function: 'TradeMonitor.executeExitTrade',
           tradeId: trade.id,
-          reason: validation.reason })
+          reason: validation.reason,
+        })
         return
       }
     }
 
-    logger.debug({ msg: 'Executing exit trade', function: 'TradeMonitor.executeExitTrade',
+    logger.debug({
+      msg: 'Executing exit trade',
+      function: 'TradeMonitor.executeExitTrade',
       tradeId: trade.id,
-      exitReason })
+      exitReason,
+    })
 
     try {
       // Execute reverse trades in parallel
@@ -1094,10 +1231,10 @@ export class TradeMonitor extends EventEmitter {
       // Place exit orders in parallel
       const [buyOrder, sellOrder] = await Promise.all([
         placeOrderAndMonitor(
-          buyClient, 
-          trade.opportunity.buyExchangeSymbol, 
-          'SELL', 
-          trade.opportunity.buyExchangeVolume, 
+          buyClient,
+          trade.opportunity.buyExchangeSymbol,
+          'SELL',
+          trade.opportunity.buyExchangeVolume,
           currentPrices.buyPrice,
           true,
           `${trade.id}EXITBUY`,
@@ -1105,22 +1242,22 @@ export class TradeMonitor extends EventEmitter {
           this.accountStateManager
         ),
         placeOrderAndMonitor(
-          sellClient, 
-          trade.opportunity.sellExchangeSymbol, 
-          'BUY', 
-          trade.opportunity.sellExchangeVolume, 
+          sellClient,
+          trade.opportunity.sellExchangeSymbol,
+          'BUY',
+          trade.opportunity.sellExchangeVolume,
           currentPrices.sellPrice,
           true,
           `${trade.id}EXITSELL`,
           trade.opportunity.sellExchange,
           this.accountStateManager
-        )
+        ),
       ])
 
       // Calculate fees and slippage
       const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker')
       const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker')
-      
+
       const buyFees = calculateFees(buyOrder, buyFeeRatePercent)
       const sellFees = calculateFees(sellOrder, sellFeeRatePercent)
       const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
@@ -1133,7 +1270,7 @@ export class TradeMonitor extends EventEmitter {
         buyOrder,
         sellOrder,
         success: true,
-        latencyMs: 0,        
+        latencyMs: 0,
         feesUsd: buyFees.feesUsd + sellFees.feesUsd,
         feesPercent: buyFees.feesPercent + sellFees.feesPercent,
         slippageUsd: buySlippage.slippageUsd + sellSlippage.slippageUsd,
@@ -1153,12 +1290,17 @@ export class TradeMonitor extends EventEmitter {
 
       // Update trade in Redis with closed status
       this.state.updateTrackedTrade(trade).catch(error => {
-        logger.error({ msg: 'Failed to update trade in Redis', function: 'TradeMonitor.executeExitTrade',
+        logger.error({
+          msg: 'Failed to update trade in Redis',
+          function: 'TradeMonitor.executeExitTrade',
           tradeId: trade.id,
-          error })
+          error,
+        })
       })
 
-      logger.info({ msg: 'Exit trade completed', function: 'TradeMonitor.executeExitTrade',
+      logger.info({
+        msg: 'Exit trade completed',
+        function: 'TradeMonitor.executeExitTrade',
         tradeId: trade.id,
         normalizedPair: trade.opportunity.normalizedPair,
         buyExchange: trade.opportunity.buyExchange,
@@ -1167,25 +1309,31 @@ export class TradeMonitor extends EventEmitter {
         feesPercent: trade.feesPercent.total.toFixed(3),
         slippagePercent: trade.slippagePercent.total.toFixed(3),
         deltaProfitPercent: trade.deltaProfitPercent.toFixed(3),
-        pnlPercent: trade.pnlPercent.toFixed(3), })
-
+        pnlPercent: trade.pnlPercent.toFixed(3),
+      })
     } catch (error) {
-      logger.error({ msg: 'Exit trade failed', function: 'TradeMonitor.executeExitTrade',
+      logger.error({
+        msg: 'Exit trade failed',
+        function: 'TradeMonitor.executeExitTrade',
         tradeId: trade.id,
         normalizedPair: trade.opportunity.normalizedPair,
         buyExchange: trade.opportunity.buyExchange,
         sellExchange: trade.opportunity.sellExchange,
         exitReason,
-        error })
+        error,
+      })
 
       trade.status = 'error'
       trade.exitReason = 'error'
-      
+
       // Update trade in Redis with error status
       this.state.updateTrackedTrade(trade).catch(error => {
-        logger.error({ msg: 'Failed to update trade in Redis on error', function: 'TradeMonitor.executeExitTrade',
+        logger.error({
+          msg: 'Failed to update trade in Redis on error',
+          function: 'TradeMonitor.executeExitTrade',
           tradeId: trade.id,
-          error })
+          error,
+        })
       })
     }
   }
@@ -1200,7 +1348,7 @@ export class TradeMonitor extends EventEmitter {
 
     trade.feesPercent.exit = exitTrade.feesPercent
     trade.feesPercent.total = trade.feesPercent.entry + trade.feesPercent.exit
-    
+
     trade.slippageUsd.exit = exitTrade.slippageUsd
     trade.slippageUsd.total = trade.slippageUsd.entry + trade.slippageUsd.exit
 
@@ -1211,9 +1359,12 @@ export class TradeMonitor extends EventEmitter {
     const buyExchangeEntryPrice = trade.entryTrade.buyOrder!.averagePrice
     const sellExchangeEntryPrice = trade.entryTrade.sellOrder!.averagePrice
     const buyExchangeExitPrice = exitTrade.buyOrder!.averagePrice // Exit price for the buy leg
-    const sellExchangeExitPrice = exitTrade.sellOrder!.averagePrice  // Exit price for the sell leg
-    
-    const orderAmountUsd = (trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) * trade.opportunity.normalizedVolume / 2
+    const sellExchangeExitPrice = exitTrade.sellOrder!.averagePrice // Exit price for the sell leg
+
+    const orderAmountUsd =
+      ((trade.opportunity.avgBuyNormalizedExecutionPrice + trade.opportunity.avgSellNormalizedExecutionPrice) *
+        trade.opportunity.normalizedVolume) /
+      2
 
     const buyLegDeltaUsd = (buyExchangeExitPrice - buyExchangeEntryPrice) * trade.entryTrade.buyOrder!.quantity
     const sellLegDeltaUsd = (sellExchangeEntryPrice - sellExchangeExitPrice) * trade.entryTrade.sellOrder!.quantity
@@ -1264,10 +1415,14 @@ export class TradeMonitor extends EventEmitter {
     const totalFeesUsd = trades.reduce((sum, trade) => sum + trade.feesUsd.total, 0)
     const totalSlippageUsd = trades.reduce((sum, trade) => sum + trade.slippageUsd.total, 0)
     const avgPnLUsd = trades.length > 0 ? totalPnLUsd / trades.length : 0
-    const avgPnLPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.pnlPercent, 0) / trades.length : 0
-    const avgDeltaProfitPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.deltaProfitPercent, 0) / trades.length : 0
-    const avgFeesPercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.feesPercent.total, 0) / trades.length : 0
-    const avgSlippagePercent = trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.slippagePercent.total, 0) / trades.length : 0
+    const avgPnLPercent =
+      trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.pnlPercent, 0) / trades.length : 0
+    const avgDeltaProfitPercent =
+      trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.deltaProfitPercent, 0) / trades.length : 0
+    const avgFeesPercent =
+      trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.feesPercent.total, 0) / trades.length : 0
+    const avgSlippagePercent =
+      trades.length > 0 ? trades.reduce((sum, trade) => sum + trade.slippagePercent.total, 0) / trades.length : 0
 
     return {
       totalTrades: trades.length,
@@ -1283,7 +1438,7 @@ export class TradeMonitor extends EventEmitter {
       avgDeltaProfitPercent,
       avgFeesPercent,
       avgSlippagePercent,
-      exitCandidates: this.exitCandidates.size
+      exitCandidates: this.exitCandidates.size,
     }
   }
 
@@ -1309,11 +1464,13 @@ export class TradeMonitor extends EventEmitter {
         this.trackedTrades.set(trade.id, trade)
       }
 
-      logger.info({ msg: 'State restored from Redis', function: 'TradeMonitor.restoreState',
-        openTrades: restoredTrades.length })
+      logger.info({
+        msg: 'State restored from Redis',
+        function: 'TradeMonitor.restoreState',
+        openTrades: restoredTrades.length,
+      })
     } catch (error) {
-      logger.error({ msg: 'Failed to restore state from Redis', function: 'TradeMonitor.restoreState',
-        error })
+      logger.error({ msg: 'Failed to restore state from Redis', function: 'TradeMonitor.restoreState', error })
     }
   }
-} 
+}

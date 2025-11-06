@@ -23,21 +23,21 @@ const createMockMarket = (
   contractSize,
   precision: {
     amount: amountPrecision,
-    price: 8
+    price: 8,
   },
   limits: {
     amount: {
       min: minAmount,
-      max: undefined
+      max: undefined,
     },
     price: {
       min: undefined,
-      max: undefined
+      max: undefined,
     },
     cost: {
       min: undefined,
-      max: undefined
-    }
+      max: undefined,
+    },
   },
   info: {},
   type: 'swap',
@@ -50,7 +50,7 @@ const createMockMarket = (
   expiryDatetime: undefined,
   strike: undefined,
   optionType: undefined,
-  created: undefined
+  created: undefined,
 })
 
 describe('MarketMetadataService Normalization', () => {
@@ -134,7 +134,7 @@ describe('MarketMetadataService Normalization', () => {
       console.log('Normalized amounts:', {
         okx: okxNormalized,
         bitget: bitgetNormalized,
-        bybit: bybitNormalized
+        bybit: bybitNormalized,
       })
 
       // These should all represent different base amounts when normalized
@@ -167,4 +167,4 @@ describe('MarketMetadataService Normalization', () => {
       expect(bybitParams.price).toBe(0.012825)
     })
   })
-}) 
+})

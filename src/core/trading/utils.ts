@@ -24,7 +24,7 @@ export async function placeOrderAndMonitor(
   try {
     // Place the order
     const order = await client.createOrder(symbol, 'MARKET', side, amount, price, isReduceOnly, clientOrderId)
-    
+
     const orderInfo = await monitorOrderConfirmation(order.id, exchange, accountStateManager)
 
     orderInfo.expectedPrice = price
@@ -32,7 +32,9 @@ export async function placeOrderAndMonitor(
 
     return orderInfo
   } catch (error) {
-    logger.error({ msg: 'Failed to place and monitor order', function: 'placeOrderAndMonitor',
+    logger.error({
+      msg: 'Failed to place and monitor order',
+      function: 'placeOrderAndMonitor',
       exchange,
       symbol,
       side,
@@ -40,7 +42,8 @@ export async function placeOrderAndMonitor(
       price,
       isReduceOnly,
       clientOrderId,
-      error })
+      error,
+    })
     throw error
   }
 }
@@ -50,40 +53,44 @@ export async function placeOrderAndMonitor(
  */
 export async function monitorOrderConfirmation(
   orderId: string,
-  exchange: string, 
-  accountStateManager: AccountStateManager,
+  exchange: string,
+  accountStateManager: AccountStateManager
 ): Promise<OrderInfo> {
   const startTime = Date.now()
-  
+
   try {
     while (Date.now() - startTime < config.trading.orderConfirmationTimeoutMs) {
       // Check if order is in account state
       const accountOrder = accountStateManager.getOrder(exchange, orderId)
-      
+
       if (accountOrder && accountOrder.status === 'FILLED') {
-        logger.debug({ msg: 'Order confirmed as FILLED', function: 'monitorOrderConfirmation',
-          orderId,
-          exchange })
+        logger.debug({ msg: 'Order confirmed as FILLED', function: 'monitorOrderConfirmation', orderId, exchange })
         return accountOrder
       }
-      
+
       // Wait before next check
       await delay(100)
     }
-    
+
     // If we reach here, order confirmation timed out
     const timeoutError = new Error(`Order confirmation timeout for ${orderId}`)
-    logger.error({ msg: 'Order confirmation timed out', function: 'monitorOrderConfirmation',
+    logger.error({
+      msg: 'Order confirmation timed out',
+      function: 'monitorOrderConfirmation',
       orderId,
       exchange,
       timeoutMs: config.trading.orderConfirmationTimeoutMs,
-      error: timeoutError })
+      error: timeoutError,
+    })
     throw timeoutError
   } catch (error) {
-    logger.error({ msg: 'Error monitoring order confirmation', function: 'monitorOrderConfirmation',
+    logger.error({
+      msg: 'Error monitoring order confirmation',
+      function: 'monitorOrderConfirmation',
       orderId,
       exchange,
-      error })
+      error,
+    })
     throw error
   }
 }
@@ -91,11 +98,15 @@ export async function monitorOrderConfirmation(
 /**
  * Calculate slippage for an order with proper direction awareness
  */
-export function calculateSlippage(orderInfo: OrderInfo, side: OrderSide): { slippageUsd: number, slippagePercent: number } {
-  if (!orderInfo.expectedPrice || orderInfo.expectedPrice === 0 || orderInfo.averagePrice === 0) return { slippageUsd: 0, slippagePercent: 0 }
-  
+export function calculateSlippage(
+  orderInfo: OrderInfo,
+  side: OrderSide
+): { slippageUsd: number; slippagePercent: number } {
+  if (!orderInfo.expectedPrice || orderInfo.expectedPrice === 0 || orderInfo.averagePrice === 0)
+    return { slippageUsd: 0, slippagePercent: 0 }
+
   let slippagePercent: number
-  
+
   if (side === 'BUY') {
     // For BUY orders: buying into the ask side
     // Positive slippage means we paid more than expected (bad)
@@ -105,16 +116,16 @@ export function calculateSlippage(orderInfo: OrderInfo, side: OrderSide): { slip
     // Positive slippage means we paid more than expected (bad)
     slippagePercent = ((orderInfo.expectedPrice - orderInfo.averagePrice) / orderInfo.averagePrice) * 100
   }
-  
+
   const slippageUsd = orderInfo.averagePrice * orderInfo.quantity * (slippagePercent / 100)
-  
+
   return { slippageUsd, slippagePercent }
 }
 
 /**
  * Calculate fees for an order
  */
-export function calculateFees(orderInfo: OrderInfo, feePercent: number): { feesUsd: number, feesPercent: number } {
+export function calculateFees(orderInfo: OrderInfo, feePercent: number): { feesUsd: number; feesPercent: number } {
   const feesUsd = orderInfo.averagePrice * orderInfo.quantity * (feePercent / 100)
   return { feesUsd, feesPercent: feePercent }
 }
@@ -124,4 +135,4 @@ export function calculateFees(orderInfo: OrderInfo, feePercent: number): { feesU
  */
 export function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
-} 
+}

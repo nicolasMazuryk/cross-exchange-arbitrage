@@ -23,7 +23,7 @@ describe('FundingService', () => {
       fetchIntervalMs: 1000,
       maxDataAgeMs: 5000,
       supportedExchanges: ['binance', 'bybit', 'okx', 'bitget'],
-      projectionHours: 20
+      projectionHours: 20,
     }
 
     // Create mock exchanges
@@ -31,27 +31,27 @@ describe('FundingService', () => {
     const mockBinance = {
       has: { fetchFundingRates: true },
       fetchFundingRates: jest.fn().mockResolvedValue({
-        'BTCUSDT': {
+        BTCUSDT: {
           symbol: 'BTCUSDT',
           fundingRate: 0.0001,
           fundingInterval: 8,
           nextFundingTime: Date.now() + 8 * 60 * 60 * 1000,
-          timestamp: Date.now()
-        }
-      })
+          timestamp: Date.now(),
+        },
+      }),
     } as any
 
     const mockBybit = {
       has: { fetchFundingRates: true },
       fetchFundingRates: jest.fn().mockResolvedValue({
-        'BTCUSDT': {
+        BTCUSDT: {
           symbol: 'BTCUSDT',
           fundingRate: -0.0001,
           fundingInterval: 8,
           nextFundingTime: Date.now() + 8 * 60 * 60 * 1000,
-          timestamp: Date.now()
-        }
-      })
+          timestamp: Date.now(),
+        },
+      }),
     } as any
 
     mockExchanges.set('binance', mockBinance)
@@ -60,29 +60,39 @@ describe('FundingService', () => {
     // Create mock exchange adapters
     mockExchangeAdapters = new Map()
     const mockBinanceAdapter = {
-      fetchFundingData: jest.fn().mockResolvedValue(new Map([
-        ['BTCUSDT', {
-          exchange: 'binance',
-          symbol: 'BTCUSDT',
-          fundingRate: 0.0001,
-          fundingInterval: 8,
-          nextFundingTimestamp: Date.now() + 8 * 60 * 60 * 1000,
-          nextFundingDatetime: new Date(Date.now() + 8 * 60 * 60 * 1000)
-        }]
-      ]))
+      fetchFundingData: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            'BTCUSDT',
+            {
+              exchange: 'binance',
+              symbol: 'BTCUSDT',
+              fundingRate: 0.0001,
+              fundingInterval: 8,
+              nextFundingTimestamp: Date.now() + 8 * 60 * 60 * 1000,
+              nextFundingDatetime: new Date(Date.now() + 8 * 60 * 60 * 1000),
+            },
+          ],
+        ])
+      ),
     } as any
 
     const mockBybitAdapter = {
-      fetchFundingData: jest.fn().mockResolvedValue(new Map([
-        ['BTCUSDT', {
-          exchange: 'bybit',
-          symbol: 'BTCUSDT',
-          fundingRate: -0.0001,
-          fundingInterval: 8,
-          nextFundingTimestamp: Date.now() + 8 * 60 * 60 * 1000,
-          nextFundingDatetime: new Date(Date.now() + 8 * 60 * 60 * 1000)
-        }]
-      ]))
+      fetchFundingData: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            'BTCUSDT',
+            {
+              exchange: 'bybit',
+              symbol: 'BTCUSDT',
+              fundingRate: -0.0001,
+              fundingInterval: 8,
+              nextFundingTimestamp: Date.now() + 8 * 60 * 60 * 1000,
+              nextFundingDatetime: new Date(Date.now() + 8 * 60 * 60 * 1000),
+            },
+          ],
+        ])
+      ),
     } as any
 
     mockExchangeAdapters.set('binance', mockBinanceAdapter)
@@ -94,25 +104,21 @@ describe('FundingService', () => {
       normalizeSymbol: jest.fn().mockImplementation((symbol: string) => {
         if (symbol === 'BTCUSDT') return 'BTCUSDT'
         return null
-      })
+      }),
     } as any
 
     const mockBybitMetadata = {
       normalizeSymbol: jest.fn().mockImplementation((symbol: string) => {
         if (symbol === 'BTCUSDT') return 'BTCUSDT'
         return null
-      })
+      }),
     } as any
 
     mockMarketMetadataServices.set('binance', mockBinanceMetadata)
     mockMarketMetadataServices.set('bybit', mockBybitMetadata)
 
     // Create funding service
-    fundingService = new FundingService(
-      mockExchangeAdapters,
-      mockMarketMetadataServices,
-      fundingConfig
-    )
+    fundingService = new FundingService(mockExchangeAdapters, mockMarketMetadataServices, fundingConfig)
   })
 
   afterEach(() => {
@@ -134,10 +140,10 @@ describe('FundingService', () => {
   describe('funding data fetching', () => {
     it('should fetch funding rates from supported exchanges', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const state = fundingService.getState()
       expect(state.size).toBeGreaterThan(0)
       expect(state.has('binance')).toBe(true)
@@ -148,14 +154,14 @@ describe('FundingService', () => {
 
     it('should normalize funding rates correctly', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const binanceData = fundingService.getExchangeFundingData('binance')
       expect(binanceData).toBeDefined()
       expect(binanceData!.has('BTCUSDT')).toBe(true)
-      
+
       const btcFunding = binanceData!.get('BTCUSDT')!
       expect(btcFunding.exchange).toBe('binance')
       expect(btcFunding.symbol).toBe('BTCUSDT')
@@ -165,16 +171,16 @@ describe('FundingService', () => {
 
     it('should calculate derived rates correctly', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const binanceData = fundingService.getExchangeFundingData('binance')
       const btcFunding = binanceData!.get('BTCUSDT')!
-      
+
       // For 8-hour interval, ratePer1h should be fundingRate / 8
       expect(btcFunding.ratePer1h).toBe(0.0001 / 8)
-      
+
       // For 8-hour interval, ratePer8h should be fundingRate
       expect(btcFunding.ratePer8h).toBe(0.0001)
     })
@@ -183,13 +189,13 @@ describe('FundingService', () => {
   describe('funding opportunities', () => {
     it('should find funding opportunities between exchanges', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const opportunities = fundingService.findFundingOpportunities()
       expect(opportunities.length).toBeGreaterThan(0)
-      
+
       const btcOpportunity = opportunities.find(opp => opp.normalizedPair === 'BTCUSDT')
       expect(btcOpportunity).toBeDefined()
       expect(btcOpportunity!.longExchange).toBeDefined()
@@ -199,13 +205,13 @@ describe('FundingService', () => {
 
     it('should calculate funding differential correctly', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const opportunities = fundingService.findFundingOpportunities()
       const btcOpportunity = opportunities.find(opp => opp.normalizedPair === 'BTCUSDT')
-      
+
       if (btcOpportunity) {
         // Binance has +0.0001 (8h), Bybit has -0.0001 (8h)
         // Hourly rates: Binance = 0.0001/8 = 0.0000125, Bybit = -0.0001/8 = -0.0000125
@@ -220,20 +226,20 @@ describe('FundingService', () => {
   describe('health monitoring', () => {
     it('should have valid state when data is fresh', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const state = fundingService.getState()
       expect(state.size).toBeGreaterThan(0)
     })
 
     it('should get funding data for specific symbol and exchange', async () => {
       fundingService.start()
-      
+
       // Wait for initial fetch
       await new Promise(resolve => setTimeout(resolve, 100))
-      
+
       const fundingData = fundingService.getFundingData('binance', 'BTCUSDT')
       expect(fundingData).toBeDefined()
       expect(fundingData!.exchange).toBe('binance')

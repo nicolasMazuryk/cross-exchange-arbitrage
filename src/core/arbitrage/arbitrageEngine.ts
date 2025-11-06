@@ -101,9 +101,9 @@ export interface ArbitrageOpportunity {
   costsPercent: number
   spreadProfitUsd: number
   spreadProfitPercent: number
-  fundingProfitUsd: number,
-  fundingProfitPercent: number,
-  estimatedProfitUsd: number,
+  fundingProfitUsd: number
+  fundingProfitPercent: number
+  estimatedProfitUsd: number
   estimatedProfitPercent: number
   // Trace context
   traceId: string
@@ -201,10 +201,13 @@ export class ArbitrageEngine extends EventEmitter {
           this.scanOpportunities(topOfBook)
         })
       } catch (error) {
-        logger.error({ msg: 'Error scanning opportunities from orderbook update', function: 'ArbitrageEngine.setupEventListeners',
+        logger.error({
+          msg: 'Error scanning opportunities from orderbook update',
+          function: 'ArbitrageEngine.setupEventListeners',
           exchange: topOfBook.exchange,
           symbol: topOfBook.symbol,
-          error })
+          error,
+        })
       }
     })
   }
@@ -214,7 +217,7 @@ export class ArbitrageEngine extends EventEmitter {
     for (const [exchange, config] of this.exchangeConfigs) {
       this.feeModels.set(exchange, {
         maker: config.feeModel.maker,
-        taker: config.feeModel.taker
+        taker: config.feeModel.taker,
       })
     }
   }
@@ -242,16 +245,19 @@ export class ArbitrageEngine extends EventEmitter {
 
     if (remainingVolume > 0) {
       if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
-        logger.warn({ msg: 'Orderbook cannot fully fill requested volume', function: 'ArbitrageEngine.simulateSlippage',
-            exchange,
-            symbol: exchangeSymbol,
-            side: isBuy ? 'BUY' : 'SELL',
-            remainingVolume,
-            requestedVolume: exchangeVolume,
-            basePrice,
-            remainingUsd: remainingVolume * basePrice,
-            requestedUsd: exchangeVolume * basePrice, })
-          this.antiSpamLogTime = Date.now()
+        logger.warn({
+          msg: 'Orderbook cannot fully fill requested volume',
+          function: 'ArbitrageEngine.simulateSlippage',
+          exchange,
+          symbol: exchangeSymbol,
+          side: isBuy ? 'BUY' : 'SELL',
+          remainingVolume,
+          requestedVolume: exchangeVolume,
+          basePrice,
+          remainingUsd: remainingVolume * basePrice,
+          requestedUsd: exchangeVolume * basePrice,
+        })
+        this.antiSpamLogTime = Date.now()
       }
     }
 
@@ -278,18 +284,18 @@ export class ArbitrageEngine extends EventEmitter {
 
     // Freshness score: How recent is the orderbook data
     const ageMs = Date.now() - orderbook.timestamp
-    const freshnessScore = Math.max(0, 1 - (ageMs / this.maxOrderbookAge))
-    
+    const freshnessScore = Math.max(0, 1 - ageMs / this.maxOrderbookAge)
+
     // Market spread score: Tighter spreads indicate better market quality
     // Normalize spread to a 0-1 score where 0 is MAX_MARKET_SPREAD and 1 is 0 spread
-    const spreadScore = Math.max(0, 1 - (marketSpreadPercent / this.maxMarketSpreadPercent))
-    
+    const spreadScore = Math.max(0, 1 - marketSpreadPercent / this.maxMarketSpreadPercent)
+
     // Health score: Is the exchange operating normally
     const healthScore = config.isHealthy ? 1 : 0
-    
+
     // Weighted average of all factors
     // Freshness is most important (40%), followed by spread (35%) and health (25%)
-    return (freshnessScore * 0.4 + spreadScore * 0.35 + healthScore * 0.25)
+    return freshnessScore * 0.4 + spreadScore * 0.35 + healthScore * 0.25
   }
 
   private estimateProfit(
@@ -315,41 +321,58 @@ export class ArbitrageEngine extends EventEmitter {
   ): OpportunityScore {
     const buyFeeModel = this.feeModels.get(buyExchange)
     const sellFeeModel = this.feeModels.get(sellExchange)
-    
+
     if (!buyFeeModel || !sellFeeModel) {
-      logger.error({ msg: 'Fee models not found for exchange', function: 'ArbitrageEngine.estimateProfit',
-        buyExchange, 
-        sellExchange, })
+      logger.error({
+        msg: 'Fee models not found for exchange',
+        function: 'ArbitrageEngine.estimateProfit',
+        buyExchange,
+        sellExchange,
+      })
       throw new Error(`Fee models not found for exchange: ${!buyFeeModel ? buyExchange : sellExchange}`)
     }
-    
+
     // === COST BREAKDOWN ===
-    
+
     // 1. TRADING FEES (Entry + Exit)
-    const entryBuyFeeCosts = entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (buyFeeModel.taker / 100)
-    const entrySellFeeCosts = entrySellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (sellFeeModel.taker / 100)
+    const entryBuyFeeCosts =
+      entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (buyFeeModel.taker / 100)
+    const entrySellFeeCosts =
+      entrySellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (sellFeeModel.taker / 100)
     const exitBuyFeeCosts = exitBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (buyFeeModel.taker / 100)
-    const exitSellFeeCosts = exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (sellFeeModel.taker / 100)
-    
+    const exitSellFeeCosts =
+      exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (sellFeeModel.taker / 100)
+
     const totalTradingFeesCosts = entryBuyFeeCosts + entrySellFeeCosts + exitBuyFeeCosts + exitSellFeeCosts
-    
+
     // 2. SLIPPAGE COSTS (Entry + Exit)
-    const entryBuySlippageCosts = entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (entryBuySimulation.slippagePercent / 100)
-    const entrySellSlippageCosts = entrySellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (entrySellSimulation.slippagePercent / 100)
-    const exitBuySlippageCosts = exitBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (exitBuySimulation.slippagePercent / 100)
-    const exitSellSlippageCosts = exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (exitSellSimulation.slippagePercent / 100)
-    
-    const totalSlippageCosts = entryBuySlippageCosts + entrySellSlippageCosts + exitBuySlippageCosts + exitSellSlippageCosts
-    
+    const entryBuySlippageCosts =
+      entryBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (entryBuySimulation.slippagePercent / 100)
+    const entrySellSlippageCosts =
+      entrySellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (entrySellSimulation.slippagePercent / 100)
+    const exitBuySlippageCosts =
+      exitBuySimulation.avgNormalizedExecutionPrice * normalizedVolume * (exitBuySimulation.slippagePercent / 100)
+    const exitSellSlippageCosts =
+      exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (exitSellSimulation.slippagePercent / 100)
+
+    const totalSlippageCosts =
+      entryBuySlippageCosts + entrySellSlippageCosts + exitBuySlippageCosts + exitSellSlippageCosts
+
     // 3. BUY/SELL SPREADS (Market Spreads)
     const buyMarketSpreadPercent = ((buyBook.asks[0].price - buyBook.bids[0].price) / buyBook.bids[0].price) * 100
     const sellMarketSpreadPercent = ((sellBook.asks[0].price - sellBook.bids[0].price) / sellBook.bids[0].price) * 100
-    
-    const buyMarketSpreadCosts = normalizedVolume * buyMetadataService.normalizePrice(buyBook.bids[0].price, buyExchangeSymbol) * (buyMarketSpreadPercent / 100)
-    const sellMarketSpreadCosts = normalizedVolume * sellMetadataService.normalizePrice(sellBook.asks[0].price, sellExchangeSymbol) * (sellMarketSpreadPercent / 100)
-    
+
+    const buyMarketSpreadCosts =
+      normalizedVolume *
+      buyMetadataService.normalizePrice(buyBook.bids[0].price, buyExchangeSymbol) *
+      (buyMarketSpreadPercent / 100)
+    const sellMarketSpreadCosts =
+      normalizedVolume *
+      sellMetadataService.normalizePrice(sellBook.asks[0].price, sellExchangeSymbol) *
+      (sellMarketSpreadPercent / 100)
+
     const totalSpreadCosts = buyMarketSpreadCosts + sellMarketSpreadCosts
-    
+
     // 4. TOTAL COSTS
     const totalCosts = totalTradingFeesCosts + totalSlippageCosts + totalSpreadCosts
     const totalCostsPercent = (totalCosts / orderAmountUsd) * 100
@@ -367,7 +390,7 @@ export class ArbitrageEngine extends EventEmitter {
     const estimatedProfitPercent = fundingProfitPercent + spreadProfitPercent - totalCostsPercent
 
     const latencyPenalty = this.calculateLatencyPenalty(buyBook, sellBook)
-    
+
     const confidenceScore = Math.min(
       this.calculateConfidenceScore(buyBook, buyExchange, normalizedVolume, buyMarketSpreadPercent),
       this.calculateConfidenceScore(sellBook, sellExchange, normalizedVolume, sellMarketSpreadPercent)
@@ -383,7 +406,7 @@ export class ArbitrageEngine extends EventEmitter {
       costs: totalCosts,
       costsPercent: totalCostsPercent,
       latencyPenalty,
-      confidenceScore
+      confidenceScore,
     }
   }
 
@@ -395,10 +418,7 @@ export class ArbitrageEngine extends EventEmitter {
   /**
    * Calculate funding profitability projection over time
    */
-  private calculateFundingProjection(
-    buyFunding: ParsedFunding,
-    sellFunding: ParsedFunding,
-  ): FundingProjection {
+  private calculateFundingProjection(buyFunding: ParsedFunding, sellFunding: ParsedFunding): FundingProjection {
     const timeline: FundingEvent[] = []
     let cumulativeFundingRate = 0
     let maxDrawdownFundingRate = 0
@@ -406,7 +426,7 @@ export class ArbitrageEngine extends EventEmitter {
 
     // Generate funding events for the projection period
     const fundingEvents = this.fundingService.generateFundingEvents(buyFunding, sellFunding, this.projectionHours)
-    
+
     for (const event of fundingEvents) {
       // Calculate funding impact for this event
       // BUY position: positive funding rate = we pay (loss), negative = we receive (profit)
@@ -414,7 +434,7 @@ export class ArbitrageEngine extends EventEmitter {
       const buyFundingImpactRate = -event.buyExchangeFundingRate // Negative because we're long on buy exchange
       const sellFundingImpactRate = event.sellExchangeFundingRate // Positive because we're short on sell exchange
       const netFundingRate = buyFundingImpactRate + sellFundingImpactRate // Combined funding impact
-      
+
       cumulativeFundingRate += netFundingRate
       minCumulativeFundingRate = Math.min(minCumulativeFundingRate, cumulativeFundingRate)
       maxDrawdownFundingRate = Math.max(maxDrawdownFundingRate, cumulativeFundingRate - minCumulativeFundingRate)
@@ -437,7 +457,6 @@ export class ArbitrageEngine extends EventEmitter {
     }
   }
 
-
   /**
    * Check if current time is within funding strategy execution window
    */
@@ -445,10 +464,11 @@ export class ArbitrageEngine extends EventEmitter {
     const now = Date.now()
     const timeUntilFunding = nextFundingTimestamp - now
     const timeUntilFundingSec = timeUntilFunding / 1000
-    
+
     // Within window if time until funding is between windowStart and windowEnd (in seconds)
-    return timeUntilFundingSec <= this.fundingStrategyWindowStart && 
-           timeUntilFundingSec >= this.fundingStrategyWindowEnd
+    return (
+      timeUntilFundingSec <= this.fundingStrategyWindowStart && timeUntilFundingSec >= this.fundingStrategyWindowEnd
+    )
   }
 
   /**
@@ -460,21 +480,22 @@ export class ArbitrageEngine extends EventEmitter {
     const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
     const timeUntilNextFunding = nextFundingTimestamp - now
     const timeUntilNextFundingSec = timeUntilNextFunding / 1000
-    
+
     // Within window if time since previous funding > windowStart AND time until next > windowEnd
-    return timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
-           timeUntilNextFundingSec >= this.spreadStrategyWindowEnd
+    return (
+      timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
+      timeUntilNextFundingSec >= this.spreadStrategyWindowEnd
+    )
   }
 
   /**
    * Validate funding arbitrage entry conditions (SYNC mode)
    */
-  private validateFundingSyncEntry(
-    fundingRateDifferencePercent: number,
-    profitEstimate: OpportunityScore
-  ): boolean {
-    return fundingRateDifferencePercent - profitEstimate.costsPercent >= this.fundingMinFundingProfitPercent && 
-            profitEstimate.estimatedProfitPercent >= this.fundingMinTotalProfitPercent
+  private validateFundingSyncEntry(fundingRateDifferencePercent: number, profitEstimate: OpportunityScore): boolean {
+    return (
+      fundingRateDifferencePercent - profitEstimate.costsPercent >= this.fundingMinFundingProfitPercent &&
+      profitEstimate.estimatedProfitPercent >= this.fundingMinTotalProfitPercent
+    )
   }
 
   /**
@@ -484,38 +505,40 @@ export class ArbitrageEngine extends EventEmitter {
     buyFunding: ParsedFunding,
     sellFunding: ParsedFunding,
     profitEstimate: OpportunityScore,
-    fundingEvents: Array<{ timestamp: number, buyExchangeFundingRate: number, sellExchangeFundingRate: number }>
+    fundingEvents: Array<{ timestamp: number; buyExchangeFundingRate: number; sellExchangeFundingRate: number }>
   ): boolean {
     // Find the next sync timestamp
     const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFunding, sellFunding)
-    
+
     // Calculate cumulative funding rate until next sync (excluding the sync event itself)
-    const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
-      nextSyncTimestamp,
-      fundingEvents
-    )
-    
+    const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(nextSyncTimestamp, fundingEvents)
+
     // Check if cumulative funding profit meets minimum threshold
-    return (cumulativeFundingRate * 100) - profitEstimate.costsPercent >= this.fundingMinFundingProfitPercent &&
-            profitEstimate.estimatedProfitPercent >= this.fundingMinTotalProfitPercent
+    return (
+      cumulativeFundingRate * 100 - profitEstimate.costsPercent >= this.fundingMinFundingProfitPercent &&
+      profitEstimate.estimatedProfitPercent >= this.fundingMinTotalProfitPercent
+    )
   }
 
   /**
    * Validate spread arbitrage entry conditions
    */
-  private validateSpreadEntry(
-    fundingRateDifferencePercent: number,
-    profitEstimate: OpportunityScore
-  ): boolean {
+  private validateSpreadEntry(fundingRateDifferencePercent: number, profitEstimate: OpportunityScore): boolean {
     // Case 1: Neutral or positive funding
     if (fundingRateDifferencePercent >= 0) {
-      return profitEstimate.spreadProfitPercent - profitEstimate.costsPercent >= this.spreadMinSpreadProfitPercent &&
-          profitEstimate.estimatedProfitPercent >= this.spreadMinTotalProfitPercent
+      return (
+        profitEstimate.spreadProfitPercent - profitEstimate.costsPercent >= this.spreadMinSpreadProfitPercent &&
+        profitEstimate.estimatedProfitPercent >= this.spreadMinTotalProfitPercent
+      )
     }
-    
+
     // Case 2: Negative funding - apply multiplier to adjust for risk
-    return profitEstimate.spreadProfitPercent - profitEstimate.costsPercent + (fundingRateDifferencePercent * this.spreadNegativeFundingMultiplier) >= this.spreadMinSpreadProfitPercent &&
-          profitEstimate.estimatedProfitPercent >= this.spreadMinTotalProfitPercent
+    return (
+      profitEstimate.spreadProfitPercent -
+        profitEstimate.costsPercent +
+        fundingRateDifferencePercent * this.spreadNegativeFundingMultiplier >=
+        this.spreadMinSpreadProfitPercent && profitEstimate.estimatedProfitPercent >= this.spreadMinTotalProfitPercent
+    )
   }
 
   /**
@@ -525,16 +548,16 @@ export class ArbitrageEngine extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     profitEstimate: OpportunityScore
-  ): { strategy: StrategyType | null, reason?: string } {
+  ): { strategy: StrategyType | null; reason?: string } {
     const now = Date.now()
-    
+
     // Validate funding data is not outdated
     if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
       return { strategy: null, reason: 'Outdated funding data (nextFundingTimestamp < now)' }
     }
-    
+
     const isSynchronized = this.fundingService.isFundingSynchronizedEntry(buyFundingData, sellFundingData)
-    
+
     // Use the nearest funding timestamp (min of both exchanges)
     const nextFundingTimestamp = Math.min(buyFundingData.nextFundingTimestamp, sellFundingData.nextFundingTimestamp)
     const nextFundingInterval = Math.min(buyFundingData.fundingInterval, sellFundingData.fundingInterval)
@@ -542,19 +565,24 @@ export class ArbitrageEngine extends EventEmitter {
     // Calculate previous funding timestamp based on funding interval
     const fundingIntervalMs = nextFundingInterval * 60 * 60 * 1000
     const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
-    
+
     const withinFundingWindow = this.isWithinFundingWindow(nextFundingTimestamp)
     const withinSpreadWindow = this.isWithinSpreadWindow(previousFundingTimestamp, nextFundingTimestamp)
-    
+
     // Calculate funding difference
-    const fundingEvents = this.fundingService.generateFundingEvents(buyFundingData, sellFundingData, this.projectionHours)
-    const fundingRateDifferencePercent = (-fundingEvents[0].buyExchangeFundingRate + fundingEvents[0].sellExchangeFundingRate) * 100
-    
+    const fundingEvents = this.fundingService.generateFundingEvents(
+      buyFundingData,
+      sellFundingData,
+      this.projectionHours
+    )
+    const fundingRateDifferencePercent =
+      (-fundingEvents[0].buyExchangeFundingRate + fundingEvents[0].sellExchangeFundingRate) * 100
+
     // TEMPORARY FOR DEBUGGING
     if (fundingRateDifferencePercent !== profitEstimate.fundingProfitPercent) {
       console.log('fundingRateDifferencePercent === profitEstimate.fundingProfitPercent')
     }
-    
+
     // Try funding strategy first if within window and enabled
     if (this.fundingStrategyEnabled && withinFundingWindow) {
       if (isSynchronized) {
@@ -563,13 +591,16 @@ export class ArbitrageEngine extends EventEmitter {
         }
         if (fundingRateDifferencePercent > 0.3) {
           if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
-            logger.info({ msg: 'Funding strategy (SYNC) entry validation failed, BUT funding rate difference is HIGH', function: 'ArbitrageEngine.determineStrategy',
+            logger.info({
+              msg: 'Funding strategy (SYNC) entry validation failed, BUT funding rate difference is HIGH',
+              function: 'ArbitrageEngine.determineStrategy',
               buyExchange: buyFundingData.exchange,
               sellExchange: sellFundingData.exchange,
               symbol: buyFundingData.symbol,
               fundingRateDifferencePercent: fundingRateDifferencePercent.toFixed(3),
               fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
-              estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3) })
+              estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3),
+            })
             this.antiSpamLogTime = Date.now()
           }
         }
@@ -580,20 +611,23 @@ export class ArbitrageEngine extends EventEmitter {
         }
         if (fundingRateDifferencePercent > 0.3) {
           if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
-            logger.info({ msg: 'Funding strategy (ASYNC) entry validation failed, BUT funding rate difference is HIGH', function: 'ArbitrageEngine.determineStrategy',
+            logger.info({
+              msg: 'Funding strategy (ASYNC) entry validation failed, BUT funding rate difference is HIGH',
+              function: 'ArbitrageEngine.determineStrategy',
               buyExchange: buyFundingData.exchange,
               sellExchange: sellFundingData.exchange,
               symbol: buyFundingData.symbol,
               fundingRateDifferencePercent: fundingRateDifferencePercent.toFixed(3),
               fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
-              estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3) })
+              estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3),
+            })
             this.antiSpamLogTime = Date.now()
           }
         }
         return { strategy: null, reason: 'Funding window (ASYNC) but validation failed' }
       }
     }
-    
+
     // Try spread strategy if within window, not in funding window, and enabled
     if (this.spreadStrategyEnabled && withinSpreadWindow && !(this.fundingStrategyEnabled && withinFundingWindow)) {
       if (this.validateSpreadEntry(fundingRateDifferencePercent, profitEstimate)) {
@@ -601,17 +635,13 @@ export class ArbitrageEngine extends EventEmitter {
       }
       return { strategy: null, reason: 'Spread window but validation failed' }
     }
-    
+
     // Not within any valid strategy window or strategies disabled
     return { strategy: null, reason: 'Not within any valid strategy execution window' }
   }
 
   // Temporal Persistence Validation Methods
-  private generateCandidateKey(
-    normalizedPair: string,
-    buyExchange: string,
-    sellExchange: string
-  ): string {
+  private generateCandidateKey(normalizedPair: string, buyExchange: string, sellExchange: string): string {
     return `${normalizedPair}::${buyExchange}::${sellExchange}`
   }
 
@@ -630,8 +660,11 @@ export class ArbitrageEngine extends EventEmitter {
 
     for (const key of keysToRemove) {
       this.candidates.delete(key)
-      logger.trace({ msg: `Cleaned up stale candidate`, function: 'ArbitrageEngine.cleanupStaleCandidates',
-        candidateKey: key })
+      logger.trace({
+        msg: `Cleaned up stale candidate`,
+        function: 'ArbitrageEngine.cleanupStaleCandidates',
+        candidateKey: key,
+      })
     }
 
     this.lastCleanupTime = now
@@ -674,45 +707,68 @@ export class ArbitrageEngine extends EventEmitter {
         spreadProfitPercent: profitEstimate.spreadProfitPercent,
         fundingProfitPercent: profitEstimate.fundingProfitPercent,
         estimatedProfitPercent: profitEstimate.estimatedProfitPercent,
-        crossExchangePriceSpreadPercent: crossExchangePriceSpreadPercent
+        crossExchangePriceSpreadPercent: crossExchangePriceSpreadPercent,
       }
       this.candidates.set(candidateKey, newCandidate)
-      
-      logger.trace({ msg: 'New arbitrage candidate detected', function: 'ArbitrageEngine.validatePersistence',
-          candidateKey,
-          candidateId: newCandidate.id,
-          crossExchangePriceSpreadPercent: crossExchangePriceSpreadPercent.toFixed(3),
-          spreadProfitPercent: profitEstimate.spreadProfitPercent.toFixed(3),
-          fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
-          estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3), })
+
+      logger.trace({
+        msg: 'New arbitrage candidate detected',
+        function: 'ArbitrageEngine.validatePersistence',
+        candidateKey,
+        candidateId: newCandidate.id,
+        crossExchangePriceSpreadPercent: crossExchangePriceSpreadPercent.toFixed(3),
+        spreadProfitPercent: profitEstimate.spreadProfitPercent.toFixed(3),
+        fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+        estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3),
+      })
       return { isValid: false, reason: 'New candidate - waiting for persistence', candidate: newCandidate }
     }
 
     // Existing candidate - check if spread is still valid using execution prices
-    const crossExchangeSpreadChangeRatio = (crossExchangePriceSpreadPercent - existingCandidate.crossExchangePriceSpreadPercent) / existingCandidate.crossExchangePriceSpreadPercent
-    const fundingProfitChangeRatio = (profitEstimate.fundingProfitPercent - existingCandidate.fundingProfitPercent) / existingCandidate.fundingProfitPercent
-    const buyPriceChangeRatio = Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) / existingCandidate.avgBuyNormalizedExecutionPrice
-    const sellPriceChangeRatio = Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) / existingCandidate.avgSellNormalizedExecutionPrice
+    const crossExchangeSpreadChangeRatio =
+      (crossExchangePriceSpreadPercent - existingCandidate.crossExchangePriceSpreadPercent) /
+      existingCandidate.crossExchangePriceSpreadPercent
+    const fundingProfitChangeRatio =
+      (profitEstimate.fundingProfitPercent - existingCandidate.fundingProfitPercent) /
+      existingCandidate.fundingProfitPercent
+    const buyPriceChangeRatio =
+      Math.abs(avgBuyNormalizedExecutionPrice - existingCandidate.avgBuyNormalizedExecutionPrice) /
+      existingCandidate.avgBuyNormalizedExecutionPrice
+    const sellPriceChangeRatio =
+      Math.abs(avgSellNormalizedExecutionPrice - existingCandidate.avgSellNormalizedExecutionPrice) /
+      existingCandidate.avgSellNormalizedExecutionPrice
 
     if (crossExchangeSpreadChangeRatio < -0.2) {
-      logger.trace({ msg: `Candidate ${candidateKey} spread decreased, resetting`, function: 'ArbitrageEngine.validatePersistence', candidateKey })
+      logger.trace({
+        msg: `Candidate ${candidateKey} spread decreased, resetting`,
+        function: 'ArbitrageEngine.validatePersistence',
+        candidateKey,
+      })
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Spread decreased significantly' }
     }
     if (fundingProfitChangeRatio < -0.2) {
-      logger.trace({ msg: `Candidate ${candidateKey} funding profit decreased, resetting`, function: 'ArbitrageEngine.validatePersistence', candidateKey })
+      logger.trace({
+        msg: `Candidate ${candidateKey} funding profit decreased, resetting`,
+        function: 'ArbitrageEngine.validatePersistence',
+        candidateKey,
+      })
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Funding profit decreased significantly' }
     }
     if (buyPriceChangeRatio > 0.01 || sellPriceChangeRatio > 0.01) {
-      logger.trace({ msg: `Candidate ${candidateKey} price changed, resetting`, function: 'ArbitrageEngine.validatePersistence', candidateKey })
+      logger.trace({
+        msg: `Candidate ${candidateKey} price changed, resetting`,
+        function: 'ArbitrageEngine.validatePersistence',
+        candidateKey,
+      })
       this.candidates.delete(candidateKey)
       return { isValid: false, reason: 'Price changed significantly' }
     }
 
     // Update existing candidate
     existingCandidate.lastDetectedAt = now
-    
+
     // Update snapshots based on which exchange is updating
     if (updatingExchange === buyExchange) {
       existingCandidate.buyExchangeConsecutiveSnapshots++
@@ -720,7 +776,7 @@ export class ArbitrageEngine extends EventEmitter {
     if (updatingExchange === sellExchange) {
       existingCandidate.sellExchangeConsecutiveSnapshots++
     }
-    
+
     existingCandidate.avgBuyNormalizedExecutionPrice = avgBuyNormalizedExecutionPrice
     existingCandidate.avgSellNormalizedExecutionPrice = avgSellNormalizedExecutionPrice
     existingCandidate.spreadProfitPercent = profitEstimate.spreadProfitPercent
@@ -731,28 +787,36 @@ export class ArbitrageEngine extends EventEmitter {
     // Check persistence conditions
     const persistenceDuration = existingCandidate.lastDetectedAt - existingCandidate.firstDetectedAt
     const hasMinDuration = persistenceDuration >= this.minPersistenceMs
-    const hasMinSnapshots = existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots && existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
+    const hasMinSnapshots =
+      existingCandidate.buyExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots &&
+      existingCandidate.sellExchangeConsecutiveSnapshots >= this.minConsecutiveSnapshots
 
     if (hasMinDuration && hasMinSnapshots) {
-      logger.debug({ msg: 'Arbitrage opportunity validated', function: 'ArbitrageEngine.validatePersistence',
-          candidateKey,
-          candidateId: existingCandidate.id,
-          persistenceDuration,
-          buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
-          sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
-          spreadProfitPercent: profitEstimate.spreadProfitPercent.toFixed(3),
-          fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
-          estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3) })
-      this.candidates.delete(candidateKey) // Remove after validation
-      return { isValid: true, candidate: existingCandidate }
-    }
-
-    logger.trace({ msg: 'Candidate still building persistence', function: 'ArbitrageEngine.validatePersistence',
+      logger.debug({
+        msg: 'Arbitrage opportunity validated',
+        function: 'ArbitrageEngine.validatePersistence',
         candidateKey,
         candidateId: existingCandidate.id,
         persistenceDuration,
         buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
-        sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots })
+        sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
+        spreadProfitPercent: profitEstimate.spreadProfitPercent.toFixed(3),
+        fundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+        estimatedProfitPercent: profitEstimate.estimatedProfitPercent.toFixed(3),
+      })
+      this.candidates.delete(candidateKey) // Remove after validation
+      return { isValid: true, candidate: existingCandidate }
+    }
+
+    logger.trace({
+      msg: 'Candidate still building persistence',
+      function: 'ArbitrageEngine.validatePersistence',
+      candidateKey,
+      candidateId: existingCandidate.id,
+      persistenceDuration,
+      buySnapshots: existingCandidate.buyExchangeConsecutiveSnapshots,
+      sellSnapshots: existingCandidate.sellExchangeConsecutiveSnapshots,
+    })
     return { isValid: false, reason: 'Building persistence', candidate: existingCandidate }
   }
 
@@ -761,26 +825,39 @@ export class ArbitrageEngine extends EventEmitter {
     try {
       const allOrderbooks = this.orderbookManager.getAllOrderbooks()
       // const opportunities = this.scanAllOrderbooks(allOrderbooks)
-      const opportunities = this.scanOrderbooksForSymbol(topOfBook.exchange, topOfBook.symbol, allOrderbooks, topOfBook.traceId)
+      const opportunities = this.scanOrderbooksForSymbol(
+        topOfBook.exchange,
+        topOfBook.symbol,
+        allOrderbooks,
+        topOfBook.traceId
+      )
 
       if (opportunities.length > 0) {
         // Emit opportunities for trade execution
         this.emit('opportunities', opportunities)
       }
     } catch (error) {
-      logger.error({ msg: 'Error scanning opportunities', function: 'ArbitrageEngine.scanOpportunities',
+      logger.error({
+        msg: 'Error scanning opportunities',
+        function: 'ArbitrageEngine.scanOpportunities',
         exchange: topOfBook.exchange,
         symbol: topOfBook.symbol,
-        error })
+        error,
+      })
     }
   }
 
-  private scanOrderbooksForSymbol(updatingExchange: string, symbol: string, allOrderbooks: Map<string, Map<string, OrderBook>>, traceId: string): ArbitrageOpportunity[] {
+  private scanOrderbooksForSymbol(
+    updatingExchange: string,
+    symbol: string,
+    allOrderbooks: Map<string, Map<string, OrderBook>>,
+    traceId: string
+  ): ArbitrageOpportunity[] {
     const opportunities: ArbitrageOpportunity[] = []
-    
+
     try {
       const exchanges = Array.from(allOrderbooks.keys())
-      
+
       const updatingExchangeMetadataService = this.marketMetadataServices.get(updatingExchange)
       if (!updatingExchangeMetadataService) return []
 
@@ -850,12 +927,15 @@ export class ArbitrageEngine extends EventEmitter {
               traceId
             )
           } catch (error) {
-            logger.error({ msg: 'Error checking direction', event: 'arbitrage_check_direction_failed',
+            logger.error({
+              msg: 'Error checking direction',
+              event: 'arbitrage_check_direction_failed',
               function: 'ArbitrageEngine.scanOrderbooksForSymbol',
               normalizedSymbol,
               buyExchange: exchangeA,
               sellExchange: exchangeB,
-              error })
+              error,
+            })
           }
 
           try {
@@ -876,22 +956,28 @@ export class ArbitrageEngine extends EventEmitter {
               traceId
             )
           } catch (error) {
-            logger.error({ msg: 'Error checking direction', event: 'arbitrage_check_direction_failed',
+            logger.error({
+              msg: 'Error checking direction',
+              event: 'arbitrage_check_direction_failed',
               function: 'ArbitrageEngine.scanOrderbooksForSymbol',
               normalizedSymbol,
               buyExchange: exchangeB,
               sellExchange: exchangeA,
-              error })
+              error,
+            })
           }
         }
       }
 
       return opportunities
     } catch (error) {
-      logger.error({ msg: 'Error scanning orderbooks for symbol', function: 'ArbitrageEngine.scanOrderbooksForSymbol',
+      logger.error({
+        msg: 'Error scanning orderbooks for symbol',
+        function: 'ArbitrageEngine.scanOrderbooksForSymbol',
         updatingExchange,
         symbol,
-        error })
+        error,
+      })
       return opportunities
     }
   }
@@ -916,7 +1002,7 @@ export class ArbitrageEngine extends EventEmitter {
     // Use the new normalization functions to handle price scales and contract sizes
     const normalizedBuyPrice = buyMetadataService.normalizePrice(buyBook.asks[0].price, buyExchangeSymbol)
     const normalizedSellPrice = sellMetadataService.normalizePrice(sellBook.bids[0].price, sellExchangeSymbol)
-    
+
     // === INITIAL SPREAD VALIDATION ===
     const crossExchangePriceSpreadPercent = ((normalizedSellPrice - normalizedBuyPrice) / normalizedBuyPrice) * 100
 
@@ -929,31 +1015,43 @@ export class ArbitrageEngine extends EventEmitter {
     // Convert normalized volume to exchange-specific contract amounts
     const buyExchangeVolume = buyMetadataService.denormalizeAmount(targetNormalizedVolume, buyExchangeSymbol)
     const sellExchangeVolume = sellMetadataService.denormalizeAmount(targetNormalizedVolume, sellExchangeSymbol)
-    
+
     // Verify that both exchanges will have the same normalized volume
     const buyNormalizedVolume = buyMetadataService.normalizeAmount(buyExchangeVolume, buyExchangeSymbol)
     const sellNormalizedVolume = sellMetadataService.normalizeAmount(sellExchangeVolume, sellExchangeSymbol)
-    
+
     // Use the smaller of the two to ensure both exchanges can handle the volume
     const minNormalizedVolume = Math.min(buyNormalizedVolume, sellNormalizedVolume)
     const maxNormalizedVolume = Math.max(buyNormalizedVolume, sellNormalizedVolume)
-    
+
     // Recalculate exchange-specific volumes based on the actual normalized volume
     const minActualBuyExchangeVolume = buyMetadataService.denormalizeAmount(minNormalizedVolume, buyExchangeSymbol)
     const minActualSellExchangeVolume = sellMetadataService.denormalizeAmount(minNormalizedVolume, sellExchangeSymbol)
-    const minActualBuyNormalizedVolume = buyMetadataService.normalizeAmount(minActualBuyExchangeVolume, buyExchangeSymbol)
-    const minActualSellNormalizedVolume = sellMetadataService.normalizeAmount(minActualSellExchangeVolume, sellExchangeSymbol)
-    
+    const minActualBuyNormalizedVolume = buyMetadataService.normalizeAmount(
+      minActualBuyExchangeVolume,
+      buyExchangeSymbol
+    )
+    const minActualSellNormalizedVolume = sellMetadataService.normalizeAmount(
+      minActualSellExchangeVolume,
+      sellExchangeSymbol
+    )
+
     const maxActualBuyExchangeVolume = buyMetadataService.denormalizeAmount(maxNormalizedVolume, buyExchangeSymbol)
     const maxActualSellExchangeVolume = sellMetadataService.denormalizeAmount(maxNormalizedVolume, sellExchangeSymbol)
-    const maxActualBuyNormalizedVolume = buyMetadataService.normalizeAmount(maxActualBuyExchangeVolume, buyExchangeSymbol)
-    const maxActualSellNormalizedVolume = sellMetadataService.normalizeAmount(maxActualSellExchangeVolume, sellExchangeSymbol)
+    const maxActualBuyNormalizedVolume = buyMetadataService.normalizeAmount(
+      maxActualBuyExchangeVolume,
+      buyExchangeSymbol
+    )
+    const maxActualSellNormalizedVolume = sellMetadataService.normalizeAmount(
+      maxActualSellExchangeVolume,
+      sellExchangeSymbol
+    )
 
     // === VOLUME VALIDATION ===
     let finalNormalizedVolume: number
     let finalBuyExchangeVolume: number
     let finalSellExchangeVolume: number
-    
+
     // Check if min normalized volumes are equal
     if (Math.abs(minActualBuyNormalizedVolume - minActualSellNormalizedVolume) < 1e-10) {
       // Use min volumes
@@ -968,41 +1066,50 @@ export class ArbitrageEngine extends EventEmitter {
     } else {
       if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
         // Neither min nor max volumes are equal - this indicates a problem with normalization
-        logger.warn({ msg: 'Volume normalization failed: either MIN or MAX normalized volumes are not equal for BUY and SELL', function: 'ArbitrageEngine.checkDirection',
-            normalizedPair,
-            minActualBuyNormalizedVolume,
-            minActualSellNormalizedVolume,
-            maxActualBuyNormalizedVolume,
-            maxActualSellNormalizedVolume })
+        logger.warn({
+          msg: 'Volume normalization failed: either MIN or MAX normalized volumes are not equal for BUY and SELL',
+          function: 'ArbitrageEngine.checkDirection',
+          normalizedPair,
+          minActualBuyNormalizedVolume,
+          minActualSellNormalizedVolume,
+          maxActualBuyNormalizedVolume,
+          maxActualSellNormalizedVolume,
+        })
         this.antiSpamLogTime = Date.now()
       }
 
       return
-  }
-    
+    }
+
     // Validate minimum contract amounts
     const buyMetadata = buyMetadataService.getMetadata(buyExchangeSymbol)
     const sellMetadata = sellMetadataService.getMetadata(sellExchangeSymbol)
-    
+
     if (buyMetadata && finalBuyExchangeVolume < buyMetadata.minAmount!) {
       if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
-        logger.warn({ msg: 'Buy volume below minimum', function: 'ArbitrageEngine.checkDirection',
+        logger.warn({
+          msg: 'Buy volume below minimum',
+          function: 'ArbitrageEngine.checkDirection',
           exchange: buyExchange,
           symbol: buyExchangeSymbol,
           volume: finalBuyExchangeVolume,
-          minAmount: buyMetadata.minAmount, })
+          minAmount: buyMetadata.minAmount,
+        })
         this.antiSpamLogTime = Date.now()
       }
       return
     }
-    
+
     if (sellMetadata && finalSellExchangeVolume < sellMetadata.minAmount!) {
       if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
-        logger.warn({ msg: 'Sell volume below minimum', function: 'ArbitrageEngine.checkDirection',
+        logger.warn({
+          msg: 'Sell volume below minimum',
+          function: 'ArbitrageEngine.checkDirection',
           exchange: sellExchange,
           symbol: sellExchangeSymbol,
           volume: finalSellExchangeVolume,
-          minAmount: sellMetadata.minAmount, })
+          minAmount: sellMetadata.minAmount,
+        })
         this.antiSpamLogTime = Date.now()
       }
       return
@@ -1011,39 +1118,67 @@ export class ArbitrageEngine extends EventEmitter {
     // Validate order amount tolerance using normalized price
     const orderAmountUsd = finalNormalizedVolume * normalizedBuyPrice
     if (
-      orderAmountUsd < this.orderAmountUsd * this.orderAmountToleranceMinPercent / 100 ||
-      orderAmountUsd > this.orderAmountUsd * this.orderAmountToleranceMaxPercent / 100
+      orderAmountUsd < (this.orderAmountUsd * this.orderAmountToleranceMinPercent) / 100 ||
+      orderAmountUsd > (this.orderAmountUsd * this.orderAmountToleranceMaxPercent) / 100
     ) {
       if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
-        logger.warn({ msg: 'Normalized volume is outside order amount tolerance range', function: 'ArbitrageEngine.checkDirection',
+        logger.warn({
+          msg: 'Normalized volume is outside order amount tolerance range',
+          function: 'ArbitrageEngine.checkDirection',
           exchange: buyExchange,
           symbol: buyExchangeSymbol,
           orderAmountUsd,
-          minAllowed: this.orderAmountUsd * this.orderAmountToleranceMinPercent / 100,
-          maxAllowed: this.orderAmountUsd * this.orderAmountToleranceMaxPercent / 100, })
+          minAllowed: (this.orderAmountUsd * this.orderAmountToleranceMinPercent) / 100,
+          maxAllowed: (this.orderAmountUsd * this.orderAmountToleranceMaxPercent) / 100,
+        })
         this.antiSpamLogTime = Date.now()
       }
       return
     }
 
     // Simulate slippage for both entry legs using the actual exchange-specific volumes
-    const entryBuySimulation = this.simulateSlippage(buyBook.asks, finalBuyExchangeVolume, true, buyExchange, buyExchangeSymbol, buyMetadataService)
-    const entrySellSimulation = this.simulateSlippage(sellBook.bids, finalSellExchangeVolume, false, sellExchange, sellExchangeSymbol, sellMetadataService)
+    const entryBuySimulation = this.simulateSlippage(
+      buyBook.asks,
+      finalBuyExchangeVolume,
+      true,
+      buyExchange,
+      buyExchangeSymbol,
+      buyMetadataService
+    )
+    const entrySellSimulation = this.simulateSlippage(
+      sellBook.bids,
+      finalSellExchangeVolume,
+      false,
+      sellExchange,
+      sellExchangeSymbol,
+      sellMetadataService
+    )
 
     // === EXIT SLIPPAGE SIMULATION ===
     // Simulate exit slippage for both exchanges using the actual exchange-specific volumes
-    const exitBuySimulation = this.simulateSlippage(buyBook.bids, finalBuyExchangeVolume, false, buyExchange, buyExchangeSymbol, buyMetadataService)
-    const exitSellSimulation = this.simulateSlippage(sellBook.asks, finalSellExchangeVolume, true, sellExchange, sellExchangeSymbol, sellMetadataService)
+    const exitBuySimulation = this.simulateSlippage(
+      buyBook.bids,
+      finalBuyExchangeVolume,
+      false,
+      buyExchange,
+      buyExchangeSymbol,
+      buyMetadataService
+    )
+    const exitSellSimulation = this.simulateSlippage(
+      sellBook.asks,
+      finalSellExchangeVolume,
+      true,
+      sellExchange,
+      sellExchangeSymbol,
+      sellMetadataService
+    )
 
     // === FUNDING PROJECTION ===
     const orderAmountAfterSlippageUsd = entryBuySimulation.avgNormalizedExecutionPrice * finalNormalizedVolume
 
     const targetFundingTimestamp = Math.min(buyFundingData.nextFundingTimestamp, sellFundingData.nextFundingTimestamp)
 
-    const fundingProjection = this.calculateFundingProjection(
-      buyFundingData,
-      sellFundingData,
-    )
+    const fundingProjection = this.calculateFundingProjection(buyFundingData, sellFundingData)
 
     // === PROFIT ESTIMATION ===
     const profitEstimate = this.estimateProfit(
@@ -1073,28 +1208,30 @@ export class ArbitrageEngine extends EventEmitter {
 
     // === STRATEGY VALIDATION ===
     // Determine which strategy this opportunity belongs to and validate entry conditions
-    const strategyResult = this.determineStrategy(
-      buyFundingData,
-      sellFundingData,
-      profitEstimate
-    )
+    const strategyResult = this.determineStrategy(buyFundingData, sellFundingData, profitEstimate)
 
     // Reject opportunity if no valid strategy
     if (!strategyResult.strategy) {
-      logger.debug({ msg: 'Opportunity rejected', function: 'ArbitrageEngine.checkDirection',
+      logger.debug({
+        msg: 'Opportunity rejected',
+        function: 'ArbitrageEngine.checkDirection',
         normalizedPair,
         buyExchange,
         sellExchange,
-        reason: strategyResult.reason })
+        reason: strategyResult.reason,
+      })
       return
     }
 
-    logger.debug({ msg: 'Strategy validated', function: 'ArbitrageEngine.checkDirection',
+    logger.debug({
+      msg: 'Strategy validated',
+      function: 'ArbitrageEngine.checkDirection',
       normalizedPair,
       buyExchange,
       sellExchange,
-      strategy: strategyResult.strategy })
-    
+      strategy: strategyResult.strategy,
+    })
+
     // Use the validated opportunity from the persistence check
     const persistenceResult = this.validatePersistence(
       normalizedPair,
@@ -1108,17 +1245,23 @@ export class ArbitrageEngine extends EventEmitter {
     )
 
     if (!persistenceResult.isValid) {
-      logger.debug({ msg: 'Opportunity not persisted', function: 'ArbitrageEngine.checkDirection',
+      logger.debug({
+        msg: 'Opportunity not persisted',
+        function: 'ArbitrageEngine.checkDirection',
         normalizedPair,
         buyExchange,
         sellExchange,
-        reason: persistenceResult.reason })
+        reason: persistenceResult.reason,
+      })
       return // Opportunity hasn't met persistence requirements yet
     }
 
     // === OPPORTUNITY CREATION ===
     // Calculate volumeUSDT as the maximum between buy and sell sides
-    const orderAmountMaxSideUsd = Math.max(finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice, finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice)
+    const orderAmountMaxSideUsd = Math.max(
+      finalNormalizedVolume * entryBuySimulation.avgNormalizedExecutionPrice,
+      finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice
+    )
 
     // Create the final opportunity object with funding-aware data and strategy annotation
     opportunities.push({
@@ -1158,7 +1301,7 @@ export class ArbitrageEngine extends EventEmitter {
     const normalizedPairSets = Array.from(orderbooks.entries()).map(([exchangeId, orderbook]) => {
       const metadataService = this.marketMetadataServices.get(exchangeId)
       if (!metadataService) return new Set<string>()
-      
+
       // Convert exchange-specific symbols to normalized symbols
       const normalizedPairs = new Set<string>()
       for (const symbol of orderbook.keys()) {
@@ -1167,11 +1310,13 @@ export class ArbitrageEngine extends EventEmitter {
       }
       return normalizedPairs
     })
-    
+
     // Find common normalized symbols across all exchanges
-    return Array.from(normalizedPairSets.reduce((common, pairs) => {
-      if (common.size === 0) return pairs
-      return new Set([...common].filter(pair => pairs.has(pair)))
-    }, new Set<string>()))
+    return Array.from(
+      normalizedPairSets.reduce((common, pairs) => {
+        if (common.size === 0) return pairs
+        return new Set([...common].filter(pair => pairs.has(pair)))
+      }, new Set<string>())
+    )
   }
-} 
+}

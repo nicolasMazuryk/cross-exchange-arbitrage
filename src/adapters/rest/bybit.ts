@@ -32,19 +32,25 @@ export class BybitExchange extends BaseExchange {
       balanceInfos.push({
         asset: 'USDT',
         total: parseFloat(totalEquity),
-        available: parseFloat(totalAvailableBalance)
+        available: parseFloat(totalAvailableBalance),
       })
 
-      logger.debug({ msg: 'Fetched balance entries from exchange', function: 'BybitExchange.fetchBalancesSnapshot',
+      logger.debug({
+        msg: 'Fetched balance entries from exchange',
+        function: 'BybitExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: balanceInfos.length })
+        count: balanceInfos.length,
+      })
       return balanceInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch balance snapshot from exchange', function: 'BybitExchange.fetchBalancesSnapshot',
+      logger.error({
+        msg: 'Failed to fetch balance snapshot from exchange',
+        function: 'BybitExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -65,22 +71,28 @@ export class BybitExchange extends BaseExchange {
           leverage: Number(leverage) || 1,
           unrealizedPnL: unrealizedPnl!,
           timestamp: timestamp!,
-          date: new Date(timestamp!)
+          date: new Date(timestamp!),
           // liquidationPrice: liqPrice,
           // notional: notional,
         })
       }
 
-      logger.debug({ msg: 'Fetched position entries from exchange', function: 'BybitExchange.fetchPositionsSnapshot',
+      logger.debug({
+        msg: 'Fetched position entries from exchange',
+        function: 'BybitExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: positionInfos.length })
+        count: positionInfos.length,
+      })
       return positionInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch positions snapshot from exchange', function: 'BybitExchange.fetchPositionsSnapshot',
+      logger.error({
+        msg: 'Failed to fetch positions snapshot from exchange',
+        function: 'BybitExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -104,22 +116,28 @@ export class BybitExchange extends BaseExchange {
           quantity: order.amount,
           status: this.normalizeOrderStatus(order.status!),
           timestamp: order.timestamp,
-          date: new Date(order.timestamp)
+          date: new Date(order.timestamp),
         })
       }
 
-      logger.debug({ msg: 'Fetched order entries from exchange', function: 'BybitExchange.fetchOrdersSnapshot',
+      logger.debug({
+        msg: 'Fetched order entries from exchange',
+        function: 'BybitExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        count: orderInfos.length })
+        count: orderInfos.length,
+      })
       return orderInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch orders snapshot from exchange', function: 'BybitExchange.fetchOrdersSnapshot',
+      logger.error({
+        msg: 'Failed to fetch orders snapshot from exchange',
+        function: 'BybitExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -163,28 +181,33 @@ export class BybitExchange extends BaseExchange {
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       if (!FUNDING_ENDPOINT) {
-        logger.error({ msg: 'No funding endpoint configured', function: 'BybitExchange.fetchFundingData',
+        logger.error({
+          msg: 'No funding endpoint configured',
+          function: 'BybitExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
       const rawJson = await fetchJsonFromUrl(FUNDING_ENDPOINT)
 
       if (!rawJson || !rawJson.result || !rawJson.result.list || !Array.isArray(rawJson.result.list)) {
-        logger.error({ msg: 'Invalid funding data structure received from exchange', function: 'BybitExchange.fetchFundingData',
+        logger.error({
+          msg: 'Invalid funding data structure received from exchange',
+          function: 'BybitExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId, })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
       // Filter symbols to only ones that end with 'USDT'
       const usdtSymbolsFundingData = rawJson.result.list
-        .filter((item: any) =>
-          item.symbolName && item.symbolName.endsWith('USDT'))
+        .filter((item: any) => item.symbolName && item.symbolName.endsWith('USDT'))
         .map((item: any) => ({
           ...item,
-          symbol: item.symbolName.replace('USDT', '/USDT:USDT')
+          symbol: item.symbolName.replace('USDT', '/USDT:USDT'),
         }))
         .filter((item: any) => !['USDCUSDT', 'ETHBTCUSDT'].includes(item.symbolName))
 
@@ -214,23 +237,29 @@ export class BybitExchange extends BaseExchange {
           fundingRatePercent: fundingRate,
           fundingInterval,
           nextFundingTimestamp,
-          nextFundingDatetime: new Date(nextFundingTimestamp)
+          nextFundingDatetime: new Date(nextFundingTimestamp),
         }
 
         fundingData.set(item.symbol, parsedFunding)
       }
 
-      logger.debug({ msg: 'Parsed funding rates from exchange', function: 'BybitExchange.fetchFundingData',
+      logger.debug({
+        msg: 'Parsed funding rates from exchange',
+        function: 'BybitExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: fundingData.size })
+        count: fundingData.size,
+      })
       return fundingData
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch funding data from exchange', function: 'BybitExchange.fetchFundingData',
+      logger.error({
+        msg: 'Failed to fetch funding data from exchange',
+        function: 'BybitExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         endpoint: FUNDING_ENDPOINT,
-        error, })
+        error,
+      })
       return new Map()
     }
   }

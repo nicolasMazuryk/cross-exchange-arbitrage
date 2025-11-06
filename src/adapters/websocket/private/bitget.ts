@@ -31,43 +31,61 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
 
   protected setupEventHandlers(): void {
     this.client.on('open', (data: any) => {
-      logger.debug({ msg: 'Account WebSocket connection opened', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.open',
+      logger.debug({
+        msg: 'Account WebSocket connection opened',
+        function: 'BitgetPrivateWebSocketClient.setupEventHandlers.open',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = true
     })
 
     this.client.on('close', () => {
-      logger.warn({ msg: 'WebSocket connection closed', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.close',
-        exchange: this.exchangeName, })
+      logger.warn({
+        msg: 'WebSocket connection closed',
+        function: 'BitgetPrivateWebSocketClient.setupEventHandlers.close',
+        exchange: this.exchangeName,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
 
     this.client.on('response', (data: any) => {
-      logger.debug({ msg: 'Account WebSocket reply received', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.response',
+      logger.debug({
+        msg: 'Account WebSocket reply received',
+        function: 'BitgetPrivateWebSocketClient.setupEventHandlers.response',
         exchange: this.exchangeName,
-        data, })
+        data,
+      })
     })
 
     this.client.on('reconnect', (data: any) => {
-      logger.info({ msg: 'WebSocket reconnecting', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.reconnect',
+      logger.info({
+        msg: 'WebSocket reconnecting',
+        function: 'BitgetPrivateWebSocketClient.setupEventHandlers.reconnect',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = false
     })
 
     this.client.on('reconnected', (data: any) => {
-      logger.info({ msg: 'WebSocket reconnected', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.reconnected',
+      logger.info({
+        msg: 'WebSocket reconnected',
+        function: 'BitgetPrivateWebSocketClient.setupEventHandlers.reconnected',
         exchange: this.exchangeName,
-        wsKey: data?.wsKey, })
+        wsKey: data?.wsKey,
+      })
       this.isConnected = true
     })
 
     this.client.on('exception', (error: any) => {
-      logger.error({ msg: 'WebSocket error', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.error',
+      logger.error({
+        msg: 'WebSocket error',
+        function: 'BitgetPrivateWebSocketClient.setupEventHandlers.error',
         exchange: this.exchangeName,
-        error, })
+        error,
+      })
       this.isConnected = false
       this.handleConnectionError()
     })
@@ -76,9 +94,12 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
       try {
         this.handleMessage(data)
       } catch (error) {
-        logger.error({ msg: 'Error parsing Account WebSocket message', function: 'BitgetPrivateWebSocketClient.setupEventHandlers.update',
+        logger.error({
+          msg: 'Error parsing Account WebSocket message',
+          function: 'BitgetPrivateWebSocketClient.setupEventHandlers.update',
           exchange: this.exchangeName,
-          error, })
+          error,
+        })
       }
     })
   }
@@ -93,8 +114,11 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
     // Subscribe to orders updates for USDT futures
     this.client.subscribeTopic('USDT-FUTURES', 'orders', 'default')
 
-    logger.info({ msg: 'Subscribed to account WebSocket streams', function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
-      exchange: this.exchangeName, })
+    logger.info({
+      msg: 'Subscribed to account WebSocket streams',
+      function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
+      exchange: this.exchangeName,
+    })
   }
 }
 
@@ -194,4 +218,4 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
         return 'UNKNOWN'
     }
   }
-} 
+}

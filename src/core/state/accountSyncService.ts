@@ -9,12 +9,7 @@ import {
   OKXPrivateWebSocketClient,
   BitgetPrivateWebSocketClient,
 } from '../../adapters/websocket/private'
-import {
-  BinanceExchange,
-  BybitExchange,
-  OkxExchange,
-  BitgetExchange
-} from '../../adapters/rest'
+import { BinanceExchange, BybitExchange, OkxExchange, BitgetExchange } from '../../adapters/rest'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
 import config from '../../utils/config'
@@ -44,7 +39,7 @@ export class AccountSyncService extends EventEmitter {
       if (this.isInitialized) {
         logger.warn({
           msg: 'AccountSyncService already initialized',
-          function: 'AccountSyncService.initialize'
+          function: 'AccountSyncService.initialize',
         })
         return
       }
@@ -52,7 +47,7 @@ export class AccountSyncService extends EventEmitter {
       logger.info({
         msg: 'Initializing AccountSyncService',
         function: 'AccountSyncService.initialize',
-        exchangeCount: exchangeConfigs.length
+        exchangeCount: exchangeConfigs.length,
       })
 
       // Initialize REST clients
@@ -75,14 +70,14 @@ export class AccountSyncService extends EventEmitter {
       logger.info({
         msg: 'AccountSyncService initialized successfully',
         function: 'AccountSyncService.initialize',
-        exchangeCount: exchangeConfigs.length
+        exchangeCount: exchangeConfigs.length,
       })
     } catch (error) {
       logger.error({
         msg: 'Failed to initialize AccountSyncService',
         function: 'AccountSyncService.initialize',
         exchangeCount: exchangeConfigs.length,
-        error
+        error,
       })
       throw error
     }
@@ -115,14 +110,14 @@ export class AccountSyncService extends EventEmitter {
       logger.debug({
         msg: 'REST client initialized for exchange',
         function: 'AccountSyncService.initializeRestClient',
-        exchange: config.exchangeId
+        exchange: config.exchangeId,
       })
     } catch (error) {
       logger.error({
         msg: 'Failed to initialize REST client for exchange',
         function: 'AccountSyncService.initializeRestClient',
         exchange: config.exchangeId,
-        error
+        error,
       })
       throw error
     }
@@ -179,14 +174,14 @@ export class AccountSyncService extends EventEmitter {
       logger.debug({
         msg: 'Private WebSocket client initialized for exchange',
         function: 'AccountSyncService.initializePrivateWebSocketClient',
-        exchange: config.exchangeId
+        exchange: config.exchangeId,
       })
     } catch (error) {
       logger.error({
         msg: 'Failed to initialize private WebSocket client for exchange',
         function: 'AccountSyncService.initializePrivateWebSocketClient',
         exchange: config.exchangeId,
-        error
+        error,
       })
       throw error
     }
@@ -195,7 +190,7 @@ export class AccountSyncService extends EventEmitter {
   private async performInitialSnapshots(): Promise<void> {
     logger.info({
       msg: 'Performing initial account snapshots',
-      function: 'AccountSyncService.performInitialSnapshots'
+      function: 'AccountSyncService.performInitialSnapshots',
     })
 
     for (const [exchangeId, restClient] of this.restClients.entries()) {
@@ -217,7 +212,7 @@ export class AccountSyncService extends EventEmitter {
       const [balances, positions, orders] = await Promise.all([
         restClient.fetchBalancesSnapshot(),
         restClient.fetchPositionsSnapshot(),
-        restClient.fetchOrdersSnapshot()
+        restClient.fetchOrdersSnapshot(),
       ])
 
       this.accountStateManager.updateBalances(exchangeId, balances)
@@ -230,7 +225,7 @@ export class AccountSyncService extends EventEmitter {
         exchange: exchangeId,
         balances: balances.length,
         positions: positions.length,
-        orders: orders.length
+        orders: orders.length,
       })
     } catch (error) {
       logger.error({
@@ -249,9 +244,9 @@ export class AccountSyncService extends EventEmitter {
       TraceContext.runWithTrace('account-snapshot', async () => {
         logger.debug({
           msg: 'Performing periodic account snapshots',
-          function: 'AccountSyncService.startPeriodicSnapshots'
+          function: 'AccountSyncService.startPeriodicSnapshots',
         })
-        
+
         for (const [exchangeId, restClient] of this.restClients.entries()) {
           try {
             await this.performExchangeSnapshot(exchangeId, restClient)
@@ -261,7 +256,7 @@ export class AccountSyncService extends EventEmitter {
               function: 'AccountSyncService.startPeriodicSnapshots',
               exchange: exchangeId,
               snapshotIntervalMs: config.accountSync.snapshotIntervalMs,
-              error
+              error,
             })
           }
         }
@@ -291,14 +286,14 @@ export class AccountSyncService extends EventEmitter {
     return this.accountStateManager.getAccountState(exchangeId)
   }
 
-  getStateSummary(): Record<string, { balances: number, positions: number, orders: number }> {
+  getStateSummary(): Record<string, { balances: number; positions: number; orders: number }> {
     return this.accountStateManager.getStateSummary()
   }
 
   async shutdown(): Promise<void> {
     logger.info({
       msg: 'Shutting down AccountSyncService',
-      function: 'AccountSyncService.shutdown'
+      function: 'AccountSyncService.shutdown',
     })
 
     // Close WebSocket connections
@@ -308,14 +303,14 @@ export class AccountSyncService extends EventEmitter {
         logger.debug({
           msg: 'WebSocket connection closed',
           function: 'AccountSyncService.shutdown',
-          exchange: exchangeId
+          exchange: exchangeId,
         })
       } catch (error) {
         logger.error({
           msg: 'Error closing WebSocket during shutdown',
           function: 'AccountSyncService.shutdown',
           exchange: exchangeId,
-          error
+          error,
         })
       }
     }
@@ -327,14 +322,14 @@ export class AccountSyncService extends EventEmitter {
         logger.debug({
           msg: 'Cleared sync interval',
           function: 'AccountSyncService.shutdown',
-          intervalName: name
+          intervalName: name,
         })
       } catch (error) {
         logger.error({
           msg: 'Error clearing interval during shutdown',
           function: 'AccountSyncService.shutdown',
           intervalName: name,
-          error
+          error,
         })
       }
     }
@@ -342,7 +337,7 @@ export class AccountSyncService extends EventEmitter {
     this.isInitialized = false
     logger.info({
       msg: '✅ AccountSyncService shutdown complete',
-      function: 'AccountSyncService.shutdown'
+      function: 'AccountSyncService.shutdown',
     })
   }
-} 
+}

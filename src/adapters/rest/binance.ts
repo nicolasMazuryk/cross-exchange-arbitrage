@@ -31,16 +31,22 @@ export class BinanceExchange extends BaseExchange {
         total: parseFloat(totalWalletBalance),
         available: parseFloat(availableBalance),
       })
-      logger.debug({ msg: 'Fetched balance entries from exchange', function: 'BinanceExchange.fetchBalancesSnapshot',
+      logger.debug({
+        msg: 'Fetched balance entries from exchange',
+        function: 'BinanceExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: balanceInfos.length, })
+        count: balanceInfos.length,
+      })
       return balanceInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch balance snapshot from exchange', function: 'BinanceExchange.fetchBalancesSnapshot',
+      logger.error({
+        msg: 'Failed to fetch balance snapshot from exchange',
+        function: 'BinanceExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -66,16 +72,22 @@ export class BinanceExchange extends BaseExchange {
           // notional: notional,
         })
       }
-      logger.debug({ msg: 'Fetched positions snapshot', function: 'BinanceExchange.fetchPositionsSnapshot',
+      logger.debug({
+        msg: 'Fetched positions snapshot',
+        function: 'BinanceExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: positionInfos.length, })
+        count: positionInfos.length,
+      })
       return positionInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch positions snapshot from exchange', function: 'BinanceExchange.fetchPositionsSnapshot',
+      logger.error({
+        msg: 'Failed to fetch positions snapshot from exchange',
+        function: 'BinanceExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -102,18 +114,24 @@ export class BinanceExchange extends BaseExchange {
           date: new Date(order.timestamp),
         })
       }
-      logger.debug({ msg: 'Fetched order entries from exchange', function: 'BinanceExchange.fetchOrdersSnapshot',
+      logger.debug({
+        msg: 'Fetched order entries from exchange',
+        function: 'BinanceExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        count: orderInfos.length, })
+        count: orderInfos.length,
+      })
       return orderInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch orders snapshot from exchange', function: 'BinanceExchange.fetchOrdersSnapshot',
+      logger.error({
+        msg: 'Failed to fetch orders snapshot from exchange',
+        function: 'BinanceExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -144,9 +162,12 @@ export class BinanceExchange extends BaseExchange {
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       if (!FUNDING_ENDPOINT) {
-        logger.error({ msg: 'No funding endpoint configured', function: 'BinanceExchange.fetchFundingData',
+        logger.error({
+          msg: 'No funding endpoint configured',
+          function: 'BinanceExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId, })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
@@ -156,20 +177,21 @@ export class BinanceExchange extends BaseExchange {
       ])
 
       if (!rawJson || !rawJson.data || !Array.isArray(rawJson.data)) {
-        logger.error({ msg: 'Invalid funding data structure received from exchange', function: 'BinanceExchange.fetchFundingData',
+        logger.error({
+          msg: 'Invalid funding data structure received from exchange',
+          function: 'BinanceExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId, })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
       // Filter symbols in rawJson.data to only ones that end with 'USDT'
       const usdtSymbolsIntervalData = rawJson.data
-        .filter((item: any) =>
-          item.symbol && item.symbol.endsWith('USDT') && item.fundingIntervalHours !== undefined
-        )
+        .filter((item: any) => item.symbol && item.symbol.endsWith('USDT') && item.fundingIntervalHours !== undefined)
         .map((item: any) => ({
           ...item,
-          symbol: item.symbol.replace('USDT', '/USDT:USDT')
+          symbol: item.symbol.replace('USDT', '/USDT:USDT'),
         }))
 
       const fundingData = new Map<string, ParsedFunding>()
@@ -184,13 +206,16 @@ export class BinanceExchange extends BaseExchange {
           !ccxtFundingData.fundingTimestamp ||
           !ccxtFundingData.fundingDatetime
         ) {
-          logger.warn({ msg: 'Invalid funding data values for symbol', function: 'BinanceExchange.fetchFundingData',
+          logger.warn({
+            msg: 'Invalid funding data values for symbol',
+            function: 'BinanceExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
             exchangeId: this.exchangeId,
             symbol: item.symbol,
             hasCcxtData: !!ccxtFundingData,
             fundingRate: ccxtFundingData?.fundingRate,
-            fundingTimestamp: ccxtFundingData?.fundingTimestamp, })
+            fundingTimestamp: ccxtFundingData?.fundingTimestamp,
+          })
           continue
         }
 
@@ -207,17 +232,23 @@ export class BinanceExchange extends BaseExchange {
         fundingData.set(item.symbol, parsedFunding)
       }
 
-      logger.debug({ msg: 'Parsed funding rates from exchange', function: 'BinanceExchange.fetchFundingData',
+      logger.debug({
+        msg: 'Parsed funding rates from exchange',
+        function: 'BinanceExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: fundingData.size, })
+        count: fundingData.size,
+      })
       return fundingData
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch funding data from exchange', function: 'BinanceExchange.fetchFundingData',
+      logger.error({
+        msg: 'Failed to fetch funding data from exchange',
+        function: 'BinanceExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         endpoint: FUNDING_ENDPOINT,
-        error, })
+        error,
+      })
       return new Map()
     }
   }

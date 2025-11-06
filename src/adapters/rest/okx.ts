@@ -28,7 +28,7 @@ export class OkxExchange extends BaseExchange {
   ): ExchangeOrderParams {
     return {
       ...baseParams,
-      positionSide: getPositionSide(side as OrderSide, baseParams.reduceOnly!).toLowerCase()
+      positionSide: getPositionSide(side as OrderSide, baseParams.reduceOnly!).toLowerCase(),
     }
   }
 
@@ -40,19 +40,25 @@ export class OkxExchange extends BaseExchange {
       balanceInfos.push({
         asset: 'USDT',
         total: balances['USDT'].total || 0,
-        available: balances['USDT'].free || 0
+        available: balances['USDT'].free || 0,
       })
 
-      logger.debug({ msg: 'Fetched balance snapshot', function: 'OkxExchange.fetchBalancesSnapshot',
+      logger.debug({
+        msg: 'Fetched balance snapshot',
+        function: 'OkxExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: balanceInfos.length })
+        count: balanceInfos.length,
+      })
       return balanceInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch balance snapshot from exchange', function: 'OkxExchange.fetchBalancesSnapshot',
+      logger.error({
+        msg: 'Failed to fetch balance snapshot from exchange',
+        function: 'OkxExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -72,20 +78,26 @@ export class OkxExchange extends BaseExchange {
           leverage: position.leverage || 1,
           unrealizedPnL: position.unrealizedPnl || 0,
           timestamp: position.timestamp || 0,
-          date: new Date(position.timestamp || 0)
+          date: new Date(position.timestamp || 0),
         })
       }
 
-      logger.debug({ msg: 'Fetched positions snapshot', function: 'OkxExchange.fetchPositionsSnapshot',
+      logger.debug({
+        msg: 'Fetched positions snapshot',
+        function: 'OkxExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: positionInfos.length })
+        count: positionInfos.length,
+      })
       return positionInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch positions snapshot from exchange', function: 'OkxExchange.fetchPositionsSnapshot',
+      logger.error({
+        msg: 'Failed to fetch positions snapshot from exchange',
+        function: 'OkxExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -112,22 +124,28 @@ export class OkxExchange extends BaseExchange {
           quantity: size,
           status: this.normalizeOrderStatus(order.status!),
           timestamp: order.timestamp,
-          date: new Date(order.timestamp)
+          date: new Date(order.timestamp),
         })
       }
 
-      logger.debug({ msg: 'Fetched orders snapshot', function: 'OkxExchange.fetchOrdersSnapshot',
+      logger.debug({
+        msg: 'Fetched orders snapshot',
+        function: 'OkxExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        count: orderInfos.length })
+        count: orderInfos.length,
+      })
       return orderInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch orders snapshot from exchange', function: 'OkxExchange.fetchOrdersSnapshot',
+      logger.error({
+        msg: 'Failed to fetch orders snapshot from exchange',
+        function: 'OkxExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -155,9 +173,12 @@ export class OkxExchange extends BaseExchange {
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       if (!FUNDING_ENDPOINT) {
-        logger.error({ msg: 'No funding endpoint configured', function: 'OkxExchange.fetchFundingData',
+        logger.error({
+          msg: 'No funding endpoint configured',
+          function: 'OkxExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
@@ -170,9 +191,12 @@ export class OkxExchange extends BaseExchange {
         !rawJson.data[0].fundingList ||
         !Array.isArray(rawJson.data[0].fundingList)
       ) {
-        logger.error({ msg: 'Invalid funding data structure received from OKX', function: 'OkxExchange.fetchFundingData',
+        logger.error({
+          msg: 'Invalid funding data structure received from OKX',
+          function: 'OkxExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId, })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
@@ -180,17 +204,20 @@ export class OkxExchange extends BaseExchange {
       const usdtSymbolsFundingData: any[] = []
       for (const item of rawJson.data[0].fundingList) {
         if (!item.instId || !item.instId.endsWith('-USDT-SWAP')) {
-          logger.warn({ msg: 'Invalid funding data symbol format', function: 'OkxExchange.fetchFundingData',
+          logger.warn({
+            msg: 'Invalid funding data symbol format',
+            function: 'OkxExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
             exchangeId: this.exchangeId,
-            instId: item.instId })
+            instId: item.instId,
+          })
           continue
         }
 
         // OKX symbols are already in format like "BTC-USDT-SWAP", convert to "BTC/USDT:USDT"
         usdtSymbolsFundingData.push({
           ...item,
-          symbol: item.instId.replace('-USDT-SWAP', '/USDT:USDT')
+          symbol: item.instId.replace('-USDT-SWAP', '/USDT:USDT'),
         })
       }
 
@@ -203,13 +230,16 @@ export class OkxExchange extends BaseExchange {
         const nextFundingTimestamp = parseInt(item.fundingTime)
 
         if (isNaN(fundingRate) || !fundingInterval || !nextFundingTimestamp) {
-          logger.warn({ msg: 'Invalid funding data values for symbol', function: 'OkxExchange.fetchFundingData',
+          logger.warn({
+            msg: 'Invalid funding data values for symbol',
+            function: 'OkxExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
             exchangeId: this.exchangeId,
             symbol: item.symbol,
             fundingRate: item.fundingRate,
             fundingInterval: item.frequency,
-            nextFundingTime: item.fundingTime })
+            nextFundingTime: item.fundingTime,
+          })
           continue
         }
 
@@ -220,23 +250,29 @@ export class OkxExchange extends BaseExchange {
           fundingRatePercent: fundingRate * 100,
           fundingInterval,
           nextFundingTimestamp,
-          nextFundingDatetime: new Date(nextFundingTimestamp)
+          nextFundingDatetime: new Date(nextFundingTimestamp),
         }
 
         fundingData.set(item.symbol, parsedFunding)
       }
 
-      logger.debug({ msg: 'Parsed funding rates', function: 'OkxExchange.fetchFundingData',
+      logger.debug({
+        msg: 'Parsed funding rates',
+        function: 'OkxExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: fundingData.size })
+        count: fundingData.size,
+      })
       return fundingData
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch funding data from exchange', function: 'OkxExchange.fetchFundingData',
+      logger.error({
+        msg: 'Failed to fetch funding data from exchange',
+        function: 'OkxExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         endpoint: FUNDING_ENDPOINT,
-        error, })
+        error,
+      })
       return new Map()
     }
   }

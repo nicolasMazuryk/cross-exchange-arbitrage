@@ -22,11 +22,13 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
   }
 
   public async initialize(): Promise<void> {
-    logger.info({ msg: 'Initializing private WebSocket client', function: 'BasePrivateWebSocketClient.initialize',
-      exchange: this.exchangeName })
-    
-    await this.createPrivateWebSocketConnection()
+    logger.info({
+      msg: 'Initializing private WebSocket client',
+      function: 'BasePrivateWebSocketClient.initialize',
+      exchange: this.exchangeName,
+    })
 
+    await this.createPrivateWebSocketConnection()
   }
 
   protected async createPrivateWebSocketConnection(): Promise<void> {
@@ -35,32 +37,41 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
       this.setupEventHandlers()
       await this.subscribeToAccountStreams()
     } catch (error) {
-      logger.error({ msg: 'Failed to create private WebSocket connection', function: 'BasePrivateWebSocketClient.createPrivateWebSocketConnection',
+      logger.error({
+        msg: 'Failed to create private WebSocket connection',
+        function: 'BasePrivateWebSocketClient.createPrivateWebSocketConnection',
         exchange: this.exchangeName,
-        error })
+        error,
+      })
       throw error
     }
   }
 
   protected async handleConnectionError(): Promise<void> {
-    logger.warn({ msg: 'Handling connection error. Reconnecting Private WebSocket', function: 'BasePrivateWebSocketClient.handleConnectionError',
+    logger.warn({
+      msg: 'Handling connection error. Reconnecting Private WebSocket',
+      function: 'BasePrivateWebSocketClient.handleConnectionError',
       exchange: this.exchangeName,
-      reconnectInterval: this.config.reconnectInterval })
-    
+      reconnectInterval: this.config.reconnectInterval,
+    })
+
     try {
       await wait(this.config.reconnectInterval)
       await this.createPrivateWebSocketConnection()
     } catch (error) {
-      logger.error({ msg: 'Failed to reconnect private WebSocket, will retry', function: 'BasePrivateWebSocketClient.handleConnectionError',
+      logger.error({
+        msg: 'Failed to reconnect private WebSocket, will retry',
+        function: 'BasePrivateWebSocketClient.handleConnectionError',
         exchange: this.exchangeName,
         reconnectInterval: this.config.reconnectInterval,
-        error })
+        error,
+      })
       await this.handleConnectionError()
     }
   }
 
   protected handleMessage(data: any): void {
-    TraceContext.runWithTrace(`ws-private-message-${this.exchangeName}`, async (traceId) => {
+    TraceContext.runWithTrace(`ws-private-message-${this.exchangeName}`, async traceId => {
       try {
         if (this.messageParser.isBalanceMessage(data)) {
           const balances = this.messageParser.parseBalanceUpdate(data)
@@ -93,15 +104,21 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
           } as AccountStateUpdate)
         }
       } catch (error) {
-        logger.error({ msg: 'Error parsing private WebSocket message', function: 'BasePrivateWebSocketClient.handleMessage',
+        logger.error({
+          msg: 'Error parsing private WebSocket message',
+          function: 'BasePrivateWebSocketClient.handleMessage',
           exchange: this.exchangeName,
           messageType: data?.e || data?.topic,
-          error })
+          error,
+        })
       }
     }).catch(error => {
-      logger.error({ msg: 'Error in trace context for private WebSocket message', function: 'BasePrivateWebSocketClient.handleMessage',
+      logger.error({
+        msg: 'Error in trace context for private WebSocket message',
+        function: 'BasePrivateWebSocketClient.handleMessage',
         exchange: this.exchangeName,
-        error })
+        error,
+      })
     })
   }
 
@@ -110,21 +127,25 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
       if (this.client) {
         this.client.closeAll()
         this.isConnected = false
-        logger.debug({ msg: 'Closed private WebSocket connection', function: 'BasePrivateWebSocketClient.close',
-          exchange: this.exchangeName })
+        logger.debug({
+          msg: 'Closed private WebSocket connection',
+          function: 'BasePrivateWebSocketClient.close',
+          exchange: this.exchangeName,
+        })
       }
     } catch (error) {
-      logger.error({ msg: 'Error closing private WebSocket connection', function: 'BasePrivateWebSocketClient.close',
+      logger.error({
+        msg: 'Error closing private WebSocket connection',
+        function: 'BasePrivateWebSocketClient.close',
         exchange: this.exchangeName,
-        error })
+        error,
+      })
       // Don't throw - allow graceful shutdown to continue
     }
   }
-
-
 
   // Abstract methods to be implemented by exchange-specific clients
   protected abstract createClient(): any
   protected abstract setupEventHandlers(): void
   protected abstract subscribeToAccountStreams(): Promise<void>
-} 
+}

@@ -1,4 +1,7 @@
-export enum MarketType { SPOT = 'spot', FUTURES = 'futures' }
+export enum MarketType {
+  SPOT = 'spot',
+  FUTURES = 'futures',
+}
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT'
@@ -14,4 +17,4 @@ export interface ExchangeMeta {
   name: string
   isHealthy: boolean
   feeModel: FeeModel
-} 
+}

@@ -28,7 +28,7 @@ export class BitgetExchange extends BaseExchange {
   ): ExchangeOrderParams {
     return {
       ...baseParams,
-      hedged: true // Bitget requires hedged parameter
+      hedged: true, // Bitget requires hedged parameter
     }
   }
 
@@ -40,19 +40,25 @@ export class BitgetExchange extends BaseExchange {
       balanceInfos.push({
         asset: 'USDT',
         total: balances['USDT'].total || 0,
-        available: balances['USDT'].free || 0
+        available: balances['USDT'].free || 0,
       })
 
-      logger.debug({ msg: 'Fetched balance snapshot', function: 'BitgetExchange.fetchBalancesSnapshot',
+      logger.debug({
+        msg: 'Fetched balance snapshot',
+        function: 'BitgetExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: balanceInfos.length })
+        count: balanceInfos.length,
+      })
       return balanceInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch balance snapshot from exchange', function: 'BitgetExchange.fetchBalancesSnapshot',
+      logger.error({
+        msg: 'Failed to fetch balance snapshot from exchange',
+        function: 'BitgetExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -63,7 +69,7 @@ export class BitgetExchange extends BaseExchange {
       const positionInfos: PositionInfo[] = []
 
       for (const position of positions) {
-        const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp, contracts, contractSize } = position  
+        const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp, contracts, contractSize } = position
         const size = Math.abs(contracts! * contractSize!)
         positionInfos.push({
           id: positionId(symbol, side!.toUpperCase() as PositionSide),
@@ -74,22 +80,28 @@ export class BitgetExchange extends BaseExchange {
           leverage: Number(leverage) || 1,
           unrealizedPnL: unrealizedPnl!,
           timestamp: timestamp!,
-          date: new Date(timestamp!)
+          date: new Date(timestamp!),
           // liquidationPrice: liquidationPrice,
           // notional: notional,
         })
       }
 
-      logger.debug({ msg: 'Fetched positions snapshot', function: 'BitgetExchange.fetchPositionsSnapshot',
+      logger.debug({
+        msg: 'Fetched positions snapshot',
+        function: 'BitgetExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: positionInfos.length })
+        count: positionInfos.length,
+      })
       return positionInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch positions snapshot from exchange', function: 'BitgetExchange.fetchPositionsSnapshot',
+      logger.error({
+        msg: 'Failed to fetch positions snapshot from exchange',
+        function: 'BitgetExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -113,22 +125,28 @@ export class BitgetExchange extends BaseExchange {
           quantity: order.amount,
           status: this.normalizeOrderStatus(order.status || ''),
           timestamp: order.timestamp,
-          date: new Date(order.timestamp)
+          date: new Date(order.timestamp),
         })
       }
 
-      logger.debug({ msg: 'Fetched orders snapshot', function: 'BitgetExchange.fetchOrdersSnapshot',
+      logger.debug({
+        msg: 'Fetched orders snapshot',
+        function: 'BitgetExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        count: orderInfos.length })
+        count: orderInfos.length,
+      })
       return orderInfos
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch orders snapshot from exchange', function: 'BitgetExchange.fetchOrdersSnapshot',
+      logger.error({
+        msg: 'Failed to fetch orders snapshot from exchange',
+        function: 'BitgetExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         symbol: symbol || 'all',
-        error, })
+        error,
+      })
       throw error
     }
   }
@@ -156,15 +174,18 @@ export class BitgetExchange extends BaseExchange {
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       if (!FUNDING_ENDPOINT) {
-        logger.error({ msg: 'No funding endpoint configured', function: 'BitgetExchange.fetchFundingData',
+        logger.error({
+          msg: 'No funding endpoint configured',
+          function: 'BitgetExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId, })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
       const [rawJson, ccxtFundingRates] = await Promise.all([
         fetchJsonFromUrl(FUNDING_ENDPOINT),
-        this.exchange.fetchFundingRates(undefined, { subType: 'linear', productType: 'USDT-FUTURES' })
+        this.exchange.fetchFundingRates(undefined, { subType: 'linear', productType: 'USDT-FUTURES' }),
       ])
 
       if (
@@ -175,23 +196,23 @@ export class BitgetExchange extends BaseExchange {
         !rawJson.data.listDTOS[0].symbolDTOList ||
         !Array.isArray(rawJson.data.listDTOS[0].symbolDTOList)
       ) {
-        logger.error({ msg: 'Invalid funding data structure received from Bitget', function: 'BitgetExchange.fetchFundingData',
+        logger.error({
+          msg: 'Invalid funding data structure received from Bitget',
+          function: 'BitgetExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId, })
+          exchangeId: this.exchangeId,
+        })
         return new Map()
       }
 
       // Extract and filter USDT symbols
       const usdtSymbolsFundingData = rawJson.data.listDTOS[0].symbolDTOList
         .filter(
-          (item: any) =>
-            item.symbolDisplayName &&
-            item.symbolDisplayName.endsWith('USDT') &&
-            item.lsfRc !== undefined
+          (item: any) => item.symbolDisplayName && item.symbolDisplayName.endsWith('USDT') && item.lsfRc !== undefined
         )
         .map((item: any) => ({
           ...item,
-          symbol: `${item.baseSymbol}/USDT:USDT`
+          symbol: `${item.baseSymbol}/USDT:USDT`,
         }))
 
       const ccxtFundingRatesValues = Object.values(ccxtFundingRates)
@@ -201,7 +222,7 @@ export class BitgetExchange extends BaseExchange {
       for (const item of usdtSymbolsFundingData) {
         // Find the ccxt funding data for the item. CCXT return inconsistent symbol format, so we need to find based on "info" property.
         const ccxtFundingData = ccxtFundingRatesValues.find(
-          (ccxtFundingData) => ccxtFundingData.info.symbol === `${item.baseSymbol}${item.pricedSymbol}`
+          ccxtFundingData => ccxtFundingData.info.symbol === `${item.baseSymbol}${item.pricedSymbol}`
         )
         // Calculate next funding time (Bitget doesn't provide this directly)
         const fundingInterval = parseInt(item.lsfRc)
@@ -216,13 +237,16 @@ export class BitgetExchange extends BaseExchange {
           !fundingInterval ||
           !nextFundingTimestamp
         ) {
-          logger.warn({ msg: 'Invalid funding data values for symbol', function: 'BitgetExchange.fetchFundingData',
+          logger.warn({
+            msg: 'Invalid funding data values for symbol',
+            function: 'BitgetExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
             exchangeId: this.exchangeId,
             symbol: item.symbol,
             hasCcxtData: !!ccxtFundingData,
             fundingRate: ccxtFundingData?.fundingRate,
-            fundingInterval: item.lsfRc })
+            fundingInterval: item.lsfRc,
+          })
           continue
         }
 
@@ -233,23 +257,29 @@ export class BitgetExchange extends BaseExchange {
           fundingRatePercent: ccxtFundingData.fundingRate * 100,
           fundingInterval,
           nextFundingTimestamp,
-          nextFundingDatetime: new Date(nextFundingTimestamp)
+          nextFundingDatetime: new Date(nextFundingTimestamp),
         }
 
         fundingData.set(item.symbol, parsedFunding)
       }
 
-      logger.debug({ msg: 'Parsed funding rates', function: 'BitgetExchange.fetchFundingData',
+      logger.debug({
+        msg: 'Parsed funding rates',
+        function: 'BitgetExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        count: fundingData.size })
+        count: fundingData.size,
+      })
       return fundingData
     } catch (error) {
-      logger.error({ msg: 'Failed to fetch funding data from exchange', function: 'BitgetExchange.fetchFundingData',
+      logger.error({
+        msg: 'Failed to fetch funding data from exchange',
+        function: 'BitgetExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
         endpoint: FUNDING_ENDPOINT,
-        error, })
+        error,
+      })
       return new Map()
     }
   }

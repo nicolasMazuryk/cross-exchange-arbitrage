@@ -16,25 +16,25 @@ class BitgetMessageParser implements PublicWebSocketMessageParser {
 
   parseOrderBookUpdate(data: any): OrderBookUpdate {
     const symbol = this.getUnifiedSymbol(data.arg?.instId || data.arg?.instId)
-    
+
     const orderbookData = data.data[0]
     return {
-        type: 'snapshot',
-        exchange: EXCHANGE_NAME,
-        symbol,
-        timestamp: +orderbookData.ts,
-        asks: orderbookData.asks.map(([price, quantity]: [string, string]) => ({
-            price: parseFloat(price),
-            quantity: parseFloat(quantity),
-            amount: parseFloat(price) * parseFloat(quantity),
-        })),
-        bids: orderbookData.bids.map(([price, quantity]: [string, string]) => ({
-            price: parseFloat(price),
-            quantity: parseFloat(quantity),
-            amount: parseFloat(price) * parseFloat(quantity),
-        })),
-        finalUpdateId: orderbookData.seq,
-        traceId: '', // Will be set by the message handler
+      type: 'snapshot',
+      exchange: EXCHANGE_NAME,
+      symbol,
+      timestamp: +orderbookData.ts,
+      asks: orderbookData.asks.map(([price, quantity]: [string, string]) => ({
+        price: parseFloat(price),
+        quantity: parseFloat(quantity),
+        amount: parseFloat(price) * parseFloat(quantity),
+      })),
+      bids: orderbookData.bids.map(([price, quantity]: [string, string]) => ({
+        price: parseFloat(price),
+        quantity: parseFloat(quantity),
+        amount: parseFloat(price) * parseFloat(quantity),
+      })),
+      finalUpdateId: orderbookData.seq,
+      traceId: '', // Will be set by the message handler
     }
   }
 }
@@ -58,11 +58,13 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected setupEventHandlers(batch: StreamBatch): void {
     batch.client.on('open', (data: any) => {
-      logger.debug({ msg: 'WebSocket connection opened', function: 'BitgetPublicWebSocketClient.setupEventHandlers.open',
+      logger.debug({
+        msg: 'WebSocket connection opened',
+        function: 'BitgetPublicWebSocketClient.setupEventHandlers.open',
         exchange: this.exchangeName,
         batchId: batch.id,
         symbolCount: batch.symbols.length,
-        wsKey: data.wsKey
+        wsKey: data.wsKey,
       })
       batch.isConnected = true
     })
@@ -71,20 +73,22 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
       logger.warn({
         msg: 'WebSocket connection closed',
         exchange: this.exchangeName,
-        batchId: batch.id
+        batchId: batch.id,
       })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('response', (data: any) => {
-      logger.debug({ msg: 'WebSocket reply received', function: 'BitgetPublicWebSocketClient.setupEventHandlers.response',
+      logger.debug({
+        msg: 'WebSocket reply received',
+        function: 'BitgetPublicWebSocketClient.setupEventHandlers.response',
         exchange: this.exchangeName,
         batchId: batch.id,
-        data
+        data,
       })
     })
-  
+
     batch.client.on('reconnect', (data: any) => {
       logger.info({
         msg: 'WebSocket automatically reconnecting',
@@ -100,7 +104,7 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
         msg: 'WebSocket reconnected successfully',
         exchange: this.exchangeName,
         batchId: batch.id,
-        wsKey: data?.wsKey
+        wsKey: data?.wsKey,
       })
       batch.isConnected = true
     })
@@ -110,14 +114,14 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
         msg: 'WebSocket error',
         exchange: this.exchangeName,
         batchId: batch.id,
-        error: JSON.stringify(error)
+        error: JSON.stringify(error),
       })
       batch.isConnected = false
       await this.handleConnectionError(batch)
     })
 
     batch.client.on('update', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async (traceId) => {
+      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
         try {
           if (this.messageParser.isOrderBookMessage(data)) {
             const update = this.messageParser.parseOrderBookUpdate(data)
@@ -129,7 +133,7 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
             msg: 'Error parsing WebSocket message',
             exchange: this.exchangeName,
             batchId: batch.id,
-            error
+            error,
           })
         }
       }).catch(error => {
@@ -153,4 +157,4 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
       })
     }
   }
-} 
+}
