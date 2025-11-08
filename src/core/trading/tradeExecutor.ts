@@ -34,17 +34,10 @@ export interface TradeResult {
   slippageUsd: number
   slippagePercent: number
   latencyMs: number
-  errorDetails?: {
-    stage: 'pre-check' | 'entry' | 'monitor' | 'exit'
-    message: string
-    exchange?: string
-  }
 }
 
 export interface TradeValidationResult {
   isValid: boolean
-  errors: string[]
-  warnings: string[]
   availableBalance: number
   requiredBalance: number
 }
@@ -73,7 +66,7 @@ export class TradeExecutor extends EventEmitter {
   /**
    * Execute a paired arbitrage trade across two exchanges
    */
-  async executeTrade(tradeParams: TradeParams): Promise<TradeResult> {
+  async executeTrade(tradeParams: TradeParams): Promise<TradeResult | null> {
     const { opportunity } = tradeParams
     const tradeId = generateTradeId()
     const startTime = Date.now()
@@ -83,36 +76,31 @@ export class TradeExecutor extends EventEmitter {
       logger.debug({
         msg: 'Skipping trade - pair already being processed',
         function: 'TradeExecutor.executeTrade',
+        tradeId,
         normalizedPair: opportunity.normalizedPair,
         buyExchange: opportunity.buyExchange,
         sellExchange: opportunity.sellExchange,
       })
-      return this.createErrorResult(
-        opportunity,
-        tradeId,
-        'pre-check',
-        `Pair ${opportunity.normalizedPair} is already being processed`
-      )
+      return null
     }
 
     this.processingPairs.add(opportunity.normalizedPair)
 
     try {
       // Pre-trade validation
-      const validation = await this.validateTrade(tradeParams)
+      const validation = await this.validateTrade(tradeId, tradeParams)
       if (!validation.isValid) {
-        return this.createErrorResult(
-          opportunity,
-          tradeId,
-          'pre-check',
-          [...validation.errors, ...validation.warnings].join('; ')
-        )
+        return null
       }
 
       logger.debug({ msg: 'Starting trade execution', function: 'TradeExecutor.executeTrade', tradeId, opportunity })
 
       // Execute the trade pair
       const entryTradeResult = await this.executeTradePair(tradeId, tradeParams)
+
+      if (!entryTradeResult) {
+        return null
+      }
 
       const latencyMs = Date.now() - startTime
       entryTradeResult.latencyMs = latencyMs
@@ -129,12 +117,7 @@ export class TradeExecutor extends EventEmitter {
         error,
       })
 
-      return this.createErrorResult(
-        opportunity,
-        tradeId,
-        'entry',
-        error instanceof Error ? error.message : String(error)
-      )
+      return null
     } finally {
       // Always release the pair lock
       this.processingPairs.delete(opportunity.normalizedPair)
@@ -144,17 +127,30 @@ export class TradeExecutor extends EventEmitter {
   /**
    * Validate trade parameters and account state
    */
-  private async validateTrade(tradeParams: TradeParams): Promise<TradeValidationResult> {
+  private async validateTrade(tradeId: string, tradeParams: TradeParams): Promise<TradeValidationResult> {
     const { opportunity } = tradeParams
-    const errors: string[] = []
-    const warnings: string[] = []
+    let hasErrors = false
 
     // Validate account state freshness
     // if (!this.accountStateManager.isExchangeStateFresh(tradeParams.buyExchange)) {
-    //   errors.push(`Account state for ${tradeParams.buyExchange} is stale`)
+    //   logger.warn({
+    //     msg: 'Account state is stale',
+    //     function: 'TradeExecutor.validateTrade',
+    //     tradeId,
+    //     normalizedPair: opportunity.normalizedPair,
+    //     exchange: tradeParams.buyExchange,
+    //   })
+    //   hasErrors = true
     // }
     // if (!this.accountStateManager.isExchangeStateFresh(tradeParams.sellExchange)) {
-    //   errors.push(`Account state for ${tradeParams.sellExchange} is stale`)
+    //   logger.warn({
+    //     msg: 'Account state is stale',
+    //     function: 'TradeExecutor.validateTrade',
+    //     tradeId,
+    //     normalizedPair: opportunity.normalizedPair,
+    //     exchange: tradeParams.sellExchange,
+    //   })
+    //   hasErrors = true
     // }
 
     // Calculate required USDT balance using orderAmountUsd from opportunity
@@ -165,10 +161,28 @@ export class TradeExecutor extends EventEmitter {
     const sellExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.sellExchange, 'USDT')
 
     if (buyExchangeBalance < requiredBalance) {
-      errors.push(`Insufficient balance on ${opportunity.buyExchange}: ${buyExchangeBalance} < ${requiredBalance}`)
+      logger.warn({
+        msg: 'Insufficient balance',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.buyExchange,
+        availableBalance: buyExchangeBalance,
+        requiredBalance,
+      })
+      hasErrors = true
     }
     if (sellExchangeBalance < requiredBalance) {
-      errors.push(`Insufficient balance on ${opportunity.sellExchange}: ${sellExchangeBalance} < ${requiredBalance}`)
+      logger.warn({
+        msg: 'Insufficient balance',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.sellExchange,
+        availableBalance: sellExchangeBalance,
+        requiredBalance,
+      })
+      hasErrors = true
     }
 
     // Check for conflicting orders
@@ -179,10 +193,28 @@ export class TradeExecutor extends EventEmitter {
     const conflictingSellOrders = sellExchangeOrders.filter(o => o.symbol === opportunity.sellExchangeSymbol)
 
     if (conflictingBuyOrders.length > 0) {
-      warnings.push(`Active orders found on ${opportunity.buyExchange} for ${opportunity.buyExchangeSymbol}`)
+      logger.warn({
+        msg: 'Active orders found',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.buyExchange,
+        symbol: opportunity.buyExchangeSymbol,
+        activeOrdersCount: conflictingBuyOrders.length,
+      })
+      hasErrors = true
     }
     if (conflictingSellOrders.length > 0) {
-      warnings.push(`Active orders found on ${opportunity.sellExchange} for ${opportunity.sellExchangeSymbol}`)
+      logger.warn({
+        msg: 'Active orders found',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.sellExchange,
+        symbol: opportunity.sellExchangeSymbol,
+        activeOrdersCount: conflictingSellOrders.length,
+      })
+      hasErrors = true
     }
 
     // Calculate what the position would be AFTER executing this trade
@@ -217,20 +249,36 @@ export class TradeExecutor extends EventEmitter {
     }
 
     if (buyPositionAfterTradeUsd > config.trading.maxPositionAmountUsd) {
-      errors.push(
-        `Max position USD limit would be exceeded on ${opportunity.buyExchange}: position after trade ${buyPositionAfterTradeUsd.toFixed(2)} USD > max position limit ${config.trading.maxPositionAmountUsd.toFixed(2)} USD, new trade USD: ${opportunity.orderAmountUsd.toFixed(2)}`
-      )
+      logger.debug({
+        msg: 'Max position USD limit would be exceeded',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.buyExchange,
+        symbol: opportunity.buyExchangeSymbol,
+        positionAfterTradeUsd: buyPositionAfterTradeUsd,
+        maxPositionAmountUsd: config.trading.maxPositionAmountUsd,
+        newTradeUsd: opportunity.orderAmountUsd,
+      })
+      hasErrors = true
     }
     if (sellPositionAfterTradeUsd > config.trading.maxPositionAmountUsd) {
-      errors.push(
-        `Max position USD limit would be exceeded on ${opportunity.sellExchange}: position after trade ${sellPositionAfterTradeUsd.toFixed(2)} USD > max position limit ${config.trading.maxPositionAmountUsd.toFixed(2)} USD, new trade USD: ${opportunity.orderAmountUsd.toFixed(2)}`
-      )
+      logger.debug({
+        msg: 'Max position USD limit would be exceeded',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.sellExchange,
+        symbol: opportunity.sellExchangeSymbol,
+        positionAfterTradeUsd: sellPositionAfterTradeUsd,
+        maxPositionAmountUsd: config.trading.maxPositionAmountUsd,
+        newTradeUsd: opportunity.orderAmountUsd,
+      })
+      hasErrors = true
     }
 
     return {
-      isValid: errors.length === 0 && warnings.length === 0,
-      errors,
-      warnings,
+      isValid: !hasErrors,
       availableBalance: Math.min(buyExchangeBalance, sellExchangeBalance),
       requiredBalance,
     }
@@ -272,7 +320,7 @@ export class TradeExecutor extends EventEmitter {
   /**
    * Execute the actual trade pair with parallel order placement
    */
-  private async executeTradePair(tradeId: string, tradeParams: TradeParams): Promise<TradeResult> {
+  private async executeTradePair(tradeId: string, tradeParams: TradeParams): Promise<TradeResult | null> {
     const { opportunity } = tradeParams
     const buyClient = this.restClients.get(opportunity.buyExchange)
     const sellClient = this.restClients.get(opportunity.sellExchange)
@@ -370,7 +418,7 @@ export class TradeExecutor extends EventEmitter {
       }
     } catch (error) {
       logger.error({
-        msg: 'Error executing trade pair',
+        msg: 'Trade pair execution failed',
         function: 'TradeExecutor.executeTradePair',
         tradeId,
         buyExchange: opportunity.buyExchange,
@@ -387,12 +435,7 @@ export class TradeExecutor extends EventEmitter {
       // Rollback logic: cancel any successful orders and handle filled legs
       await this.rollbackFailedTrade(tradeId, tradeParams, buyClient, sellClient)
 
-      return this.createErrorResult(
-        opportunity,
-        tradeId,
-        'entry',
-        error instanceof Error ? error.message : String(error)
-      )
+      return null
     }
   }
 
@@ -624,33 +667,6 @@ export class TradeExecutor extends EventEmitter {
     if (!exchangeConfig) return 0
 
     return exchangeConfig.fees[feeType]
-  }
-
-  /**
-   * Create error result
-   */
-  private createErrorResult(
-    opportunity: ArbitrageOpportunity,
-    tradeId: string,
-    stage: 'pre-check' | 'entry' | 'monitor' | 'exit',
-    message: string
-  ): TradeResult {
-    return {
-      id: tradeId,
-      opportunity,
-      success: false,
-      buyOrder: null,
-      sellOrder: null,
-      feesUsd: 0,
-      feesPercent: 0,
-      slippageUsd: 0,
-      slippagePercent: 0,
-      latencyMs: 0,
-      errorDetails: {
-        stage,
-        message,
-      },
-    }
   }
 
   /**

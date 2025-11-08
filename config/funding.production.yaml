@@ -1,0 +1,130 @@
+app:
+  name: "ArbiNet"
+  version: "1.0.0"
+  logLevel: "info"
+
+redis:
+  # url: "redis://host.docker.internal:6379"  # Docker Container (local testing)
+  url: "redis://cache-trading-bots.y8flew.ng.0001.euc1.cache.amazonaws.com:6379"  # ElastiCache Redis
+  keyPrefix: "funding:"
+
+exchanges:
+  enabled:
+    - "binance"
+    - "bybit"
+    - "okx"
+    - "bitget"
+    - "gateio"
+  binance:
+    maxStreamsPerConnection: 1000 # max 1024 streams per connection
+    reconnectInterval: 5000
+    fees:
+      maker: 0.02 # maker fee in percent (0.02%)
+      taker: 0.05 # taker fee in percent (0.05%)
+    ignoredMarkets: []
+  bybit:
+    maxStreamsPerConnection: 50 # max 60 streams per connection
+    reconnectInterval: 5000
+    fees:
+      maker: 0.036 # maker fee in percent (0.036%)
+      taker: 0.10 # taker fee in percent (0.10%)
+    ignoredMarkets:
+      - "ETHBTC/USDT:USDT"
+      - "USDC/USDT:USDT"
+      - "SLF/USDT:USDT"
+  okx:
+    maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
+    reconnectInterval: 5000
+    fees:
+      maker: 0.02 # maker fee in percent (0.02%)
+      taker: 0.05 # taker fee in percent (0.05%)
+    ignoredMarkets: []
+  bitget:
+    maxStreamsPerConnection: 500 # max connections per IP - 100; max subscriptions per connection - 1000; max subscription messages per hour - 240 per connection; max messages per second per connection - 10 (includes PING, subs)
+    reconnectInterval: 5000
+    fees:
+      maker: 0.036 # maker fee in percent (0.036%)
+      taker: 0.10 # taker fee in percent (0.10%)
+    ignoredMarkets:
+      - "DegenReborn/USDT:USDT"
+  gateio:
+    maxStreamsPerConnection: 100
+    reconnectInterval: 5000
+    fees:
+      maker: 0.02 # maker fee in percent (0.02%)
+      taker: 0.05 # taker fee in percent (0.05%)
+    ignoredMarkets: []
+
+trackedPairs:
+  - BTCUSDT
+  - ETHUSDT
+  - BNBUSDT
+  - ADAUSDT
+  - DOGEUSDT
+
+trading:
+  orderAmountUsd: 15  # in USDT, default order size for arbitrage opportunities
+  maxPositionAmountUsd: 21  # maximum position amount in USD
+  minBalanceBufferPercent: 10  # minimum balance buffer in percent
+  orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
+  monitor:
+    maxHoldTimeMs: 31536000000  # 365 days max hold time
+    checkIntervalMs: 5000  # 5 second check interval
+    # Exit Persistence Validation
+    exitMinPersistenceMs: 1000  # minimum time window for exit condition persistence (2 seconds)
+    exitMinConsecutiveSnapshots: 3  # minimum consecutive snapshots showing the exit condition
+    exitCandidateCleanupMs: 5000  # cleanup stale exit candidates after 10 seconds
+
+arbitrage: # pairs require > $20 to enter minimum order size
+  blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT', 'AAVE/USDT:USDT', 'H/USDT:USDT']  # pairs to exclude from arbitrage
+  minConfidenceScore: 0.7  # minimum confidence score for opportunities (0-1 range)
+  maxMarketSpreadPercent: 0.3  # maximum market spread width within an exchange in percent
+  maxAnomalySpreadThresholdPercent: 10.0  # maximum anomaly profit threshold in percent
+  maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
+  orderAmountToleranceMinPercent: 60  # minimum order amount tolerance in percent of order amount
+  orderAmountToleranceMaxPercent: 140  # maximum order amount tolerance in percent of order amount
+  # Temporal Persistence Validation
+  minPersistenceMs: 1000  # minimum time window for opportunity persistence (500ms)
+  minConsecutiveSnapshots: 3  # minimum consecutive snapshots showing the opportunity
+  candidateCleanupMs: 5000  # cleanup stale candidates after 5 seconds
+
+accountSync:
+  maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)
+  snapshotIntervalMs: 180000  # interval for periodic snapshots in milliseconds (3 minutes)
+
+funding:
+  fetchIntervalMs: 15000  # fetch funding rates every 60 seconds using browser automation
+  maxDataAgeMs: 120000  # consider funding data stale after 2 minutes
+  supportedExchanges:
+    - "binance"
+    - "bybit"
+    - "okx"
+    - "bitget"
+  # Funding Arbitrage Projection Settings
+  projectionHours: 20  # number of hours to project funding profitability
+
+strategy:
+  # Funding Arbitrage Strategy Configuration
+  funding:
+    enabled: true  # Enable/disable funding arbitrage strategy
+    windowStart: 14400  # Start execution window in seconds before next funding event
+    windowEnd: 30  # End execution window in seconds before next funding event
+    minFundingProfitPercent: 0.30  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
+    minTotalProfitPercent: 0.20  # Minimum acceptable net profit in percent after all costs
+    # Exit Conditions
+    convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
+    minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit
+    spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold
+  
+  # Spread Arbitrage Strategy Configuration
+  spread:
+    enabled: false  # Enable/disable spread arbitrage strategy
+    windowStart: 300  # Start execution window in seconds after previous funding event
+    windowEnd: 60  # End execution window in seconds before next funding event
+    windowEndClose: 60  # Close execution window in seconds before next funding event (for exits)
+    minSpreadProfitPercent: 0.8  # Minimum spread profit in percent after costs
+    minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
+    negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative
+    # Exit Conditions
+    convergenceThresholdPercent: 0.0  # convergence threshold in percent for exits
+    spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold

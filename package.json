@@ -14,7 +14,9 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "deploy": "bash docker/deploy.sh",
+    "terraform": "cd terraform && terraform apply"
   },
   "dependencies": {
     "@hyperdrive-eng/mcp-nodejs-debugger": "^0.2.2",

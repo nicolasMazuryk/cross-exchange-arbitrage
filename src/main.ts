@@ -12,7 +12,7 @@ async function main() {
       logger.info({
         msg: `Starting ${config.app.name}...`,
         version: config.app.version,
-        environment: config.app.environment,
+        environment: process.env.NODE_ENV,
         logLevel: config.app.logLevel,
         nodeVersion: process.version,
       })
@@ -38,4 +38,8 @@ async function main() {
 }
 
 // Start the application
-main()
+main().catch((error: Error) => {
+  console.error('Failed to start application:', error)
+  logger.fatal({ msg: 'Failed to start application', error })
+  process.exit(1)
+})

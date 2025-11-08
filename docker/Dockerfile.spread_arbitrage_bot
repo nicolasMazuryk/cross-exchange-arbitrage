@@ -1,0 +1,39 @@
+FROM --platform=linux/arm64 node:22.12-slim
+
+WORKDIR /app
+
+COPY ../config/spread.production.yaml ./config/
+
+COPY ../package*.json ./
+COPY ../tsconfig.json ./
+
+COPY ../src/ ./src/
+
+RUN npm ci
+# Install Playwright browsers (required for funding data fetching)
+RUN npx playwright install --with-deps chromium
+
+RUN npm run build
+
+ENV NODE_ENV=production
+ENV STRATEGY=spread
+
+ENV BINANCE_API_KEY=REDACTED
+ENV BINANCE_API_SECRET=REDACTED
+
+ENV BYBIT_API_KEY=REDACTED
+ENV BYBIT_API_SECRET=REDACTED
+
+ENV OKX_API_KEY=REDACTED
+ENV OKX_API_SECRET=REDACTED
+ENV OKX_API_PASS=REDACTED
+
+ENV BITGET_API_KEY=REDACTED
+ENV BITGET_API_SECRET=REDACTED
+ENV BITGET_API_PASS=REDACTED
+
+EXPOSE 3000
+
+# main accounts for all exchanges
+
+CMD ["node", "dist/main.js"]

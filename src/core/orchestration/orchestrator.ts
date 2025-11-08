@@ -102,6 +102,9 @@ export class Orchestrator extends EventEmitter {
       // Stage 8: Setup graceful shutdown
       this.setupGracefulShutdown()
 
+      // Stage 9: Restore open tracked trades from Redis
+      await this.tradeMonitor!.restoreState()
+
       this.isInitialized = true
       logger.info({ msg: '✅ ArbiNet Orchestrator initialized successfully', function: 'Orchestrator.initialize' })
     } catch (error) {
@@ -430,8 +433,8 @@ export class Orchestrator extends EventEmitter {
       // Set up event listeners for trading
       this.setupTradingEventListeners()
 
-      // Start the trade monitor (restores state from Redis during start)
-      await this.tradeMonitor.start()
+      // Start the trade monitor
+      this.tradeMonitor.start()
 
       logger.info({ msg: '✅ Trading services initialized', function: 'Orchestrator.initializeTradingServices' })
     } catch (error) {
@@ -474,7 +477,7 @@ export class Orchestrator extends EventEmitter {
         // Execute the trade
         const result = await this.tradeExecutor.executeTrade(tradeParams)
 
-        if (result.success) {
+        if (result && result.success) {
           // Add successful trade to monitoring
           this.tradeMonitor.addTrade(result)
 
@@ -485,11 +488,12 @@ export class Orchestrator extends EventEmitter {
             latencyMs: result.latencyMs,
           })
         } else {
-          logger.warn({
-            msg: 'Trade execution failed',
+          logger.debug({
+            msg: 'Failed to execute arbitrage opportunity',
             function: 'Orchestrator.processArbitrageOpportunities',
-            tradeId: result.id,
-            error: result.errorDetails?.message,
+            normalizedPair: opportunity.normalizedPair,
+            buyExchange: opportunity.buyExchange,
+            sellExchange: opportunity.sellExchange,
           })
         }
       } catch (error) {

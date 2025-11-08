@@ -10,7 +10,7 @@ export interface LogData {
 }
 
 const LOG_LEVEL = yamlConfig.app.logLevel as LogLevel
-const IS_PRODUCTION = yamlConfig.app.environment === 'production'
+const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 
 const serializers = {
   err: pino.stdSerializers.err,
@@ -63,6 +63,22 @@ const createBaseLogger = () => {
     serializers,
     transport: {
       targets: [
+        {
+          target: 'pino/file',
+          level: LOG_LEVEL,
+          options: {
+            destination: 1, // stdout - includes errors since error level is higher than LOG_LEVEL
+            ignore: 'pid,hostname',
+          },
+        },
+        {
+          target: 'pino/file',
+          level: 'error',
+          options: {
+            destination: 2, // stderr
+            ignore: 'pid,hostname',
+          },
+        },
         {
           target: 'pino/file',
           level: 'error',

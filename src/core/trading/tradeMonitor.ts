@@ -412,14 +412,11 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Start monitoring trades
    */
-  async start(): Promise<void> {
+  start(): void {
     if (this.isRunning) {
       logger.warn({ msg: 'TradeMonitor is already running', function: 'TradeMonitor.start' })
       return
     }
-
-    // Restore open trades from Redis
-    await this.restoreState()
 
     this.isRunning = true
     // Setup real-time orderbook event listeners
@@ -450,8 +447,8 @@ export class TradeMonitor extends EventEmitter {
   private setupOrderbookEventListeners(): void {
     // Listen for top of book updates from orderbook manager
     this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
-      TraceContext.runWithExistingTrace(topOfBook.traceId, 'trade-monitor', () => {
-        this.handleOrderbookUpdate(topOfBook)
+      TraceContext.runWithExistingTrace(topOfBook.traceId, 'trade-monitor', async () => {
+        await this.handleOrderbookUpdate(topOfBook)
       })
     })
   }
@@ -459,7 +456,7 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Handle real-time orderbook updates
    */
-  private handleOrderbookUpdate(topOfBook: TopOfBook): void {
+  private async handleOrderbookUpdate(topOfBook: TopOfBook): Promise<void> {
     if (!this.isRunning) return
 
     const { exchange, symbol } = topOfBook
@@ -479,6 +476,19 @@ export class TradeMonitor extends EventEmitter {
 
         // Process each affected trade
         for (const trade of affectedTrades) {
+          // Skip if trade is already closed or in error state
+          if (trade.status !== 'open') {
+            logger.trace({
+              msg: 'Trade already closed or in error state, skipping',
+              function: 'TradeMonitor.handleOrderbookUpdate',
+              tradeId: trade.id,
+              status: trade.status,
+              exchange,
+              symbol,
+            })
+            continue
+          }
+
           // Prevent race conditions by checking if trade is already being processed
           if (this.processingTrades.has(trade.id)) {
             logger.trace({
@@ -493,7 +503,7 @@ export class TradeMonitor extends EventEmitter {
 
           try {
             this.processingTrades.add(trade.id)
-            this.processTradeExitConditions(trade, exchange)
+            await this.processTradeExitConditions(trade, exchange)
           } catch (error) {
             logger.error({
               msg: 'Error processing trade exit conditions',
@@ -1445,7 +1455,7 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Restore state from Redis
    */
-  private async restoreState(): Promise<void> {
+  public async restoreState(): Promise<void> {
     if (!this.state.isRedisConnected()) {
       logger.error({ msg: 'Redis not connected, skipping state restoration', function: 'TradeMonitor.restoreState' })
       return

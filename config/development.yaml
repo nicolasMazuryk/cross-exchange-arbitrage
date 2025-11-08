@@ -1,7 +1,6 @@
 app:
   name: "ArbiNet"
   version: "1.0.0"
-  environment: "development"
   logLevel: "info"
 
 redis:
@@ -68,7 +67,7 @@ trading:
   minBalanceBufferPercent: 10  # minimum balance buffer in percent
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   monitor:
-    maxHoldTimeMs: 86400000  # 24 hours max hold time
+    maxHoldTimeMs: 31536000000  # 365 days max hold time
     checkIntervalMs: 5000  # 5 second check interval
     # Exit Persistence Validation
     exitMinPersistenceMs: 1000  # minimum time window for exit condition persistence (2 seconds)

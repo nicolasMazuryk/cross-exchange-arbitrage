@@ -3,11 +3,17 @@ version: '3.8'
 services:
   redis:
     image: redis:8-alpine
-    container_name: arbinet-redis
+    container_name: redis
     ports:
       - "6379:6379"
     volumes:
       - ./redis-data:/data
     command: redis-server --appendonly yes
     restart: unless-stopped
+    networks:
+      - arbinet
+
+networks:
+  arbinet:
+    driver: bridge
 

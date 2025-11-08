@@ -3,26 +3,41 @@ import { parse } from 'yaml'
 import fs from 'fs'
 import path from 'path'
 
-// Load environment variables
-try {
-  dotenv.config()
-} catch (error) {
-  console.error({ msg: 'Failed to load environment variables from .env', function: 'config.loadEnv', error })
-  throw error
+// Load environment variables only in development
+const nodeEnv = process.env.NODE_ENV || 'development'
+if (nodeEnv === 'development') {
+  try {
+    dotenv.config()
+  } catch (error) {
+    console.error({ msg: 'Failed to load environment variables from .env', function: 'config.loadEnv', error })
+    throw error
+  }
 }
 
-// Load YAML config with error handling
 let yamlConfig: any = {}
 try {
-  const configPath = path.join(process.cwd(), 'config', `${process.env.NODE_ENV || 'development'}.yaml`)
+  let configFileName: string
+  if (nodeEnv === 'development') {
+    configFileName = 'development.yaml'
+  } else if (nodeEnv === 'production') {
+    configFileName = `${process.env.STRATEGY}.production.yaml`
+  } else {
+    configFileName = `${nodeEnv}.yaml`
+  }
+
+  const configPath = path.join(process.cwd(), 'config', configFileName)
   const configContent = fs.readFileSync(configPath, 'utf8')
   yamlConfig = parse(configContent)
 
   console.info({
     msg: 'Configuration loaded successfully',
     function: 'config.loadYamlConfig',
-    environment: process.env.NODE_ENV || 'development',
+    environment: nodeEnv,
+    configFile: configFileName,
   })
+
+  console.log(yamlConfig)
+
 } catch (error) {
   console.error({ msg: 'Failed to load YAML configuration file', function: 'config.loadYamlConfig', error })
   throw error
@@ -31,7 +46,6 @@ try {
 interface AppConfig {
   name: string
   version: string
-  environment: string
   logLevel: string
 }
 
@@ -141,7 +155,6 @@ const config: Config = {
   app: {
     name: yamlConfig?.app?.name,
     version: yamlConfig?.app?.version,
-    environment: yamlConfig?.app?.environment,
     logLevel: yamlConfig?.app?.logLevel,
   },
   redis: {
