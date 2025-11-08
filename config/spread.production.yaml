@@ -5,7 +5,7 @@ app:
 
 redis:
   # url: "redis://host.docker.internal:6379"  # Docker Container (local testing)
-  url: "redis://cache-trading-bots.y8flew.ng.0001.euc1.cache.amazonaws.com:6379"  # ElastiCache Redis
+  url: "redis://trading-bots-cache.y8flew.ng.0001.euc1.cache.amazonaws.com:6379"  # ElastiCache Redis
   keyPrefix: "spread:"
 
 exchanges:

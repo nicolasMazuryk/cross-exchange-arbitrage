@@ -15,8 +15,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "deploy": "bash docker/deploy.sh",
-    "terraform": "cd terraform && terraform apply"
+    "terraform": "cd terraform && terraform apply",
+    "deploy": "bash docker/deploy.sh"
   },
   "dependencies": {
     "@hyperdrive-eng/mcp-nodejs-debugger": "^0.2.2",

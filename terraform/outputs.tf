@@ -31,3 +31,18 @@ output "ecs_cluster_arn" {
 #     spread_arbitrage_bot  = aws_cloudwatch_log_group.spread_arbitrage_bot.name
 #   }
 # }
+
+output "elasticache_primary_endpoint" {
+  description = "Primary endpoint for ElastiCache Redis"
+  value       = aws_elasticache_replication_group.trading_bots_cache.primary_endpoint_address
+}
+
+output "elasticache_reader_endpoint" {
+  description = "Reader endpoint for ElastiCache Redis"
+  value       = aws_elasticache_replication_group.trading_bots_cache.reader_endpoint_address
+}
+
+output "elasticache_redis_url" {
+  description = "Redis connection URL"
+  value       = "redis://${aws_elasticache_replication_group.trading_bots_cache.primary_endpoint_address}:6379"
+}

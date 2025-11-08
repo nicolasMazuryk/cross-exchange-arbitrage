@@ -60,13 +60,29 @@ resource "aws_default_subnet" "default_a" {
   }
 }
 
+resource "aws_default_subnet" "default_b" {
+  availability_zone = "${var.aws_region}b"
+
+  tags = {
+    Name = "default-b"
+  }
+}
+
+resource "aws_default_subnet" "default_c" {
+  availability_zone = "${var.aws_region}c"
+
+  tags = {
+    Name = "default-c"
+  }
+}
+
 ###############################################################################
 # Security Group for Fargate Tasks
 # - Outbound allowed by default
 # - Inbound restricted (since you probably only need outbound to exchanges)
 ###############################################################################
-resource "aws_security_group" "trading_bot_security_group" {
-  name        = "trading-bot-security-group"
+resource "aws_security_group" "trading_bots_security_group" {
+  name        = "trading-bots-security-group"
   description = "Security group for trading bot Fargate tasks"
   vpc_id      = aws_default_vpc.default.id
 
@@ -88,7 +104,7 @@ resource "aws_security_group" "trading_bot_security_group" {
   }
 
   tags = {
-    Name = "trading-bot-security-group"
+    Name = "trading-bots-security-group"
   }
 }
 
@@ -239,7 +255,7 @@ resource "aws_ecs_service" "services" {
 
   network_configuration {
     subnets          = [aws_default_subnet.default_a.id]
-    security_groups  = [aws_security_group.trading_bot_security_group.id]
+    security_groups  = [aws_security_group.trading_bots_security_group.id]
     assign_public_ip = true
   }
 
@@ -418,4 +434,93 @@ resource "aws_iam_policy" "cloudwatch_metrics_policy" {
 resource "aws_iam_role_policy_attachment" "attach_cloudwatch_metrics_policy" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = aws_iam_policy.cloudwatch_metrics_policy.arn
+}
+
+###############################################################################
+# ElastiCache Redis
+###############################################################################
+# Security Group for ElastiCache
+resource "aws_security_group" "elasticache_security_group" {
+  name        = "elasticache-security-group"
+  description = "Allows access to ElastiCache from Bastion and ECS Fargate"
+  vpc_id      = aws_default_vpc.default.id
+
+  ingress {
+    description     = "Allow Redis access from ECS Fargate tasks"
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.trading_bots_security_group.id]
+  }
+
+  ingress {
+    description     = "Allow Redis access from Bastion"
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [data.aws_security_group.bastion.id]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "elasticache-security-group"
+  }
+}
+
+# Data source to get the default security group
+data "aws_security_group" "default" {
+  name   = "default"
+  vpc_id = aws_default_vpc.default.id
+}
+
+# Data source to get the bastion security group
+data "aws_security_group" "bastion" {
+  name   = "bastion"
+  vpc_id = aws_default_vpc.default.id
+}
+
+# ElastiCache Subnet Group
+resource "aws_elasticache_subnet_group" "trading_bots_cache_subnet" {
+  name       = "trading-bots-cache-subnet"
+  subnet_ids = [aws_default_subnet.default_a.id, aws_default_subnet.default_b.id, aws_default_subnet.default_c.id]
+
+  tags = {
+    Name        = "trading-bots-cache-subnet"
+    Description = "Subnet for ElastiCache for trading-bots"
+  }
+}
+
+# ElastiCache Replication Group (Redis)
+resource "aws_elasticache_replication_group" "trading_bots_cache" {
+  replication_group_id       = "trading-bots-cache"
+  description                = "Redis for trading-bots"
+  engine                     = "redis"
+  engine_version             = "7.1"
+  node_type                  = "cache.t4g.micro"
+  port                       = 6379
+  parameter_group_name       = "default.redis7"
+  num_cache_clusters         = 2
+  automatic_failover_enabled = true
+  multi_az_enabled           = false
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = false # No TLS
+  auto_minor_version_upgrade = true
+  snapshot_retention_limit   = 0     # Automatic backups - Disabled (0 = no backups)
+
+  subnet_group_name  = aws_elasticache_subnet_group.trading_bots_cache_subnet.name
+  security_group_ids = [
+    aws_security_group.elasticache_security_group.id,
+    data.aws_security_group.default.id
+  ]
+
+  tags = {
+    Name = "trading-bots-cache"
+  }
 }
