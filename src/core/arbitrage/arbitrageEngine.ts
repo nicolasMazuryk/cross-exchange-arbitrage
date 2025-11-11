@@ -359,16 +359,18 @@ export class ArbitrageEngine extends EventEmitter {
       entryBuySlippageCosts + entrySellSlippageCosts + exitBuySlippageCosts + exitSellSlippageCosts
 
     // 3. BUY/SELL SPREADS (Market Spreads)
-    const buyMarketSpreadPercent = ((buyBook.asks[0].price - buyBook.bids[0].price) / buyBook.bids[0].price) * 100
+    // When buying, we pay the ask price, so spread cost should be based on ask
+    // When selling, we receive the bid price, so spread cost should be based on bid
+    const buyMarketSpreadPercent = ((buyBook.asks[0].price - buyBook.bids[0].price) / buyBook.asks[0].price) * 100
     const sellMarketSpreadPercent = ((sellBook.asks[0].price - sellBook.bids[0].price) / sellBook.bids[0].price) * 100
 
     const buyMarketSpreadCosts =
       normalizedVolume *
-      buyMetadataService.normalizePrice(buyBook.bids[0].price, buyExchangeSymbol) *
+      buyMetadataService.normalizePrice(buyBook.asks[0].price, buyExchangeSymbol) *
       (buyMarketSpreadPercent / 100)
     const sellMarketSpreadCosts =
       normalizedVolume *
-      sellMetadataService.normalizePrice(sellBook.asks[0].price, sellExchangeSymbol) *
+      sellMetadataService.normalizePrice(sellBook.bids[0].price, sellExchangeSymbol) *
       (sellMarketSpreadPercent / 100)
 
     const totalSpreadCosts = buyMarketSpreadCosts + sellMarketSpreadCosts

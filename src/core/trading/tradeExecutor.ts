@@ -185,14 +185,14 @@ export class TradeExecutor extends EventEmitter {
       hasErrors = true
     }
 
-    // Check for conflicting orders
+    // Check for active orders for the same symbol
     const buyExchangeOrders = this.accountStateManager.getActiveOrders(opportunity.buyExchange)
     const sellExchangeOrders = this.accountStateManager.getActiveOrders(opportunity.sellExchange)
 
-    const conflictingBuyOrders = buyExchangeOrders.filter(o => o.symbol === opportunity.buyExchangeSymbol)
-    const conflictingSellOrders = sellExchangeOrders.filter(o => o.symbol === opportunity.sellExchangeSymbol)
+    const activeBuyOrders = buyExchangeOrders.filter(o => o.symbol === opportunity.buyExchangeSymbol)
+    const activeSellOrders = sellExchangeOrders.filter(o => o.symbol === opportunity.sellExchangeSymbol)
 
-    if (conflictingBuyOrders.length > 0) {
+    if (activeBuyOrders.length > 0) {
       logger.warn({
         msg: 'Active orders found',
         function: 'TradeExecutor.validateTrade',
@@ -200,11 +200,11 @@ export class TradeExecutor extends EventEmitter {
         normalizedPair: opportunity.normalizedPair,
         exchange: opportunity.buyExchange,
         symbol: opportunity.buyExchangeSymbol,
-        activeOrdersCount: conflictingBuyOrders.length,
+        activeOrdersCount: activeBuyOrders.length,
       })
       hasErrors = true
     }
-    if (conflictingSellOrders.length > 0) {
+    if (activeSellOrders.length > 0) {
       logger.warn({
         msg: 'Active orders found',
         function: 'TradeExecutor.validateTrade',
@@ -212,7 +212,50 @@ export class TradeExecutor extends EventEmitter {
         normalizedPair: opportunity.normalizedPair,
         exchange: opportunity.sellExchange,
         symbol: opportunity.sellExchangeSymbol,
-        activeOrdersCount: conflictingSellOrders.length,
+        activeOrdersCount: activeSellOrders.length,
+      })
+      hasErrors = true
+    }
+
+    // Check for opposite-direction positions on the same exchange
+    // If buyExchange already has a SHORT position, we cannot open a LONG (BUY) position
+    const buyExchangeOppositePosition = this.accountStateManager.getPosition(
+      opportunity.buyExchange,
+      opportunity.buyExchangeSymbol,
+      'SHORT'
+    )
+    if (buyExchangeOppositePosition) {
+      logger.warn({
+        msg: 'Opposite direction position (SHORT) exists on BUY exchange - cannot open new (LONG) position',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.buyExchange,
+        symbol: opportunity.buyExchangeSymbol,
+        existingPositionSide: 'SHORT',
+        newPositionSide: 'LONG',
+        existingPositionSize: buyExchangeOppositePosition.size,
+      })
+      hasErrors = true
+    }
+
+    // If sellExchange already has a LONG position, we cannot open a SHORT (SELL) position
+    const sellExchangeOppositePosition = this.accountStateManager.getPosition(
+      opportunity.sellExchange,
+      opportunity.sellExchangeSymbol,
+      'LONG'
+    )
+    if (sellExchangeOppositePosition) {
+      logger.warn({
+        msg: 'Opposite direction position (LONG) exists on SELL exchange - cannot open new (SHORT) position',
+        function: 'TradeExecutor.validateTrade',
+        tradeId,
+        normalizedPair: opportunity.normalizedPair,
+        exchange: opportunity.sellExchange,
+        symbol: opportunity.sellExchangeSymbol,
+        existingPositionSide: 'LONG',
+        newPositionSide: 'SHORT',
+        existingPositionSize: sellExchangeOppositePosition.size,
       })
       hasErrors = true
     }
