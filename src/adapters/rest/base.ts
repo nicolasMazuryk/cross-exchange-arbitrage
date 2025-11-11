@@ -182,6 +182,44 @@ export abstract class BaseExchange implements RestClientInterface {
     return this.exchangeId
   }
 
+  async fetchFundingHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
+    try {
+      return await this.exchange.fetchFundingHistory(symbol, since, limit, params)
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to fetch funding history from exchange',
+        function: 'BaseExchange.fetchFundingHistory',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        symbol,
+        since,
+        limit,
+        params,
+        error,
+      })
+      throw error
+    }
+  }
+
+  async fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
+    try {
+      return await this.exchange.fetchFundingRateHistory(symbol, since, limit, params)
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to fetch funding rate history from exchange',
+        function: 'BaseExchange.fetchFundingRateHistory',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        symbol,
+        since,
+        limit,
+        params,
+        error,
+      })
+      throw error
+    }
+  }
+
   /**
    * Abstract method to fetch funding data from the exchange
    * Must be implemented by each exchange with their specific logic
