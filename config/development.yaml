@@ -108,7 +108,7 @@ strategy:
     enabled: true  # Enable/disable funding arbitrage strategy
     windowStart: 14400  # Start execution window in seconds before next funding event
     windowEnd: 30  # End execution window in seconds before next funding event
-    minFundingProfitPercent: 0.20  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
+    minFundingProfitPercent: 0.00  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent

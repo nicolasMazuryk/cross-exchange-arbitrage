@@ -20,6 +20,7 @@ interface DepthSimulationResult {
   avgExecutionPrice: number
   avgNormalizedExecutionPrice: number
   slippagePercent: number
+  hasError: boolean
 }
 
 interface OpportunityScore {
@@ -232,6 +233,7 @@ export class ArbitrageEngine extends EventEmitter {
   ): DepthSimulationResult {
     let remainingVolume = exchangeVolume
     let weightedPrice = 0
+    let hasError = false
     const basePrice = orderbookSide[0].price
 
     for (const level of orderbookSide) {
@@ -244,6 +246,7 @@ export class ArbitrageEngine extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
+      hasError = true
       if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
         logger.warn({
           msg: 'Orderbook cannot fully fill requested volume',
@@ -270,6 +273,7 @@ export class ArbitrageEngine extends EventEmitter {
       avgExecutionPrice,
       avgNormalizedExecutionPrice: metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol),
       slippagePercent,
+      hasError,
     }
   }
 
@@ -397,7 +401,7 @@ export class ArbitrageEngine extends EventEmitter {
       this.calculateConfidenceScore(buyBook, buyExchange, normalizedVolume, buyMarketSpreadPercent),
       this.calculateConfidenceScore(sellBook, sellExchange, normalizedVolume, sellMarketSpreadPercent)
     )
-
+    
     return {
       estimatedProfitUsd,
       estimatedProfitPercent,
@@ -835,7 +839,6 @@ export class ArbitrageEngine extends EventEmitter {
       )
 
       if (opportunities.length > 0) {
-        // Emit opportunities for trade execution
         this.emit('opportunities', opportunities)
       }
     } catch (error) {
@@ -1174,6 +1177,10 @@ export class ArbitrageEngine extends EventEmitter {
       sellExchangeSymbol,
       sellMetadataService
     )
+
+    if (entryBuySimulation.hasError || entrySellSimulation.hasError || exitBuySimulation.hasError || exitSellSimulation.hasError) {
+      return
+    }
 
     // === FUNDING PROJECTION ===
     const orderAmountAfterSlippageUsd = entryBuySimulation.avgNormalizedExecutionPrice * finalNormalizedVolume

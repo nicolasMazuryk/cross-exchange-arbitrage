@@ -21,6 +21,7 @@ interface DepthSimulationResult {
   avgExecutionPrice: number
   avgNormalizedExecutionPrice: number
   slippagePercent: number
+  hasError: boolean
 }
 
 // Core interfaces
@@ -915,6 +916,10 @@ export class TradeMonitor extends EventEmitter {
         sellMetadataService
       )
 
+      if (buyExitSimulation.hasError || sellExitSimulation.hasError) {
+        return null
+      }
+
       return {
         avgBuyExecutionPrice: buyExitSimulation.avgExecutionPrice,
         avgSellExecutionPrice: sellExitSimulation.avgExecutionPrice,
@@ -950,6 +955,7 @@ export class TradeMonitor extends EventEmitter {
   ): DepthSimulationResult {
     let remainingVolume = exchangeVolume
     let weightedPrice = 0
+    let hasError = false
     const basePrice = orderbookSide[0].price
 
     for (const level of orderbookSide) {
@@ -961,6 +967,7 @@ export class TradeMonitor extends EventEmitter {
     }
 
     if (remainingVolume > 0) {
+      hasError = true
       logger.warn({
         msg: 'Orderbook cannot fill full requested volume',
         function: 'TradeMonitor.simulateSlippage',
@@ -984,6 +991,7 @@ export class TradeMonitor extends EventEmitter {
       avgExecutionPrice,
       avgNormalizedExecutionPrice: metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol),
       slippagePercent,
+      hasError,
     }
   }
 

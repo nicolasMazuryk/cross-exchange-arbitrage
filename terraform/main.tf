@@ -77,13 +77,13 @@ resource "aws_default_subnet" "default_c" {
 }
 
 ###############################################################################
-# Security Group for Fargate Tasks
+# Security Group for ECS Tasks (EC2)
 # - Outbound allowed by default
 # - Inbound restricted (since you probably only need outbound to exchanges)
 ###############################################################################
 resource "aws_security_group" "trading_bots_security_group" {
   name        = "trading-bots-security-group"
-  description = "Security group for trading bot Fargate tasks"
+  description = "Security group for trading bot ECS tasks on EC2"
   vpc_id      = aws_default_vpc.default.id
 
   # No inbound rules needed if you don't accept inbound traffic
@@ -159,6 +159,34 @@ data "aws_iam_policy_document" "ecs_task_role" {
 }
 
 ###############################################################################
+# IAM Role for EC2 Instances (ECS Container Instance Role)
+###############################################################################
+resource "aws_iam_role" "ecs_instance_role" {
+  name               = "trading-bot-ec2-instance-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_instance_role.json
+}
+
+data "aws_iam_policy_document" "ecs_instance_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_instance_role_policy" {
+  role       = aws_iam_role.ecs_instance_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+}
+
+resource "aws_iam_instance_profile" "ecs_instance_profile" {
+  name = "trading-bot-ec2-instance-profile"
+  role = aws_iam_role.ecs_instance_role.name
+}
+
+###############################################################################
 # CloudWatch Log Groups
 ###############################################################################
 resource "aws_cloudwatch_log_group" "log_groups" {
@@ -203,11 +231,12 @@ resource "aws_ecs_task_definition" "task_definitions" {
   for_each                 = local.bots
   family                   = each.key
   network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = each.value.cpu
-  memory                   = each.value.memory
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
+  requires_compatibilities = ["EC2"]
+  # Note: CPU and memory are optional for EC2 but help with resource reservation
+  # cpu                = each.value.cpu
+  # memory             = each.value.memory
+  execution_role_arn = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn      = aws_iam_role.ecs_task_role.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -242,7 +271,7 @@ resource "aws_ecs_task_definition" "task_definitions" {
 }
 
 ###############################################################################
-# ECS Services (one per bot), each uses FARGATE
+# ECS Services (one per bot), each uses EC2
 # - desired_count = 1 ensures each bot runs exactly one instance
 ###############################################################################
 resource "aws_ecs_service" "services" {
@@ -251,7 +280,7 @@ resource "aws_ecs_service" "services" {
   cluster         = aws_ecs_cluster.trading_bots_cluster.id
   task_definition = aws_ecs_task_definition.task_definitions[each.key].arn
   desired_count   = 1
-  launch_type     = "FARGATE"
+  launch_type     = "EC2"
 
   network_configuration {
     subnets          = [aws_default_subnet.default_a.id]
@@ -262,8 +291,60 @@ resource "aws_ecs_service" "services" {
   deployment_controller {
     type = "ECS"
   }
+
+  depends_on = [
+    aws_instance.ecs_instance
+  ]
 }
 
+###############################################################################
+# Data source for ECS-optimized AMI
+###############################################################################
+data "aws_ami" "ecs_optimized" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-ecs-optimized-arm64-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+###############################################################################
+# EC2 Instance for ECS (standalone - no Auto Scaling Group)
+# Single instance managed directly by Terraform
+###############################################################################
+resource "aws_instance" "ecs_instance" {
+  ami                    = data.aws_ami.ecs_optimized.id
+  instance_type          = var.ec2_instance_type
+  subnet_id              = aws_default_subnet.default_a.id
+  vpc_security_group_ids = [aws_security_group.trading_bots_security_group.id]
+  iam_instance_profile   = aws_iam_instance_profile.ecs_instance_profile.name
+
+  user_data = base64encode(<<-EOT
+    #!/bin/bash
+    echo ECS_CLUSTER=${aws_ecs_cluster.trading_bots_cluster.name} >> /etc/ecs/ecs.config
+  EOT
+  )
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "trading-bot-ecs-instance"
+    }
+  )
+}
 
 ###############################################################################
 # SNS to Slack Notifier Lambda
@@ -442,11 +523,11 @@ resource "aws_iam_role_policy_attachment" "attach_cloudwatch_metrics_policy" {
 # Security Group for ElastiCache
 resource "aws_security_group" "elasticache_security_group" {
   name        = "elasticache-security-group"
-  description = "Allows access to ElastiCache from Bastion and ECS Fargate"
+  description = "Allows access to ElastiCache from Bastion and ECS EC2 instances"
   vpc_id      = aws_default_vpc.default.id
 
   ingress {
-    description     = "Allow Redis access from ECS Fargate tasks"
+    description     = "Allow Redis access from ECS EC2 tasks"
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"

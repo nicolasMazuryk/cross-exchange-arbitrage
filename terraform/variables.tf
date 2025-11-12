@@ -15,3 +15,9 @@ variable "slack_webhook_url" {
   default     = "https://hooks.slack.com/services/REDACTED"
   description = "Slack webhook URL for notifications"
 }
+
+variable "ec2_instance_type" {
+  type        = string
+  default     = "c5.large"
+  description = "EC2 instance type for ECS cluster (ARM64 compatible). Recommended: c7g.xlarge for HFT workloads with many websockets. Monitor and upgrade to c7gn.xlarge if network metrics are consistently high."
+}
