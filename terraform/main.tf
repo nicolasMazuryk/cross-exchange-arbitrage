@@ -14,18 +14,22 @@ terraform {
 locals {
   # Common tags to be applied to all resources
   common_tags = {
-    Project   = "arbitrage-bots"
+    Project   = "trading-bots"
     ManagedBy = "terraform"
   }
 
-  # Instance type memory lookup (in MB) - leaving ~512MB for OS overhead
+  # Container memory reservation per instance type (in MB)
+  # Reserves slightly less than total instance memory to leave headroom for:
+  #   - ECS agent (~150-200MB)
+  #   - OS overhead (~400-500MB)
+  #   - Temporary spikes and buffers
   instance_memory = {
-    "c6gn.large"   = 3584  # 4 GiB - 512MB overhead
-    "c6gn.xlarge"  = 7680  # 8 GiB - 512MB overhead
-    "c7gn.large"  = 3584  # 4 GiB - 512MB overhead
-    "c7gn.xlarge" = 7680  # 8 GiB - 512MB overhead
-    "c8gn.large"  = 3584  # 4 GiB - 512MB overhead
-    "c8gn.xlarge" = 7680  # 8 GiB - 512MB overhead
+    "c6gn.large"  = 3000 # 4 GiB total - ~1000MB overhead
+    "c6gn.xlarge" = 7000 # 8 GiB total - ~1000MB overhead
+    "c7gn.large"  = 3000 # 4 GiB total - ~1000MB overhead
+    "c7gn.xlarge" = 7000 # 8 GiB total - ~1000MB overhead
+    "c8gn.large"  = 3000 # 4 GiB total - ~1000MB overhead
+    "c8gn.xlarge" = 7000 # 8 GiB total - ~1000MB overhead
   }
 
   # Calculate container memory reservation based on instance type
@@ -36,7 +40,7 @@ locals {
     funding_arbitrage_bot = {
       # cpu      = 1024
       # memory   = 2048
-      strategy = "FUNDING"
+      strategy  = "FUNDING"
       log_level = "INFO"
     }
     # spread_arbitrage_bot = {
@@ -57,25 +61,45 @@ provider "aws" {
 }
 
 ###############################################################################
-# Default VPC & Subnets
+# VPC & Subnets
 ###############################################################################
+# NETWORK ARCHITECTURE OVERVIEW:
+# ================================
+# This setup uses a two-subnet architecture to solve a critical networking issue:
+#
+# PROBLEM: ECS tasks with EC2 launch type + awsvpc network mode create ENIs that
+#          don't get public IPs, so they need NAT Gateway for internet access.
+#          However, if the EC2 instance itself routes through NAT, the ECS agent
+#          disconnects because it can't properly reach AWS APIs.
+#
+# SOLUTION: Two subnets with different routing:
+#   1. PUBLIC SUBNET (default_a): EC2 instance runs here, routes through IGW
+#      - ECS agent maintains stable connection to AWS APIs
+#      - EC2 instance has Elastic IP for stable external access
+#   2. PRIVATE SUBNET (ecs_tasks_private_subnet): Task ENIs run here, route through NAT
+#      - Tasks access internet via NAT Gateway
+#      - No public IPs needed on task ENIs
+#
+# This architecture ensures both the ECS agent and tasks have proper internet access.
+###############################################################################
+
 resource "aws_default_vpc" "default" {
   tags = {
     Name = "default"
   }
 }
 
+# Public subnet for EC2 instance (routes through Internet Gateway)
 resource "aws_default_subnet" "default_a" {
   availability_zone       = "${var.aws_region}a"
-  # Note: assign_public_ip is only for Fargate. For EC2 launch type,
-  # tasks get public IPs automatically if subnet has map_public_ip_on_launch = true
-  map_public_ip_on_launch = true # Required for ECS tasks to get public IPs and reach internet
+  map_public_ip_on_launch = true
 
   tags = {
-    Name = "default-a"
+    Name = "ecs-instance-public-subnet"
   }
 }
 
+# Additional default subnets for ElastiCache multi-AZ support
 resource "aws_default_subnet" "default_b" {
   availability_zone = "${var.aws_region}b"
 
@@ -92,23 +116,39 @@ resource "aws_default_subnet" "default_c" {
   }
 }
 
+# Private subnet for ECS task ENIs (routes through NAT Gateway)
+resource "aws_subnet" "ecs_tasks_private_subnet" {
+  vpc_id            = aws_default_vpc.default.id
+  cidr_block        = "172.31.128.0/20" # Available CIDR range in default VPC
+  availability_zone = "${var.aws_region}a"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "ecs-tasks-private-subnet"
+    }
+  )
+}
+
 ###############################################################################
-# Security Group for ECS Tasks (EC2)
-# - Outbound allowed by default
-# - Inbound restricted (since you probably only need outbound to exchanges)
+# Security Group for ECS
+###############################################################################
+# Shared by both EC2 instance and task ENIs
+# - Allows all outbound traffic (needed for exchange APIs and WebSocket connections)
+# - Blocks all inbound traffic (trading bots don't accept incoming connections)
 ###############################################################################
 resource "aws_security_group" "trading_bots_security_group" {
   name        = "trading-bots-security-group"
   description = "Security group for trading bot ECS tasks on EC2"
   vpc_id      = aws_default_vpc.default.id
 
-  # No inbound rules needed if you don't accept inbound traffic
+  # Block all inbound traffic (trading bots only make outbound connections)
   ingress {
-    description = "No inbound traffic"
+    description = "Block all inbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["127.0.0.1/32"] # effectively block inbound
+    cidr_blocks = ["127.0.0.1/32"] # Effectively blocks all inbound
   }
 
   egress {
@@ -137,7 +177,11 @@ resource "aws_ecs_cluster" "trading_bots_cluster" {
 }
 
 ###############################################################################
-# ECS Task IAM Role
+# IAM Roles for ECS
+###############################################################################
+# Two types of roles are needed:
+#   1. Task Execution Role: Used by ECS agent to pull images, write logs, etc.
+#   2. Task Role: Used by the running container (currently has no special permissions)
 ###############################################################################
 resource "aws_iam_role" "ecs_task_execution_role" {
   name               = "trading-bot-execution-role"
@@ -236,8 +280,9 @@ resource "aws_cloudwatch_log_group" "log_groups" {
 # ECR Repositories
 ###############################################################################
 resource "aws_ecr_repository" "repositories" {
-  for_each = local.bots
-  name     = each.key
+  for_each     = local.bots
+  name         = each.key
+  force_delete = true # Allow deletion even if images exist
 }
 
 ###############################################################################
@@ -246,36 +291,25 @@ resource "aws_ecr_repository" "repositories" {
 resource "aws_ecs_task_definition" "task_definitions" {
   for_each                 = local.bots
   family                   = each.key
-  network_mode             = "awsvpc"
+  network_mode             = "awsvpc" # Required for task ENIs in private subnet
   requires_compatibilities = ["EC2"]
-  # Note: CPU and memory are optional for EC2 but help with resource reservation
-  # cpu                = each.value.cpu
-  # memory             = each.value.memory
-  execution_role_arn = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn      = aws_iam_role.ecs_task_role.arn
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture       = "ARM64"
+    cpu_architecture        = "ARM64" # Must match EC2 instance type (c6gn = ARM64)
     # cpu_architecture       = "X86_64"
   }
 
   container_definitions = jsonencode([
     {
-      name                = each.key
-      image               = "${aws_ecr_repository.repositories[each.key].repository_url}:latest"
-      essential           = true
-      memoryReservation   = local.container_memory_reservation
-      environment = [
-        # {
-        #   name  = "LOG_LEVEL"
-        #   value = each.value.log_level
-        # },
-        # {
-        #   name  = "STRATEGY"
-        #   value = each.value.strategy
-        # }
-      ]
+      name              = each.key
+      image             = "${aws_ecr_repository.repositories[each.key].repository_url}:latest"
+      essential         = true
+      memoryReservation = local.container_memory_reservation
+      # Environment variables can be added here if needed by the application
+      environment = []
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -289,8 +323,7 @@ resource "aws_ecs_task_definition" "task_definitions" {
 }
 
 ###############################################################################
-# ECS Services (one per bot), each uses EC2
-# - desired_count = 1 ensures each bot runs exactly one instance
+# ECS Services
 ###############################################################################
 resource "aws_ecs_service" "services" {
   for_each        = local.bots
@@ -301,22 +334,23 @@ resource "aws_ecs_service" "services" {
   launch_type     = "EC2"
 
   # Deployment configuration optimized for single-instance deployments
-  # - minimumHealthyPercent = 0: Allows stopping old task before starting new one
-  # - maximumPercent = 100: Prevents running multiple tasks simultaneously
+  # - deployment_minimum_healthy_percent = 0: Allows stopping old task before starting new one
+  # - deployment_maximum_percent = 100: Prevents running multiple tasks simultaneously
   # This prevents memory exhaustion when deploying to a single EC2 instance
-  deployment_configuration {
-    minimum_healthy_percent = 0
-    maximum_percent         = 100
-  }
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
 
   # Disable AZ rebalancing for single-instance deployments
   # AZ rebalancing requires maximumPercent > 100, which conflicts with our memory constraints
   availability_zone_rebalancing = "DISABLED"
 
+  # Force deletion settings to prevent stuck destroy operations
+  # - force_delete: Allows Terraform to delete the service even if tasks are running
+  force_delete          = true
+
   network_configuration {
-    subnets         = [aws_default_subnet.default_a.id]
+    subnets         = [aws_subnet.ecs_tasks_private_subnet.id] # Task ENIs in private subnet
     security_groups = [aws_security_group.trading_bots_security_group.id]
-    # For EC2 launch type, tasks get public IPs automatically if subnet has map_public_ip_on_launch = true
   }
 
   deployment_controller {
@@ -354,7 +388,7 @@ data "aws_ami" "ecs_optimized" {
 }
 
 ###############################################################################
-# Internet Gateway (default VPC should have one, but we'll reference it)
+# Internet Gateway
 ###############################################################################
 data "aws_internet_gateway" "default" {
   filter {
@@ -364,9 +398,12 @@ data "aws_internet_gateway" "default" {
 }
 
 ###############################################################################
-# NAT Gateway for ECS Tasks Internet Access
-# Required because EC2 launch type with awsvpc doesn't auto-assign public IPs to task ENIs
+# NAT Gateway for Task Internet Access
 ###############################################################################
+# NAT Gateway enables task ENIs in the private subnet to access the internet.
+# The NAT Gateway itself is deployed in the public subnet and routes through IGW.
+#
+# Flow: Task ENI → Private Subnet → NAT Gateway → Public Subnet → IGW → Internet
 resource "aws_eip" "nat_gateway_eip" {
   domain = "vpc"
 
@@ -392,9 +429,7 @@ resource "aws_nat_gateway" "trading_bots_nat" {
   depends_on = [data.aws_internet_gateway.default]
 }
 
-###############################################################################
-# Route Table for ECS Tasks (routes through NAT Gateway)
-###############################################################################
+# Route table for private subnet (routes all traffic through NAT Gateway)
 resource "aws_route_table" "ecs_tasks_route_table" {
   vpc_id = aws_default_vpc.default.id
 
@@ -406,22 +441,22 @@ resource "aws_route_table" "ecs_tasks_route_table" {
   tags = merge(
     local.common_tags,
     {
-      Name = "trading-bot-ecs-tasks-route-table"
+      Name = "ecs-tasks-private-route-table"
     }
   )
 }
 
-###############################################################################
-# Route Table Association for Subnet A (where ECS tasks run)
-###############################################################################
-resource "aws_route_table_association" "ecs_tasks_subnet_a" {
-  subnet_id      = aws_default_subnet.default_a.id
+# Associate ONLY the private subnet with NAT route table
+# The public subnet (default_a) uses the main route table which routes through IGW
+resource "aws_route_table_association" "ecs_tasks_private_subnet_route_table_association" {
+  subnet_id      = aws_subnet.ecs_tasks_private_subnet.id
   route_table_id = aws_route_table.ecs_tasks_route_table.id
 }
 
 ###############################################################################
-# Elastic IP for ECS Instance
+# Elastic IP for EC2 Instance
 ###############################################################################
+# Provides a stable public IP for the EC2 instance running the ECS agent
 resource "aws_eip" "ecs_instance_eip" {
   domain = "vpc"
 
@@ -434,26 +469,49 @@ resource "aws_eip" "ecs_instance_eip" {
 }
 
 ###############################################################################
-# EC2 Instance for ECS (standalone - no Auto Scaling Group)
-# Single instance managed directly by Terraform
+# EC2 Instance for ECS Cluster
+###############################################################################
+# Single EC2 instance that hosts the ECS container instances.
+# Runs in PUBLIC subnet (default_a) so ECS agent can connect via IGW.
 ###############################################################################
 resource "aws_instance" "ecs_instance" {
   ami                    = data.aws_ami.ecs_optimized.id
   instance_type          = var.ec2_instance_type
-  subnet_id              = aws_default_subnet.default_a.id
+  subnet_id              = aws_default_subnet.default_a.id # PUBLIC subnet - routes through IGW
   vpc_security_group_ids = [aws_security_group.trading_bots_security_group.id]
   iam_instance_profile   = aws_iam_instance_profile.ecs_instance_profile.name
   monitoring             = true # Enable detailed CloudWatch monitoring
 
+  # Configure ECS agent on instance boot
   user_data = <<-EOT
     #!/bin/bash
+    set -e
+    
+    # Set ECS cluster name
     echo ECS_CLUSTER=${aws_ecs_cluster.trading_bots_cluster.name} >> /etc/ecs/ecs.config
+    
+    # Enable ECS agent metadata and logging
+    echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config
+    echo ECS_LOGLEVEL=info >> /etc/ecs/ecs.config
+    
+    # Restart ECS agent to apply configuration
+    if systemctl is-active --quiet ecs; then
+      systemctl restart ecs
+    fi
   EOT
 
+  # IMDSv2 configuration (more secure than IMDSv1)
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "required" # Require IMDSv2
     http_put_response_hop_limit = 1
+  }
+
+  lifecycle {
+    create_before_destroy = false # Aligned with ECS deployment strategy: kill one, then replace
+    ignore_changes = [
+      ami # Prevent instance recreation when AMI updates
+    ]
   }
 
   tags = merge(
@@ -465,7 +523,7 @@ resource "aws_instance" "ecs_instance" {
 }
 
 ###############################################################################
-# Elastic IP Association
+# Associate Elastic IP with EC2 Instance
 ###############################################################################
 resource "aws_eip_association" "ecs_instance_eip_assoc" {
   instance_id   = aws_instance.ecs_instance.id
@@ -476,12 +534,12 @@ resource "aws_eip_association" "ecs_instance_eip_assoc" {
 # SNS to Slack Notifier Lambda
 ###############################################################################
 resource "aws_lambda_function" "sns_to_slack_notification" {
-  s3_bucket         = "algo-trading-bot"
-  s3_key            = "lambdas/sns_to_slack_notification.zip"
-  function_name    = "sns-to-slack-notification"
-  role             = aws_iam_role.sns_to_slack_notification_lambda_role.arn
-  handler          = "index.handler"
-  runtime          = "nodejs18.x"
+  s3_bucket     = "algo-trading-bot"
+  s3_key        = "lambdas/sns_to_slack_notification.zip"
+  function_name = "sns-to-slack-notification"
+  role          = aws_iam_role.sns_to_slack_notification_lambda_role.arn
+  handler       = "index.handler"
+  runtime       = "nodejs18.x"
 
   environment {
     variables = {
@@ -491,7 +549,7 @@ resource "aws_lambda_function" "sns_to_slack_notification" {
 }
 
 resource "aws_iam_role" "sns_to_slack_notification_lambda_role" {
-  name = "sns-to-slack-notification-lambda-role"
+  name        = "sns-to-slack-notification-lambda-role"
   description = "IAM role for Lambda function that forwards SNS messages to Slack"
 
   assume_role_policy = jsonencode({
@@ -519,7 +577,7 @@ resource "aws_iam_role_policy" "sns_to_slack_lambda_cloudwatch_logging_policy" {
         Effect = "Allow"
         Action = [
           "logs:CreateLogGroup",
-          "logs:CreateLogStream", 
+          "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
         Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:*"
@@ -603,11 +661,11 @@ resource "aws_cloudwatch_metric_alarm" "memory_alarms" {
 }
 
 ###############################################################################
-# IAM Policy for CloudWatch Metrics
+# CloudWatch Permissions for ECS Tasks
 ###############################################################################
 resource "aws_iam_policy" "cloudwatch_metrics_policy" {
   name        = "CloudWatchMetricsPolicy"
-  description = "Allows CloudWatch to publish metrics for ECS trading bots."
+  description = "Allows ECS tasks to publish metrics and write logs to CloudWatch"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -616,7 +674,7 @@ resource "aws_iam_policy" "cloudwatch_metrics_policy" {
         Effect = "Allow"
         Action = [
           "cloudwatch:PutMetricData",
-          "cloudwatch:GetMetricStatistics", 
+          "cloudwatch:GetMetricStatistics",
           "cloudwatch:GetMetricData",
           "cloudwatch:ListMetrics",
           "cloudwatch:DescribeAlarms",
@@ -644,16 +702,18 @@ resource "aws_iam_role_policy_attachment" "attach_cloudwatch_metrics_policy" {
 }
 
 ###############################################################################
-# ElastiCache Redis
+# ElastiCache Redis Cluster
 ###############################################################################
-# Security Group for ElastiCache
+# Security group allows access from:
+#   - ECS tasks (via shared security group)
+#   - Bastion host (for external access - local database access)
 resource "aws_security_group" "elasticache_security_group" {
   name        = "elasticache-security-group"
-  description = "Allows access to ElastiCache from Bastion and ECS EC2 instances"
+  description = "Allows Redis access from ECS tasks and bastion host"
   vpc_id      = aws_default_vpc.default.id
 
   ingress {
-    description     = "Allow Redis access from ECS EC2 tasks"
+    description     = "Allow Redis access from ECS tasks"
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
@@ -661,7 +721,7 @@ resource "aws_security_group" "elasticache_security_group" {
   }
 
   ingress {
-    description     = "Allow Redis access from Bastion"
+    description     = "Allow Redis access from Bastion host"
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
@@ -693,7 +753,7 @@ data "aws_security_group" "bastion" {
   vpc_id = aws_default_vpc.default.id
 }
 
-# ElastiCache Subnet Group
+# Subnet group for ElastiCache (requires multiple AZs for failover)
 resource "aws_elasticache_subnet_group" "trading_bots_cache_subnet" {
   name       = "trading-bots-cache-subnet"
   subnet_ids = [aws_default_subnet.default_a.id, aws_default_subnet.default_b.id, aws_default_subnet.default_c.id]
@@ -704,24 +764,24 @@ resource "aws_elasticache_subnet_group" "trading_bots_cache_subnet" {
   }
 }
 
-# ElastiCache Replication Group (Redis)
+# Redis cluster with automatic failover
 resource "aws_elasticache_replication_group" "trading_bots_cache" {
   replication_group_id       = "trading-bots-cache"
-  description                = "Redis for trading-bots"
+  description                = "Redis cluster for trading-bots"
   engine                     = "redis"
   engine_version             = "7.1"
   node_type                  = "cache.t4g.micro"
   port                       = 6379
   parameter_group_name       = "default.redis7"
-  num_cache_clusters         = 2
+  num_cache_clusters         = 2 # Primary + 1 replica
   automatic_failover_enabled = true
   multi_az_enabled           = false
   at_rest_encryption_enabled = true
-  transit_encryption_enabled = false # No TLS
+  transit_encryption_enabled = false # TLS disabled to reduce connection overhead from applications
   auto_minor_version_upgrade = true
-  snapshot_retention_limit   = 0     # Automatic backups - Disabled (0 = no backups)
+  snapshot_retention_limit   = 0 # No automatic backups
 
-  subnet_group_name  = aws_elasticache_subnet_group.trading_bots_cache_subnet.name
+  subnet_group_name = aws_elasticache_subnet_group.trading_bots_cache_subnet.name
   security_group_ids = [
     aws_security_group.elasticache_security_group.id,
     data.aws_security_group.default.id
