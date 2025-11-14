@@ -300,6 +300,19 @@ resource "aws_ecs_service" "services" {
   desired_count   = 1
   launch_type     = "EC2"
 
+  # Deployment configuration optimized for single-instance deployments
+  # - minimumHealthyPercent = 0: Allows stopping old task before starting new one
+  # - maximumPercent = 100: Prevents running multiple tasks simultaneously
+  # This prevents memory exhaustion when deploying to a single EC2 instance
+  deployment_configuration {
+    minimum_healthy_percent = 0
+    maximum_percent         = 100
+  }
+
+  # Disable AZ rebalancing for single-instance deployments
+  # AZ rebalancing requires maximumPercent > 100, which conflicts with our memory constraints
+  availability_zone_rebalancing = "DISABLED"
+
   network_configuration {
     subnets         = [aws_default_subnet.default_a.id]
     security_groups = [aws_security_group.trading_bots_security_group.id]
