@@ -18,11 +18,24 @@ locals {
     ManagedBy = "terraform"
   }
 
+  # Instance type memory lookup (in MB) - leaving ~512MB for OS overhead
+  instance_memory = {
+    "c6gn.large"   = 3584  # 4 GiB - 512MB overhead
+    "c6gn.xlarge"  = 7680  # 8 GiB - 512MB overhead
+    "c7gn.large"  = 3584  # 4 GiB - 512MB overhead
+    "c7gn.xlarge" = 7680  # 8 GiB - 512MB overhead
+    "c8gn.large"  = 3584  # 4 GiB - 512MB overhead
+    "c8gn.xlarge" = 7680  # 8 GiB - 512MB overhead
+  }
+
+  # Calculate container memory reservation based on instance type
+  container_memory_reservation = lookup(local.instance_memory, var.ec2_instance_type)
+
   # Bot configurations
   bots = {
     funding_arbitrage_bot = {
-      cpu      = 1024
-      memory   = 2048
+      # cpu      = 1024
+      # memory   = 2048
       strategy = "FUNDING"
       log_level = "INFO"
     }
@@ -53,7 +66,10 @@ resource "aws_default_vpc" "default" {
 }
 
 resource "aws_default_subnet" "default_a" {
-  availability_zone = "${var.aws_region}a"
+  availability_zone       = "${var.aws_region}a"
+  # Note: assign_public_ip is only for Fargate. For EC2 launch type,
+  # tasks get public IPs automatically if subnet has map_public_ip_on_launch = true
+  map_public_ip_on_launch = true # Required for ECS tasks to get public IPs and reach internet
 
   tags = {
     Name = "default-a"
@@ -241,13 +257,15 @@ resource "aws_ecs_task_definition" "task_definitions" {
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture       = "ARM64"
+    # cpu_architecture       = "X86_64"
   }
 
   container_definitions = jsonencode([
     {
-      name      = each.key
-      image     = "${aws_ecr_repository.repositories[each.key].repository_url}:latest"
-      essential = true
+      name                = each.key
+      image               = "${aws_ecr_repository.repositories[each.key].repository_url}:latest"
+      essential           = true
+      memoryReservation   = local.container_memory_reservation
       environment = [
         # {
         #   name  = "LOG_LEVEL"
@@ -283,9 +301,9 @@ resource "aws_ecs_service" "services" {
   launch_type     = "EC2"
 
   network_configuration {
-    subnets          = [aws_default_subnet.default_a.id]
-    security_groups  = [aws_security_group.trading_bots_security_group.id]
-    assign_public_ip = true
+    subnets         = [aws_default_subnet.default_a.id]
+    security_groups = [aws_security_group.trading_bots_security_group.id]
+    # For EC2 launch type, tasks get public IPs automatically if subnet has map_public_ip_on_launch = true
   }
 
   deployment_controller {
@@ -306,13 +324,100 @@ data "aws_ami" "ecs_optimized" {
 
   filter {
     name   = "name"
-    values = ["al2023-ami-ecs-optimized-arm64-*"]
+    values = ["al2023-ami-ecs-hvm-*-arm64*"]
+    # values = ["al2023-ami-ecs-hvm-*-x86_64*"] 
   }
 
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+    # values = ["x86_64"]
+  }
+}
+
+###############################################################################
+# Internet Gateway (default VPC should have one, but we'll reference it)
+###############################################################################
+data "aws_internet_gateway" "default" {
+  filter {
+    name   = "attachment.vpc-id"
+    values = [aws_default_vpc.default.id]
+  }
+}
+
+###############################################################################
+# NAT Gateway for ECS Tasks Internet Access
+# Required because EC2 launch type with awsvpc doesn't auto-assign public IPs to task ENIs
+###############################################################################
+resource "aws_eip" "nat_gateway_eip" {
+  domain = "vpc"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "trading-bot-nat-gateway-eip"
+    }
+  )
+}
+
+resource "aws_nat_gateway" "trading_bots_nat" {
+  allocation_id = aws_eip.nat_gateway_eip.id
+  subnet_id     = aws_default_subnet.default_a.id
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "trading-bot-nat-gateway"
+    }
+  )
+
+  depends_on = [data.aws_internet_gateway.default]
+}
+
+###############################################################################
+# Route Table for ECS Tasks (routes through NAT Gateway)
+###############################################################################
+resource "aws_route_table" "ecs_tasks_route_table" {
+  vpc_id = aws_default_vpc.default.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.trading_bots_nat.id
+  }
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "trading-bot-ecs-tasks-route-table"
+    }
+  )
+}
+
+###############################################################################
+# Route Table Association for Subnet A (where ECS tasks run)
+###############################################################################
+resource "aws_route_table_association" "ecs_tasks_subnet_a" {
+  subnet_id      = aws_default_subnet.default_a.id
+  route_table_id = aws_route_table.ecs_tasks_route_table.id
+}
+
+###############################################################################
+# Elastic IP for ECS Instance
+###############################################################################
+resource "aws_eip" "ecs_instance_eip" {
+  domain = "vpc"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "trading-bot-ecs-instance-eip"
+    }
+  )
 }
 
 ###############################################################################
@@ -325,12 +430,12 @@ resource "aws_instance" "ecs_instance" {
   subnet_id              = aws_default_subnet.default_a.id
   vpc_security_group_ids = [aws_security_group.trading_bots_security_group.id]
   iam_instance_profile   = aws_iam_instance_profile.ecs_instance_profile.name
+  monitoring             = true # Enable detailed CloudWatch monitoring
 
-  user_data = base64encode(<<-EOT
+  user_data = <<-EOT
     #!/bin/bash
     echo ECS_CLUSTER=${aws_ecs_cluster.trading_bots_cluster.name} >> /etc/ecs/ecs.config
   EOT
-  )
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -344,6 +449,14 @@ resource "aws_instance" "ecs_instance" {
       Name = "trading-bot-ecs-instance"
     }
   )
+}
+
+###############################################################################
+# Elastic IP Association
+###############################################################################
+resource "aws_eip_association" "ecs_instance_eip_assoc" {
+  instance_id   = aws_instance.ecs_instance.id
+  allocation_id = aws_eip.ecs_instance_eip.id
 }
 
 ###############################################################################

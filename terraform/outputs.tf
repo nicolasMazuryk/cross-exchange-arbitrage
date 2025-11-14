@@ -46,3 +46,8 @@ output "elasticache_redis_url" {
   description = "Redis connection URL"
   value       = "redis://${aws_elasticache_replication_group.trading_bots_cache.primary_endpoint_address}:6379"
 }
+
+output "ecs_instance_elastic_ip" {
+  description = "Elastic IP address assigned to the ECS EC2 instance"
+  value       = aws_eip.ecs_instance_eip.public_ip
+}
