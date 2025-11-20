@@ -24,6 +24,7 @@
     "bitget-api": "^2.3.5",
     "bybit-api": "^4.1.10",
     "ccxt": "^4.4.88",
+    "cron": "^4.3.4",
     "dotenv": "^16.4.5",
     "ioredis": "^5.8.2",
     "okx-api": "^2.0.5",
@@ -35,6 +36,7 @@
     "yaml": "^2.4.0"
   },
   "devDependencies": {
+    "@types/cron": "^2.0.1",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.11.24",
     "@types/ws": "^8.18.1",

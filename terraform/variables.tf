@@ -18,7 +18,7 @@ variable "slack_webhook_url" {
 
 variable "ec2_instance_type" {
   type        = string
-  default     = "c6gn.large"
+  default     = "c6gn.large" // migrate to c8g.large
   description = "EC2 instance type for ECS cluster (ARM64 compatible). Recommended: c(7-8)gn.(x)large for HFT workloads with many websockets. Monitor and upgrade to c7gn.xlarge or even c8gn.xlarge if network metrics are consistently high."
   # or just c6g.large, c7g.large or even c8g.large - without Networking optimization, cheaper.
 }

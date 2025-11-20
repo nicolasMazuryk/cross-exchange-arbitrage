@@ -95,6 +95,9 @@ export interface ArbitrageOpportunity {
   confidenceScore: number
   // Strategy type
   strategy: StrategyType
+  // Funding tracking
+  buyExchangeNextFundingTimestamp: number
+  sellExchangeNextFundingTimestamp: number
   targetFundingTimestamp: number
   fundingProjection: FundingProjection
   // Profitability metrics
@@ -395,7 +398,7 @@ export class ArbitrageEngine extends EventEmitter {
     const estimatedProfitUsd = fundingProfitUsd + spreadProfitUsd - totalCosts
     const estimatedProfitPercent = fundingProfitPercent + spreadProfitPercent - totalCostsPercent
 
-    const latencyPenalty = this.calculateLatencyPenalty(buyBook, sellBook)
+    const latencyPenalty = this.calculateLatencyPenalty()
 
     const confidenceScore = Math.min(
       this.calculateConfidenceScore(buyBook, buyExchange, normalizedVolume, buyMarketSpreadPercent),
@@ -416,7 +419,7 @@ export class ArbitrageEngine extends EventEmitter {
     }
   }
 
-  private calculateLatencyPenalty(buyBook: OrderBook, sellBook: OrderBook): number {
+  private calculateLatencyPenalty(): number {
     // TODO: exchange execution latency score
     return 0
   }
@@ -1289,6 +1292,9 @@ export class ArbitrageEngine extends EventEmitter {
       confidenceScore: profitEstimate.confidenceScore,
       // Strategy type annotation
       strategy: strategyResult.strategy,
+      // Funding tracking
+      buyExchangeNextFundingTimestamp: buyFundingData.nextFundingTimestamp,
+      sellExchangeNextFundingTimestamp: sellFundingData.nextFundingTimestamp,
       targetFundingTimestamp,
       fundingProjection: fundingProjection,
       // Profitability metrics

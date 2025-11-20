@@ -14,6 +14,7 @@ import { TradeExecutor } from '../trading/tradeExecutor'
 import { TradeMonitor } from '../trading/tradeMonitor'
 import { MarketMetadataService } from '../markets/marketMetadataService'
 import { FundingService } from '../funding/fundingService'
+import { FundingFeeCollector } from '../funding/fundingFeeCollector'
 
 // REST adapters
 import { BinanceExchange, BybitExchange, OkxExchange, BitgetExchange } from '../../adapters/rest'
@@ -26,18 +27,9 @@ import {
   BitgetPublicWebSocketClient,
 } from '../../adapters/websocket'
 
-// Private WebSocket adapters
-import {
-  BinancePrivateWebSocketClient,
-  BybitPrivateWebSocketClient,
-  OKXPrivateWebSocketClient,
-  BitgetPrivateWebSocketClient,
-} from '../../adapters/websocket/private'
-
 // Types
 import { WebSocketConfig } from '../../adapters/websocket/types'
 import { ExchangeConfig } from '../../adapters/rest/types'
-import { AccountStateUpdate } from '../../types/account'
 
 interface ExchangeServices {
   rest: any
@@ -58,6 +50,7 @@ export class Orchestrator extends EventEmitter {
   private tradeExecutor?: TradeExecutor
   private tradeMonitor?: TradeMonitor
   private fundingService?: FundingService
+  private fundingFeeCollector?: FundingFeeCollector
 
   // Exchange services
   private exchangeServices: Map<string, ExchangeServices> = new Map()
@@ -99,10 +92,13 @@ export class Orchestrator extends EventEmitter {
       // Stage 7: Initialize WebSocket clients
       await this.initializePublicWebSocketClients()
 
-      // Stage 8: Setup graceful shutdown
+      // Stage 8: Initialize funding fee collector
+      await this.initializeFundingFeeCollector()
+
+      // Stage 9: Setup graceful shutdown
       this.setupGracefulShutdown()
 
-      // Stage 9: Restore open tracked trades from Redis
+      // Stage 10: Restore open tracked trades from Redis
       await this.tradeMonitor!.restoreState()
 
       this.isInitialized = true
@@ -342,7 +338,7 @@ export class Orchestrator extends EventEmitter {
       this.fundingService = new FundingService(exchangeAdapters, marketMetadataServices, config.funding)
 
       // Set up funding service event listeners
-      this.fundingService.on('fundingDataUpdated', state => {})
+      // this.fundingService.on('fundingDataUpdated', state => {})
 
       // Start the funding service
       this.fundingService.start()
@@ -733,6 +729,54 @@ export class Orchestrator extends EventEmitter {
     })
   }
 
+  private async initializeFundingFeeCollector(): Promise<void> {
+    try {
+      logger.info({
+        msg: '💰 Initializing Funding Fee Collector...',
+        function: 'Orchestrator.initializeFundingFeeCollector',
+      })
+
+      if (!this.state) {
+        throw new Error('State service must be initialized before funding fee collector')
+      }
+
+      if (!this.fundingService) {
+        throw new Error('Funding service must be initialized before funding fee collector')
+      }
+
+      // Get REST clients map
+      const restClients = new Map()
+      for (const [exchangeId, services] of this.exchangeServices.entries()) {
+        if (services.rest) {
+          restClients.set(exchangeId, services.rest)
+        }
+      }
+
+      // Initialize Funding Fee Collector
+      this.fundingFeeCollector = new FundingFeeCollector(
+        restClients, 
+        this.state,
+        this.fundingService,
+        config.fundingFeeCollector.cronPattern
+      )
+
+      // Start the collector
+      this.fundingFeeCollector.start()
+
+      logger.info({
+        msg: '✅ Funding Fee Collector initialized and started',
+        function: 'Orchestrator.initializeFundingFeeCollector',
+      })
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to initialize Funding Fee Collector',
+        function: 'Orchestrator.initializeFundingFeeCollector',
+        error,
+      })
+      throw error
+    }
+  }
+
   private setupGracefulShutdown(): void {
     logger.info({ msg: '🛡️ Setting up graceful shutdown handlers...', function: 'Orchestrator.setupGracefulShutdown' })
 
@@ -790,7 +834,16 @@ export class Orchestrator extends EventEmitter {
     // Shutdown in reverse order of initialization
     const shutdownTasks: Array<() => Promise<void>> = []
 
-    // 1. Shutdown trade monitor
+    // 1. Shutdown funding fee collector
+    if (this.fundingFeeCollector) {
+      shutdownTasks.push(async () => {
+        logger.info({ msg: '🔄 Shutting down Funding Fee Collector...', function: 'Orchestrator.shutdown' })
+        this.fundingFeeCollector!.stop()
+        logger.info({ msg: '✅ Funding Fee Collector shutdown complete', function: 'Orchestrator.shutdown' })
+      })
+    }
+
+    // 2. Shutdown trade monitor
     if (this.tradeMonitor) {
       shutdownTasks.push(async () => {
         logger.info({ msg: '🔄 Shutting down Trade Monitor...', function: 'Orchestrator.shutdown' })
@@ -799,7 +852,7 @@ export class Orchestrator extends EventEmitter {
       })
     }
 
-    // 2. Shutdown state service
+    // 3. Shutdown state service
     if (this.state) {
       shutdownTasks.push(async () => {
         logger.info({ msg: '🔄 Shutting down State Service...', function: 'Orchestrator.shutdown' })
@@ -808,7 +861,7 @@ export class Orchestrator extends EventEmitter {
       })
     }
 
-    // 3. Shutdown account sync service
+    // 4. Shutdown account sync service
     if (this.accountSyncService) {
       shutdownTasks.push(async () => {
         logger.info({ msg: '🔄 Shutting down Account Sync Service...', function: 'Orchestrator.shutdown' })
@@ -817,7 +870,7 @@ export class Orchestrator extends EventEmitter {
       })
     }
 
-    // 4. Shutdown WebSocket clients
+    // 5. Shutdown WebSocket clients
     for (const [exchangeId, services] of this.exchangeServices.entries()) {
       if (services.ws) {
         shutdownTasks.push(async () => {
@@ -836,7 +889,7 @@ export class Orchestrator extends EventEmitter {
       }
     }
 
-    // 5. Shutdown funding service
+    // 6. Shutdown funding service
     if (this.fundingService) {
       shutdownTasks.push(async () => {
         logger.info({ msg: '🔄 Shutting down Funding Service...', function: 'Orchestrator.shutdown' })
@@ -845,7 +898,7 @@ export class Orchestrator extends EventEmitter {
       })
     }
 
-    // 6. Shutdown core services
+    // 7. Shutdown core services
     if (this.arbitrageEngine) {
       shutdownTasks.push(async () => {
         logger.info({ msg: '🔄 Shutting down Arbitrage Engine...', function: 'Orchestrator.shutdown' })
@@ -896,52 +949,56 @@ export class Orchestrator extends EventEmitter {
     return this.fundingService
   }
 
+  getFundingFeeCollector(): FundingFeeCollector | undefined {
+    return this.fundingFeeCollector
+  }
+
   isServiceInitialized(): boolean {
     return this.isInitialized
   }
 
-  async testOrderCreation(): Promise<void> {
-    const exchangeServices = this.getExchangeServices()
+  // async testOrderCreation(): Promise<void> {
+  //   const exchangeServices = this.getExchangeServices()
 
-    for (const [exchangeId, services] of exchangeServices.entries()) {
-      if (exchangeId !== 'bybit') continue
+  //   for (const [exchangeId, services] of exchangeServices.entries()) {
+  //     if (exchangeId !== 'bybit') continue
 
-      try {
-        const testSymbol = '1000PEPE/USDT:USDT'
+  //     try {
+  //       const testSymbol = '1000PEPE/USDT:USDT'
 
-        const openOrder = await services.rest.createOrder(
-          testSymbol,
-          'LIMIT',
-          'BUY',
-          100,
-          0.0127,
-          false,
-          new Date().getTime().toString()
-        )
-        await new Promise(resolve => setTimeout(resolve, 20000))
+  //       const openOrder = await services.rest.createOrder(
+  //         testSymbol,
+  //         'LIMIT',
+  //         'BUY',
+  //         100,
+  //         0.0127,
+  //         false,
+  //         new Date().getTime().toString()
+  //       )
+  //       await new Promise(resolve => setTimeout(resolve, 20000))
 
-        // await services.rest.cancelOrder(openOrder.id, testSymbol)
+  //       // await services.rest.cancelOrder(openOrder.id, testSymbol)
 
-        const closeOrder = await services.rest.createOrder(
-          testSymbol,
-          'MARKET',
-          'SELL',
-          100,
-          0.0127,
-          true,
-          new Date().getTime().toString()
-        )
-      } catch (error) {
-        logger.error({
-          msg: 'Order creation test failed',
-          function: 'Orchestrator.testOrderCreation',
-          exchange: exchangeId,
-          error,
-        })
-        continue
-      }
-    }
-  }
+  //       const closeOrder = await services.rest.createOrder(
+  //         testSymbol,
+  //         'MARKET',
+  //         'SELL',
+  //         100,
+  //         0.0127,
+  //         true,
+  //         new Date().getTime().toString()
+  //       )
+  //     } catch (error) {
+  //       logger.error({
+  //         msg: 'Order creation test failed',
+  //         function: 'Orchestrator.testOrderCreation',
+  //         exchange: exchangeId,
+  //         error,
+  //       })
+  //       continue
+  //     }
+  //   }
+  // }
 }
 
 // Factory function for easy initialization

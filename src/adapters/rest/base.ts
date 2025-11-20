@@ -1,7 +1,6 @@
 import ccxt, { Exchange, Market, Order, Dictionary } from 'ccxt'
 import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
 import { ParsedFunding } from '../../core/funding/types'
-import { fetchJsonFromUrl } from '../../utils/browser'
 import appConfig from '../../utils/config'
 import { Logger } from '../../utils/logger'
 
@@ -79,13 +78,13 @@ export abstract class BaseExchange implements RestClientInterface {
       const usdtPerpetualMarkets = Object.fromEntries(
         Object.entries(this.exchange.markets)
           .filter(
-            ([symbol, market]) =>
+            ([, market]) =>
               market.quote === 'USDT' && // TODO: add USDC
               market.swap && // TODO: add SPOT markets
               !market.inverse &&
               market.active
           )
-          .filter(([symbol, market]) => !ignoredMarkets.includes(symbol))
+          .filter(([symbol]) => !ignoredMarkets.includes(symbol))
       )
       return usdtPerpetualMarkets
     } catch (error) {
@@ -182,13 +181,13 @@ export abstract class BaseExchange implements RestClientInterface {
     return this.exchangeId
   }
 
-  async fetchFundingHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
+  async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
     try {
       return await this.exchange.fetchFundingHistory(symbol, since, limit, params)
     } catch (error) {
       logger.error({
-        msg: 'Failed to fetch funding history from exchange',
-        function: 'BaseExchange.fetchFundingHistory',
+        msg: 'Failed to fetch funding fee history from exchange',
+        function: 'BaseExchange.fetchFundingFeeHistory',
         exchange: this.exchangeName,
         exchangeId: this.exchangeId,
         symbol,

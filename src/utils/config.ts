@@ -108,6 +108,10 @@ interface FundingConfig {
   projectionHours: number
 }
 
+interface FundingFeeCollectorConfig {
+  cronPattern: string
+}
+
 export type StrategyType = 'funding' | 'spread'
 
 interface StrategyConfig {
@@ -148,6 +152,7 @@ interface Config {
   trading: TradingConfig
   accountSync: AccountSyncConfig
   funding: FundingConfig
+  fundingFeeCollector: FundingFeeCollectorConfig
   strategy: StrategyConfig
 }
 
@@ -238,6 +243,9 @@ const config: Config = {
     maxDataAgeMs: yamlConfig?.funding?.maxDataAgeMs,
     supportedExchanges: yamlConfig?.funding?.supportedExchanges,
     projectionHours: yamlConfig?.funding?.projectionHours,
+  },
+  fundingFeeCollector: {
+    cronPattern: yamlConfig?.fundingFeeCollector?.cronPattern,
   },
   strategy: {
     funding: {

@@ -7,7 +7,6 @@ import { OrderInfo } from '../../types/account'
 import { OrderbookManager } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import { Logger } from '../../utils/logger'
-import { TraceContext } from '../../utils/traceContext'
 import config from '../../utils/config'
 
 const logger = new Logger('trade-executor')

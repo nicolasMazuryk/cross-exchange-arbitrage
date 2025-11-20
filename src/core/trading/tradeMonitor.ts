@@ -3,8 +3,7 @@ import { TradeResult } from './tradeExecutor'
 import { AccountStateManager } from '../state/accountStateManager'
 import { RestClientInterface } from '../../adapters/rest/types'
 import { MarketMetadataService } from '../markets/marketMetadataService'
-import { OrderInfo } from '../../types/account'
-import { OrderbookManager, TopOfBook, OrderBook, OrderBookLevel } from '../orderbook/orderbookManager'
+import { OrderbookManager, TopOfBook, OrderBookLevel } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
@@ -25,16 +24,32 @@ interface DepthSimulationResult {
 }
 
 // Core interfaces
+export interface FundingFeeCollectedEvent {
+  buyExchangeFundingRatePercent: number
+  sellExchangeFundingRatePercent: number
+  netFundingRatePercent: number
+  buyExchangeFundingFeeUsd: number
+  sellExchangeFundingFeeUsd: number
+  netFundingFeeUsd: number
+  fundingTimestamp: number
+  fundingDate: string
+}
+
 export interface TrackedTrade {
   id: string
   opportunity: ArbitrageOpportunity
   entryTimestamp: number
+  exitTimestamp?: number
   status: 'open' | 'closed' | 'error'
   strategy: StrategyType // Track which strategy the trade uses
   entryTrade: TradeResult
   exitTrade?: TradeResult
   exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
   lastUpdateTimestamp: number
+  // Funding tracking
+  buyExchangeNextFundingTimestamp?: number
+  sellExchangeNextFundingTimestamp?: number
+  fundingEvents?: FundingFeeCollectedEvent[]
   // PnL calculations
   feesUsd: {
     entry: number
@@ -46,6 +61,11 @@ export interface TrackedTrade {
     exit: number
     total: number
   }
+  fundingUsd?: {
+    buyExchange: number
+    sellExchange: number
+    net: number
+  }
   feesPercent: {
     entry: number
     exit: number
@@ -56,8 +76,15 @@ export interface TrackedTrade {
     exit: number
     total: number
   }
+  fundingPercent?: {
+    buyExchange: number
+    sellExchange: number
+    net: number
+  }
   deltaProfitUsd: number
   deltaProfitPercent: number
+  fundingProfitUsd?: number
+  fundingProfitPercent?: number
   pnlUsd: number
   pnlPercent: number
 }
@@ -1012,6 +1039,10 @@ export class TradeMonitor extends EventEmitter {
       strategy: tradeResult.opportunity.strategy, // Capture strategy type from opportunity
       entryTrade: tradeResult,
       lastUpdateTimestamp: Date.now(),
+      // Funding tracking
+      buyExchangeNextFundingTimestamp: tradeResult.opportunity.buyExchangeNextFundingTimestamp,
+      sellExchangeNextFundingTimestamp: tradeResult.opportunity.sellExchangeNextFundingTimestamp,
+      fundingEvents: [],
       feesUsd: {
         entry: tradeResult.feesUsd,
         exit: 0, // Will be calculated when position is closed
@@ -1021,6 +1052,11 @@ export class TradeMonitor extends EventEmitter {
         entry: tradeResult.slippageUsd,
         exit: 0, // Will be calculated when position is closed
         total: tradeResult.slippageUsd,
+      },
+      fundingUsd: {
+        buyExchange: 0,
+        sellExchange: 0,
+        net: 0,
       },
       feesPercent: {
         entry: tradeResult.feesPercent,
@@ -1032,8 +1068,15 @@ export class TradeMonitor extends EventEmitter {
         exit: 0, // Will be calculated when position is closed
         total: tradeResult.slippagePercent,
       },
+      fundingPercent: {
+        buyExchange: 0,
+        sellExchange: 0,
+        net: 0,
+      },
       deltaProfitUsd: 0,
       deltaProfitPercent: 0,
+      fundingProfitUsd: 0,
+      fundingProfitPercent: 0,
       pnlUsd: 0,
       pnlPercent: 0,
     }
@@ -1045,6 +1088,8 @@ export class TradeMonitor extends EventEmitter {
       function: 'TradeMonitor.addTrade',
       id: trackedTrade.id,
       entryTrade: trackedTrade.entryTrade,
+      buyExchangeNextFundingTimestamp: trackedTrade.buyExchangeNextFundingTimestamp,
+      sellExchangeNextFundingTimestamp: trackedTrade.sellExchangeNextFundingTimestamp,
     })
 
     // Save trade to Redis
@@ -1302,7 +1347,8 @@ export class TradeMonitor extends EventEmitter {
       trade.status = 'closed'
       trade.exitReason = exitReason
       trade.exitTrade = exitTradeResult
-
+      trade.exitTimestamp = Math.max(trade.exitTrade?.buyOrder?.timestamp ?? 0, trade.exitTrade?.sellOrder?.timestamp ?? 0)
+      
       // Clear any pending exit candidates for this trade
       this.clearExitCandidatesForTrade(trade.id)
 
@@ -1470,7 +1516,7 @@ export class TradeMonitor extends EventEmitter {
     }
 
     try {
-      const restoredTrades = await this.state.loadOpenTrackedTrades()
+      const restoredTrades = await this.state.getAllOpenTrackedTrades()
 
       if (restoredTrades.length === 0) {
         logger.debug({ msg: 'No open trades to restore from Redis', function: 'TradeMonitor.restoreState' })

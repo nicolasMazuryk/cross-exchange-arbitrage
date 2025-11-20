@@ -176,9 +176,9 @@ export class State {
   /**
    * Load all tracked trades from Redis
    */
-  async loadAllTrackedTrades(): Promise<TrackedTrade[]> {
+  async getAllTrackedTrades(): Promise<TrackedTrade[]> {
     if (!this.isRedisConnected() || !this.redis) {
-      logger.error({ msg: 'Redis not connected, returning empty trades', function: 'State.loadAllTrackedTrades' })
+      logger.error({ msg: 'Redis not connected, returning empty trades', function: 'State.getAllTrackedTrades' })
       return []
     }
 
@@ -187,7 +187,7 @@ export class State {
       const keys = await this.redis.keys(pattern)
 
       if (keys.length === 0) {
-        logger.debug({ msg: 'No tracked trades found in Redis', function: 'State.loadAllTrackedTrades' })
+        logger.debug({ msg: 'No tracked trades found in Redis', function: 'State.getAllTrackedTrades' })
         return []
       }
 
@@ -199,20 +199,20 @@ export class State {
             const trade: TrackedTrade = JSON.parse(serialized)
             trades.push(trade)
           } catch (error) {
-            logger.error({ msg: 'Failed to parse tracked trade', function: 'State.loadAllTrackedTrades', key, error })
+            logger.error({ msg: 'Failed to parse tracked trade', function: 'State.getAllTrackedTrades', key, error })
           }
         }
       }
 
       logger.debug({
         msg: 'Tracked trades loaded from Redis',
-        function: 'State.loadAllTrackedTrades',
+        function: 'State.getAllTrackedTrades',
         tradeCount: trades.length,
       })
 
       return trades
     } catch (error) {
-      logger.error({ msg: 'Failed to load tracked trades from Redis', function: 'State.loadAllTrackedTrades', error })
+      logger.error({ msg: 'Failed to load tracked trades from Redis', function: 'State.getAllTrackedTrades', error })
       return []
     }
   }
@@ -220,13 +220,13 @@ export class State {
   /**
    * Load only open tracked trades from Redis (filters by status === 'open')
    */
-  async loadOpenTrackedTrades(): Promise<TrackedTrade[]> {
-    const allTrades = await this.loadAllTrackedTrades()
+  async getAllOpenTrackedTrades(): Promise<TrackedTrade[]> {
+    const allTrades = await this.getAllTrackedTrades()
     const openTrades = allTrades.filter(trade => trade.status === 'open')
 
     logger.info({
       msg: 'Open tracked trades loaded from Redis',
-      function: 'State.loadOpenTrackedTrades',
+      function: 'State.getAllOpenTrackedTrades',
       totalTrades: allTrades.length,
       openTrades: openTrades.length,
     })

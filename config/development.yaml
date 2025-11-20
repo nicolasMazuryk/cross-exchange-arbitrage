@@ -92,7 +92,7 @@ accountSync:
   snapshotIntervalMs: 180000  # interval for periodic snapshots in milliseconds (3 minutes)
 
 funding:
-  fetchIntervalMs: 15000  # fetch funding rates every 60 seconds using browser automation
+  fetchIntervalMs: 20000  # fetch funding rates every 20 seconds using browser automation
   maxDataAgeMs: 120000  # consider funding data stale after 2 minutes
   supportedExchanges:
     - "binance"
@@ -102,13 +102,16 @@ funding:
   # Funding Arbitrage Projection Settings
   projectionHours: 20  # number of hours to project funding profitability
 
+fundingFeeCollector:
+  cronPattern: "0 2 * * * *"  # Run at 2 minutes after every hour (sec min hour day month dayOfWeek)
+
 strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
     enabled: true  # Enable/disable funding arbitrage strategy
     windowStart: 14400  # Start execution window in seconds before next funding event
     windowEnd: 30  # End execution window in seconds before next funding event
-    minFundingProfitPercent: 0.00  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
+    minFundingProfitPercent: 0.10  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent

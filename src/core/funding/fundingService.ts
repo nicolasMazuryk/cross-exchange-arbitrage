@@ -153,7 +153,7 @@ export class FundingService extends EventEmitter {
         }
       })
 
-      this.emit('fundingDataUpdated', this.state)
+      // this.emit('fundingDataUpdated', this.state)
     } catch (error) {
       logger.error({
         msg: 'Error fetching funding rates from all exchanges',

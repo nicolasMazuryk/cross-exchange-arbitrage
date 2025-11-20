@@ -8,4 +8,5 @@
  */
 
 export { FundingService } from './fundingService'
+export { FundingFeeCollector } from './fundingFeeCollector'
 export * from './types'

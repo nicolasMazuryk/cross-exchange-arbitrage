@@ -105,16 +105,24 @@ export function calculateSlippage(
   if (!orderInfo.expectedPrice || orderInfo.expectedPrice === 0 || orderInfo.averagePrice === 0)
     return { slippageUsd: 0, slippagePercent: 0 }
 
-  let slippagePercent: number
+  let slippagePercent: number = 0
 
   if (side === 'BUY') {
     // For BUY orders: buying into the ask side
     // Positive slippage means we paid more than expected (bad)
     slippagePercent = ((orderInfo.averagePrice - orderInfo.expectedPrice) / orderInfo.expectedPrice) * 100
-  } else {
+  } else if (side === 'SELL') {
     // For SELL orders: selling into the bid side
     // Positive slippage means we paid more than expected (bad)
     slippagePercent = ((orderInfo.expectedPrice - orderInfo.averagePrice) / orderInfo.averagePrice) * 100
+  } else {
+    logger.error({
+      msg: 'Invalid side for slippage calculation',
+      function: 'calculateSlippage',
+      side,
+      orderInfo,
+    })
+    throw new Error(`Invalid side for slippage calculation: ${side}`)
   }
 
   const slippageUsd = orderInfo.averagePrice * orderInfo.quantity * (slippagePercent / 100)

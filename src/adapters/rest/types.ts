@@ -39,6 +39,8 @@ export interface RestClientInterface {
 
   // Funding
   fetchFundingData?(): Promise<Map<string, ParsedFunding>>
+  fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any>
+  fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any>
 
   // Utility
   getExchangeId(): string
