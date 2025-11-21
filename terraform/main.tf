@@ -5,10 +5,10 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.12.0" # Use version constraint for flexibility // 5.82.2
+      version = "~> 6.12.0"
     }
   }
-  required_version = "~> 1.13.5" # Use version constraint for flexibility
+  required_version = "~> 1.13.5"
 }
 
 locals {
@@ -18,34 +18,13 @@ locals {
     ManagedBy = "terraform"
   }
 
-  # Container memory reservation per instance type (in MB)
-  # Reserves slightly less than total instance memory to leave headroom for:
-  #   - ECS agent (~150-200MB)
-  #   - OS overhead (~400-500MB)
-  #   - Temporary spikes and buffers
-  instance_memory = {
-    "c6gn.large"  = 3000 # 4 GiB total - ~1000MB overhead
-    "c6gn.xlarge" = 7000 # 8 GiB total - ~1000MB overhead
-    "c7gn.large"  = 3000 # 4 GiB total - ~1000MB overhead
-    "c7gn.xlarge" = 7000 # 8 GiB total - ~1000MB overhead
-    "c8gn.large"  = 3000 # 4 GiB total - ~1000MB overhead
-    "c8gn.xlarge" = 7000 # 8 GiB total - ~1000MB overhead
-  }
-
-  # Calculate container memory reservation based on instance type
-  container_memory_reservation = lookup(local.instance_memory, var.ec2_instance_type)
-
-  # Bot configurations
+  # Bot configurations for ECR repositories and CloudWatch logs
   bots = {
     funding_arbitrage_bot = {
-      # cpu      = 1024
-      # memory   = 2048
       strategy  = "FUNDING"
       log_level = "INFO"
     }
     # spread_arbitrage_bot = {
-    #   cpu      = 1024
-    #   memory   = 2048
     #   strategy = "SPREAD"
     #   log_level = "INFO"
     # }
@@ -63,327 +42,20 @@ provider "aws" {
 ###############################################################################
 # VPC & Subnets
 ###############################################################################
-# NETWORK ARCHITECTURE OVERVIEW:
-# ================================
-# This setup uses a two-subnet architecture to solve a critical networking issue:
-#
-# PROBLEM: ECS tasks with EC2 launch type + awsvpc network mode create ENIs that
-#          don't get public IPs, so they need NAT Gateway for internet access.
-#          However, if the EC2 instance itself routes through NAT, the ECS agent
-#          disconnects because it can't properly reach AWS APIs.
-#
-# SOLUTION: Two subnets with different routing:
-#   1. PUBLIC SUBNET (default_a): EC2 instance runs here, routes through IGW
-#      - ECS agent maintains stable connection to AWS APIs
-#      - EC2 instance has Elastic IP for stable external access
-#   2. PRIVATE SUBNET (ecs_tasks_private_subnet): Task ENIs run here, route through NAT
-#      - Tasks access internet via NAT Gateway
-#      - No public IPs needed on task ENIs
-#
-# This architecture ensures both the ECS agent and tasks have proper internet access.
-###############################################################################
-
+# Using default VPC with public subnet for both instances
 resource "aws_default_vpc" "default" {
   tags = {
     Name = "default"
   }
 }
 
-# Public subnet for EC2 instance (routes through Internet Gateway)
+# Public subnet for both EC2 instances
 resource "aws_default_subnet" "default_a" {
   availability_zone       = "${var.aws_region}a"
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "ecs-instance-public-subnet"
-  }
-}
-
-# Additional default subnets for ElastiCache multi-AZ support
-resource "aws_default_subnet" "default_b" {
-  availability_zone = "${var.aws_region}b"
-
-  tags = {
-    Name = "default-b"
-  }
-}
-
-resource "aws_default_subnet" "default_c" {
-  availability_zone = "${var.aws_region}c"
-
-  tags = {
-    Name = "default-c"
-  }
-}
-
-# Private subnet for ECS task ENIs (routes through NAT Gateway)
-resource "aws_subnet" "ecs_tasks_private_subnet" {
-  vpc_id            = aws_default_vpc.default.id
-  cidr_block        = "172.31.128.0/20" # Available CIDR range in default VPC
-  availability_zone = "${var.aws_region}a"
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "ecs-tasks-private-subnet"
-    }
-  )
-}
-
-###############################################################################
-# Security Group for ECS
-###############################################################################
-# Shared by both EC2 instance and task ENIs
-# - Allows all outbound traffic (needed for exchange APIs and WebSocket connections)
-# - Blocks all inbound traffic (trading bots don't accept incoming connections)
-###############################################################################
-resource "aws_security_group" "trading_bots_security_group" {
-  name        = "trading-bots-security-group"
-  description = "Security group for trading bot ECS tasks on EC2"
-  vpc_id      = aws_default_vpc.default.id
-
-  # Block all inbound traffic (trading bots only make outbound connections)
-  ingress {
-    description = "Block all inbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["127.0.0.1/32"] # Effectively blocks all inbound
-  }
-
-  egress {
-    description = "Allow all outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "trading-bots-security-group"
-  }
-}
-
-###############################################################################
-# ECS Cluster
-###############################################################################
-resource "aws_ecs_cluster" "trading_bots_cluster" {
-  name = "trading-bots-cluster"
-
-  setting {
-    name  = "containerInsights"
-    value = "enabled"
-  }
-}
-
-###############################################################################
-# IAM Roles for ECS
-###############################################################################
-# Two types of roles are needed:
-#   1. Task Execution Role: Used by ECS agent to pull images, write logs, etc.
-#   2. Task Role: Used by the running container (currently has no special permissions)
-###############################################################################
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name               = "trading-bot-execution-role"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_execution_role.json
-}
-
-data "aws_iam_policy_document" "ecs_task_execution_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-resource "aws_iam_role" "ecs_task_role" {
-  name               = "trading-bot-task-role"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_role.json
-}
-
-data "aws_iam_policy_document" "ecs_task_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
-}
-
-###############################################################################
-# IAM Role for EC2 Instances (ECS Container Instance Role)
-###############################################################################
-resource "aws_iam_role" "ecs_instance_role" {
-  name               = "trading-bot-ec2-instance-role"
-  assume_role_policy = data.aws_iam_policy_document.ecs_instance_role.json
-}
-
-data "aws_iam_policy_document" "ecs_instance_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_instance_role_policy" {
-  role       = aws_iam_role.ecs_instance_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
-}
-
-resource "aws_iam_instance_profile" "ecs_instance_profile" {
-  name = "trading-bot-ec2-instance-profile"
-  role = aws_iam_role.ecs_instance_role.name
-}
-
-###############################################################################
-# CloudWatch Log Groups
-###############################################################################
-resource "aws_cloudwatch_log_group" "log_groups" {
-  for_each          = local.bots
-  name              = "/ecs/${each.key}"
-  retention_in_days = 14
-}
-
-###############################################################################
-# CloudWatch Errors to Lambda
-###############################################################################
-# Temporarily disabled - comment out to re-enable error notifications
-# resource "aws_lambda_permission" "cloudwatch_errors_to_lambda_permissions" {
-#   for_each      = local.bots
-#   statement_id  = "AllowExecutionFromCloudWatch_${each.key}"
-#   action        = "lambda:InvokeFunction"
-#   function_name = "cloud-watch-errors-slack-notifications-lambda"
-#   principal     = "logs.${var.aws_region}.amazonaws.com"
-#   source_arn    = "${aws_cloudwatch_log_group.log_groups[each.key].arn}:*"
-# }
-
-# resource "aws_cloudwatch_log_subscription_filter" "cloudwatch_errors_subscription_filters" {
-#   for_each        = local.bots
-#   name            = "${each.key}-error-subscription-filter"
-#   log_group_name  = aws_cloudwatch_log_group.log_groups[each.key].name
-#   filter_pattern  = "?ERROR ?Error ?error"
-#   destination_arn = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:cloud-watch-errors-slack-notifications-lambda"
-# }
-
-###############################################################################
-# ECR Repositories
-###############################################################################
-resource "aws_ecr_repository" "repositories" {
-  for_each     = local.bots
-  name         = each.key
-  force_delete = true # Allow deletion even if images exist
-}
-
-###############################################################################
-# ECS Task Definitions
-###############################################################################
-resource "aws_ecs_task_definition" "task_definitions" {
-  for_each                 = local.bots
-  family                   = each.key
-  network_mode             = "awsvpc" # Required for task ENIs in private subnet
-  requires_compatibilities = ["EC2"]
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64" # Must match EC2 instance type (c6gn = ARM64)
-    # cpu_architecture       = "X86_64"
-  }
-
-  container_definitions = jsonencode([
-    {
-      name              = each.key
-      image             = "${aws_ecr_repository.repositories[each.key].repository_url}:latest"
-      essential         = true
-      memoryReservation = local.container_memory_reservation
-      # Environment variables can be added here if needed by the application
-      environment = []
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.log_groups[each.key].name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
-        }
-      }
-    }
-  ])
-}
-
-###############################################################################
-# ECS Services
-###############################################################################
-resource "aws_ecs_service" "services" {
-  for_each        = local.bots
-  name            = "${each.key}-service"
-  cluster         = aws_ecs_cluster.trading_bots_cluster.id
-  task_definition = aws_ecs_task_definition.task_definitions[each.key].arn
-  desired_count   = 1
-  launch_type     = "EC2"
-
-  # Deployment configuration optimized for single-instance deployments
-  # - deployment_minimum_healthy_percent = 0: Allows stopping old task before starting new one
-  # - deployment_maximum_percent = 100: Prevents running multiple tasks simultaneously
-  # This prevents memory exhaustion when deploying to a single EC2 instance
-  deployment_minimum_healthy_percent = 0
-  deployment_maximum_percent         = 100
-
-  # Disable AZ rebalancing for single-instance deployments
-  # AZ rebalancing requires maximumPercent > 100, which conflicts with our memory constraints
-  availability_zone_rebalancing = "DISABLED"
-
-  # Force deletion settings to prevent stuck destroy operations
-  # - force_delete: Allows Terraform to delete the service even if tasks are running
-  force_delete          = true
-
-  network_configuration {
-    subnets         = [aws_subnet.ecs_tasks_private_subnet.id] # Task ENIs in private subnet
-    security_groups = [aws_security_group.trading_bots_security_group.id]
-  }
-
-  deployment_controller {
-    type = "ECS"
-  }
-
-  depends_on = [
-    aws_instance.ecs_instance
-  ]
-}
-
-###############################################################################
-# Data source for ECS-optimized AMI
-###############################################################################
-data "aws_ami" "ecs_optimized" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-ecs-hvm-*-arm64*"]
-    # values = ["al2023-ami-ecs-hvm-*-x86_64*"] 
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["arm64"]
-    # values = ["x86_64"]
+    Name = "trading-bots-public-subnet"
   }
 }
 
@@ -398,136 +70,629 @@ data "aws_internet_gateway" "default" {
 }
 
 ###############################################################################
-# NAT Gateway for Task Internet Access
+# Security Groups
 ###############################################################################
-# NAT Gateway enables task ENIs in the private subnet to access the internet.
-# The NAT Gateway itself is deployed in the public subnet and routes through IGW.
-#
-# Flow: Task ENI → Private Subnet → NAT Gateway → Public Subnet → IGW → Internet
-resource "aws_eip" "nat_gateway_eip" {
-  domain = "vpc"
+# Security group for Redis instance
+resource "aws_security_group" "redis_security_group" {
+  name        = "trading-bots-redis-sg"
+  description = "Security group for Redis EC2 instance"
+  vpc_id      = aws_default_vpc.default.id
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "trading-bot-nat-gateway-eip"
-    }
-  )
-}
-
-resource "aws_nat_gateway" "trading_bots_nat" {
-  allocation_id = aws_eip.nat_gateway_eip.id
-  subnet_id     = aws_default_subnet.default_a.id
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "trading-bot-nat-gateway"
-    }
-  )
-
-  depends_on = [data.aws_internet_gateway.default]
-}
-
-# Route table for private subnet (routes all traffic through NAT Gateway)
-resource "aws_route_table" "ecs_tasks_route_table" {
-  vpc_id = aws_default_vpc.default.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.trading_bots_nat.id
+  # Allow Redis port from Application instance
+  ingress {
+    description     = "Redis from Application instance"
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app_security_group.id]
   }
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "ecs-tasks-private-route-table"
+  # Allow Redis port (6379) from Bastion
+  ingress {
+    description     = "Redis from Bastion"
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [data.aws_security_group.bastion.id]
+  }
+
+  # Allow SSH from anywhere for maintenance
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "trading-bots-redis-sg"
+  }
+}
+
+# Security group for Application instance
+resource "aws_security_group" "app_security_group" {
+  name        = "trading-bots-app-sg"
+  description = "Security group for Application EC2 instance"
+  vpc_id      = aws_default_vpc.default.id
+
+  # Allow SSH from anywhere for maintenance
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "trading-bots-app-sg"
+  }
+}
+
+# Data source for bastion security group
+data "aws_security_group" "bastion" {
+  name   = "bastion"
+  vpc_id = aws_default_vpc.default.id
+}
+
+###############################################################################
+# IAM Roles for EC2 Instances
+###############################################################################
+# IAM role for Redis instance
+resource "aws_iam_role" "redis_instance_role" {
+  name               = "trading-bot-redis-instance-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
+}
+
+# IAM role for Application instance
+resource "aws_iam_role" "app_instance_role" {
+  name               = "trading-bot-app-instance-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
+}
+
+data "aws_iam_policy_document" "ec2_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
     }
-  )
+  }
 }
 
-# Associate ONLY the private subnet with NAT route table
-# The public subnet (default_a) uses the main route table which routes through IGW
-resource "aws_route_table_association" "ecs_tasks_private_subnet_route_table_association" {
-  subnet_id      = aws_subnet.ecs_tasks_private_subnet.id
-  route_table_id = aws_route_table.ecs_tasks_route_table.id
+# IAM instance profiles
+resource "aws_iam_instance_profile" "redis_instance_profile" {
+  name = "trading-bot-redis-instance-profile"
+  role = aws_iam_role.redis_instance_role.name
+}
+
+resource "aws_iam_instance_profile" "app_instance_profile" {
+  name = "trading-bot-app-instance-profile"
+  role = aws_iam_role.app_instance_role.name
+}
+
+# CloudWatch Logs permissions for both instances
+resource "aws_iam_policy" "cloudwatch_logs_policy" {
+  name        = "trading-bot-cloudwatch-logs-policy"
+  description = "Allows EC2 instances to write logs and metrics to CloudWatch"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = concat(
+          [for log_group in aws_cloudwatch_log_group.bot_log_groups : "${log_group.arn}:*"],
+          ["${aws_cloudwatch_log_group.redis_log_group.arn}:*"]
+        )
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData",
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:ListMetrics"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeTags",
+          "ec2:DescribeInstances"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Attach CloudWatch policy to both roles
+resource "aws_iam_role_policy_attachment" "redis_cloudwatch_logs" {
+  role       = aws_iam_role.redis_instance_role.name
+  policy_arn = aws_iam_policy.cloudwatch_logs_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "app_cloudwatch_logs" {
+  role       = aws_iam_role.app_instance_role.name
+  policy_arn = aws_iam_policy.cloudwatch_logs_policy.arn
+}
+
+# ECR permissions for Application instance
+resource "aws_iam_policy" "ecr_pull_policy" {
+  name        = "trading-bot-ecr-pull-policy"
+  description = "Allows EC2 instance to pull images from ECR"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "app_ecr_pull" {
+  role       = aws_iam_role.app_instance_role.name
+  policy_arn = aws_iam_policy.ecr_pull_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "redis_ecr_pull" {
+  role       = aws_iam_role.redis_instance_role.name
+  policy_arn = aws_iam_policy.ecr_pull_policy.arn
 }
 
 ###############################################################################
-# Elastic IP for EC2 Instance
+# CloudWatch Log Groups
 ###############################################################################
-# Provides a stable public IP for the EC2 instance running the ECS agent
-resource "aws_eip" "ecs_instance_eip" {
-  domain = "vpc"
+# Log group for Redis instance
+resource "aws_cloudwatch_log_group" "redis_log_group" {
+  name              = "/ec2/trading-bots/redis"
+  retention_in_days = 14
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "trading-bot-ecs-instance-eip"
-    }
-  )
+  tags = {
+    Name = "trading-bots-redis-logs"
+  }
+}
+
+# Log groups for each bot application
+resource "aws_cloudwatch_log_group" "bot_log_groups" {
+  for_each          = local.bots
+  name              = "/ec2/trading-bots/${each.key}"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${each.key}-logs"
+  }
 }
 
 ###############################################################################
-# EC2 Instance for ECS Cluster
+# CloudWatch Errors to Lambda
 ###############################################################################
-# Single EC2 instance that hosts the ECS container instances.
-# Runs in PUBLIC subnet (default_a) so ECS agent can connect via IGW.
-###############################################################################
-resource "aws_instance" "ecs_instance" {
-  ami                    = data.aws_ami.ecs_optimized.id
-  instance_type          = var.ec2_instance_type
-  subnet_id              = aws_default_subnet.default_a.id # PUBLIC subnet - routes through IGW
-  vpc_security_group_ids = [aws_security_group.trading_bots_security_group.id]
-  iam_instance_profile   = aws_iam_instance_profile.ecs_instance_profile.name
-  monitoring             = true # Enable detailed CloudWatch monitoring
+# Lambda permissions for each bot's log group
+resource "aws_lambda_permission" "cloudwatch_errors_to_lambda_bots" {
+  for_each      = local.bots
+  statement_id  = "AllowExecutionFromCloudWatch_${each.key}"
+  action        = "lambda:InvokeFunction"
+  function_name = "cloud-watch-errors-slack-notifications-lambda"
+  principal     = "logs.${var.aws_region}.amazonaws.com"
+  source_arn    = "${aws_cloudwatch_log_group.bot_log_groups[each.key].arn}:*"
+}
 
-  # Configure ECS agent on instance boot
+# Error subscription filters for each bot's log group
+resource "aws_cloudwatch_log_subscription_filter" "bot_errors_filters" {
+  for_each        = local.bots
+  name            = "${each.key}-error-subscription-filter"
+  log_group_name  = aws_cloudwatch_log_group.bot_log_groups[each.key].name
+  filter_pattern  = "?ERROR ?Error ?error"
+  destination_arn = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:cloud-watch-errors-slack-notifications-lambda"
+
+  depends_on = [aws_lambda_permission.cloudwatch_errors_to_lambda_bots]
+}
+
+###############################################################################
+# ECR Repositories
+###############################################################################
+resource "aws_ecr_repository" "repositories" {
+  for_each     = local.bots
+  name         = each.key
+  force_delete = true # Allow deletion even if images exist
+
+  tags = {
+    Name = each.key
+  }
+}
+
+###############################################################################
+# Data source for Amazon Linux 2023 ARM64 AMI
+###############################################################################
+data "aws_ami" "amazon_linux_arm64" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023*-arm64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
+}
+
+###############################################################################
+# Redis EC2 Instance
+###############################################################################
+resource "aws_instance" "redis_instance" {
+  ami                    = data.aws_ami.amazon_linux_arm64.id
+  instance_type          = var.redis_instance_type
+  subnet_id              = aws_default_subnet.default_a.id
+  vpc_security_group_ids = [aws_security_group.redis_security_group.id]
+  iam_instance_profile   = aws_iam_instance_profile.redis_instance_profile.name
+  monitoring             = true
+
   user_data = <<-EOT
     #!/bin/bash
     set -e
     
-    # Set ECS cluster name
-    echo ECS_CLUSTER=${aws_ecs_cluster.trading_bots_cluster.name} >> /etc/ecs/ecs.config
+    # Update system
+    dnf update -y
     
-    # Enable ECS agent metadata and logging
-    echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config
-    echo ECS_LOGLEVEL=info >> /etc/ecs/ecs.config
+    # Install Docker
+    dnf install -y docker
+    systemctl enable docker
+    systemctl start docker
     
-    # Restart ECS agent to apply configuration
-    if systemctl is-active --quiet ecs; then
-      systemctl restart ecs
-    fi
+    # Install CloudWatch agent
+    wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/arm64/latest/amazon-cloudwatch-agent.rpm
+    rpm -U ./amazon-cloudwatch-agent.rpm
+    
+    # Create CloudWatch agent config
+    cat > /opt/aws/amazon-cloudwatch-agent/etc/config.json <<'CONFIG'
+    {
+      "logs": {
+        "logs_collected": {
+          "files": {
+            "collect_list": [
+              {
+                "file_path": "/var/log/redis/*.log",
+                "log_group_name": "${aws_cloudwatch_log_group.redis_log_group.name}",
+                "log_stream_name": "{instance_id}/redis",
+                "timezone": "UTC"
+              },
+              {
+                "file_path": "/var/log/messages",
+                "log_group_name": "${aws_cloudwatch_log_group.redis_log_group.name}",
+                "log_stream_name": "{instance_id}/system",
+                "timezone": "UTC"
+              }
+            ]
+          }
+        }
+      },
+      "metrics": {
+        "namespace": "TradingBots/Redis",
+        "metrics_collected": {
+          "cpu": {
+            "measurement": [
+              {"name": "cpu_usage_active", "rename": "CPU_USAGE", "unit": "Percent"},
+              {"name": "cpu_usage_iowait", "rename": "CPU_IOWAIT", "unit": "Percent"}
+            ],
+            "metrics_collection_interval": 60,
+            "totalcpu": true
+          },
+          "disk": {
+            "measurement": [
+              {"name": "used_percent", "rename": "DISK_USED", "unit": "Percent"}
+            ],
+            "metrics_collection_interval": 60,
+            "resources": ["*"]
+          },
+          "mem": {
+            "measurement": [
+              {"name": "mem_used_percent", "rename": "MEM_USED", "unit": "Percent"}
+            ],
+            "metrics_collection_interval": 60
+          }
+        }
+      }
+    }
+    CONFIG
+    
+    # Start CloudWatch agent
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+      -a fetch-config \
+      -m ec2 \
+      -s \
+      -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json
+    
+    # Create directory for Redis logs
+    mkdir -p /var/log/redis
+    chmod 755 /var/log/redis
+    
+    # Create Redis data directory
+    mkdir -p /data/redis
+    chmod 755 /data/redis
+    
+    # Run Redis container
+    docker run -d \
+      --name redis \
+      --restart unless-stopped \
+      -p 6379:6379 \
+      -v /data/redis:/data \
+      -v /var/log/redis:/var/log/redis \
+      redis:8.4.0-alpine \
+      redis-server \
+      --appendonly yes \
+      --appendfsync everysec \
+      --logfile /var/log/redis/redis.log
+    
+    echo "Redis instance setup complete"
   EOT
 
-  # IMDSv2 configuration (more secure than IMDSv1)
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required" # Require IMDSv2
+    http_tokens                 = "required"
     http_put_response_hop_limit = 1
   }
 
   lifecycle {
-    create_before_destroy = false # Aligned with ECS deployment strategy: kill one, then replace
+    create_before_destroy = false
     ignore_changes = [
-      ami # Prevent instance recreation when AMI updates
+      ami
     ]
   }
 
   tags = merge(
     local.common_tags,
     {
-      Name = "trading-bot-ecs-instance"
+      Name = "trading-bot-redis-instance"
     }
   )
 }
 
 ###############################################################################
-# Associate Elastic IP with EC2 Instance
+# Elastic IPs for Application Instances (One per Bot)
 ###############################################################################
-resource "aws_eip_association" "ecs_instance_eip_assoc" {
-  instance_id   = aws_instance.ecs_instance.id
-  allocation_id = aws_eip.ecs_instance_eip.id
+resource "aws_eip" "app_instance_eips" {
+  for_each = local.bots
+  domain   = "vpc"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${each.key}-eip"
+    }
+  )
+}
+
+###############################################################################
+# Application EC2 Instances (One per Bot)
+###############################################################################
+resource "aws_instance" "app_instances" {
+  for_each = local.bots
+
+  ami                    = data.aws_ami.amazon_linux_arm64.id
+  instance_type          = var.app_instance_type
+  subnet_id              = aws_default_subnet.default_a.id
+  vpc_security_group_ids = [aws_security_group.app_security_group.id]
+  iam_instance_profile   = aws_iam_instance_profile.app_instance_profile.name
+  monitoring             = true
+
+  user_data = <<-EOT
+    #!/bin/bash
+    set -e
+    
+    # Update system
+    dnf update -y
+    
+    # Install Docker
+    dnf install -y docker
+    systemctl enable docker
+    systemctl start docker
+    
+    # Install CloudWatch agent
+    wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/arm64/latest/amazon-cloudwatch-agent.rpm
+    rpm -U ./amazon-cloudwatch-agent.rpm
+    
+    # Create CloudWatch agent config for ${each.key}
+    cat > /opt/aws/amazon-cloudwatch-agent/etc/config.json <<'CONFIG'
+    {
+      "logs": {
+        "logs_collected": {
+          "files": {
+            "collect_list": [
+              {
+                "file_path": "/var/log/trading-bot/${each.key}/error.log",
+                "log_group_name": "${aws_cloudwatch_log_group.bot_log_groups[each.key].name}",
+                "log_stream_name": "{instance_id}/error",
+                "timezone": "UTC"
+              },
+              {
+                "file_path": "/var/log/trading-bot/${each.key}/combined.log",
+                "log_group_name": "${aws_cloudwatch_log_group.bot_log_groups[each.key].name}",
+                "log_stream_name": "{instance_id}/combined",
+                "timezone": "UTC"
+              },
+              {
+                "file_path": "/var/log/messages",
+                "log_group_name": "${aws_cloudwatch_log_group.bot_log_groups[each.key].name}",
+                "log_stream_name": "{instance_id}/system",
+                "timezone": "UTC"
+              }
+            ]
+          }
+        }
+      },
+      "metrics": {
+        "namespace": "TradingBots/${each.key}",
+        "metrics_collected": {
+          "cpu": {
+            "measurement": [
+              {"name": "cpu_usage_active", "rename": "CPU_USAGE", "unit": "Percent"},
+              {"name": "cpu_usage_idle", "rename": "CPU_IDLE", "unit": "Percent"},
+              {"name": "cpu_usage_iowait", "rename": "CPU_IOWAIT", "unit": "Percent"}
+            ],
+            "metrics_collection_interval": 60,
+            "totalcpu": true
+          },
+          "mem": {
+            "measurement": [
+              {"name": "mem_used_percent", "rename": "MEM_USED_PERCENT", "unit": "Percent"},
+              {"name": "mem_available_percent", "rename": "MEM_AVAILABLE_PERCENT", "unit": "Percent"},
+              {"name": "swap_used_percent", "rename": "SWAP_USED_PERCENT", "unit": "Percent"}
+            ],
+            "metrics_collection_interval": 60
+          },
+          "disk": {
+            "measurement": [
+              {"name": "used_percent", "rename": "DISK_USED_PERCENT", "unit": "Percent"},
+              {"name": "read_ops", "rename": "DISK_READ_OPS", "unit": "Count"},
+              {"name": "write_ops", "rename": "DISK_WRITE_OPS", "unit": "Count"}
+            ],
+            "metrics_collection_interval": 60,
+            "resources": ["*"]
+          },
+          "diskio": {
+            "measurement": [
+              {"name": "io_time", "unit": "Milliseconds"},
+              {"name": "read_bytes", "unit": "Bytes"},
+              {"name": "write_bytes", "unit": "Bytes"}
+            ],
+            "metrics_collection_interval": 60,
+            "resources": ["*"]
+          },
+          "netstat": {
+            "measurement": [
+              {"name": "tcp_established", "rename": "TCP_ESTABLISHED", "unit": "Count"},
+              {"name": "tcp_time_wait", "rename": "TCP_TIME_WAIT", "unit": "Count"},
+              {"name": "tcp_close_wait", "rename": "TCP_CLOSE_WAIT", "unit": "Count"},
+              {"name": "tcp_listen", "rename": "TCP_LISTEN", "unit": "Count"},
+              {"name": "tcp_syn_recv", "rename": "TCP_SYN_RECV", "unit": "Count"}
+            ],
+            "metrics_collection_interval": 60
+          },
+          "processes": {
+            "measurement": [
+              {"name": "running", "rename": "PROCESSES_RUNNING", "unit": "Count"},
+              {"name": "sleeping", "rename": "PROCESSES_SLEEPING", "unit": "Count"},
+              {"name": "dead", "rename": "PROCESSES_DEAD", "unit": "Count"}
+            ]
+          },
+          "procstat": [
+            {
+              "pattern": "${each.key}",
+              "measurement": [
+                {"name": "cpu_usage", "rename": "PROCESS_CPU_USAGE", "unit": "Percent"},
+                {"name": "memory_rss", "rename": "PROCESS_MEMORY_RSS", "unit": "Bytes"},
+                {"name": "num_threads", "rename": "PROCESS_THREADS", "unit": "Count"},
+                {"name": "num_fds", "rename": "PROCESS_FDS_OPEN", "unit": "Count"}
+              ]
+            }
+          ],
+          "swap": {
+            "measurement": [
+              {"name": "used_percent", "rename": "SWAP_USED", "unit": "Percent"},
+              {"name": "free", "rename": "SWAP_FREE", "unit": "Bytes"}
+            ]
+          },
+          "system": {
+            "measurement": [
+              {"name": "load1", "rename": "LOAD_AVERAGE_1M", "unit": "None"},
+              {"name": "load5", "rename": "LOAD_AVERAGE_5M", "unit": "None"},
+              {"name": "load15", "rename": "LOAD_AVERAGE_15M", "unit": "None"}
+            ],
+            "metrics_collection_interval": 60
+          }
+        },
+        "append_dimensions": {
+          "InstanceId": "$${aws:InstanceId}",
+          "BotName": "${each.key}"
+        }
+      }
+    }
+    CONFIG
+    
+    # Start CloudWatch agent
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+      -a fetch-config \
+      -m ec2 \
+      -s \
+      -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json
+    
+    # Create directories for application logs
+    mkdir -p /var/log/trading-bot/${each.key}
+    chmod 755 /var/log/trading-bot
+    chmod 755 /var/log/trading-bot/${each.key}
+    
+    echo "${each.key} instance setup complete"
+  EOT
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  lifecycle {
+    create_before_destroy = false
+    ignore_changes = [
+      ami
+    ]
+  }
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${each.key}-instance"
+    }
+  )
+}
+
+###############################################################################
+# Associate Elastic IPs with Application Instances
+###############################################################################
+resource "aws_eip_association" "app_instance_eip_assocs" {
+  for_each      = local.bots
+  instance_id   = aws_instance.app_instances[each.key].id
+  allocation_id = aws_eip.app_instance_eips[each.key].id
 }
 
 ###############################################################################
@@ -545,6 +710,10 @@ resource "aws_lambda_function" "sns_to_slack_notification" {
     variables = {
       SLACK_WEBHOOK_URL = var.slack_webhook_url
     }
+  }
+
+  tags = {
+    Name = "sns-to-slack-notification"
   }
 }
 
@@ -599,6 +768,10 @@ resource "aws_lambda_permission" "sns_to_slack_notification_lambda_permission" {
 ###############################################################################
 resource "aws_sns_topic" "trading_bot_resource_utilization_alarms" {
   name = "trading-bot-resource-utilization-alarms"
+
+  tags = {
+    Name = "trading-bot-resource-utilization-alarms"
+  }
 }
 
 resource "aws_sns_topic_subscription" "lambda_slack_subscription" {
@@ -608,186 +781,329 @@ resource "aws_sns_topic_subscription" "lambda_slack_subscription" {
 }
 
 ###############################################################################
-# CloudWatch Alarms for CPU and Memory Utilization
+# CloudWatch Alarms - Application Instances (One set per Bot)
 ###############################################################################
-resource "aws_cloudwatch_metric_alarm" "cpu_alarms" {
+# CPU Utilization
+resource "aws_cloudwatch_metric_alarm" "app_cpu_alarms" {
   for_each            = local.bots
-  alarm_name          = "${each.key}-cpu-alarm"
+  alarm_name          = "${each.key}-cpu-usage-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPU_USAGE"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "CPU utilization is too high for ${each.key} instance"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-cpu-usage-alarm"
+    Bot  = each.key
+  }
+}
+
+# CPU IOWait (I/O bottleneck detection)
+resource "aws_cloudwatch_metric_alarm" "app_cpu_iowait_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-cpu-iowait-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPU_IOWAIT"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 30
+  alarm_description   = "High CPU IOWait for ${each.key} - I/O bottleneck detected"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-cpu-iowait-alarm"
+    Bot  = each.key
+  }
+}
+
+# Memory Utilization (from CloudWatch Agent)
+resource "aws_cloudwatch_metric_alarm" "app_memory_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-memory-used-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "MEM_USED_PERCENT"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "Memory utilization is too high for ${each.key} instance"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-memory-used-alarm"
+    Bot  = each.key
+  }
+}
+
+# Disk Utilization
+resource "aws_cloudwatch_metric_alarm" "app_disk_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-disk-used-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "DISK_USED_PERCENT"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "Disk utilization is too high for ${each.key} instance"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-disk-used-alarm"
+    Bot  = each.key
+  }
+}
+
+# Load Average (System overload detection)
+resource "aws_cloudwatch_metric_alarm" "app_load_average_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-load-average-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "LOAD_AVERAGE_1M"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 2.0 # For 2 vCPU instance (c8g.large)
+  alarm_description   = "High load average for ${each.key} - system overloaded"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-load-average-alarm"
+    Bot  = each.key
+  }
+}
+
+# TCP Close Wait (Connection leak detection - CRITICAL)
+resource "aws_cloudwatch_metric_alarm" "app_tcp_close_wait_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-tcp-close-wait-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "TCP_CLOSE_WAIT"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 100
+  alarm_description   = "High TCP_CLOSE_WAIT for ${each.key} - connection leak detected (stuck sockets)"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-tcp-close-wait-alarm"
+    Bot  = each.key
+  }
+}
+
+# Process File Descriptors (FD leak detection - CRITICAL)
+resource "aws_cloudwatch_metric_alarm" "app_process_fds_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-process-fds-open-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "PROCESS_FDS_OPEN"
+  namespace           = "TradingBots/${each.key}"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 800 # Critical - approaching system limit (typically 1024)
+  alarm_description   = "High file descriptor count for ${each.key} - FD leak detected"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-process-fds-open-alarm"
+    Bot  = each.key
+  }
+}
+
+# Status Check Failed
+resource "aws_cloudwatch_metric_alarm" "app_status_check_alarms" {
+  for_each            = local.bots
+  alarm_name          = "${each.key}-status-check-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "StatusCheckFailed"
+  namespace           = "AWS/EC2"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 0
+  alarm_description   = "Status check failed for ${each.key} instance"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.app_instances[each.key].id
+    BotName    = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+
+  tags = {
+    Name = "${each.key}-status-check-alarm"
+    Bot  = each.key
+  }
+}
+
+###############################################################################
+# CloudWatch Alarms - Redis Instance
+###############################################################################
+# CPU Utilization
+resource "aws_cloudwatch_metric_alarm" "redis_cpu_alarm" {
+  alarm_name          = "redis-instance-cpu-usage-alarm"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
   metric_name         = "CPUUtilization"
-  namespace           = "AWS/ECS"
+  namespace           = "AWS/EC2"
   period              = 10 # 10 seconds
   statistic           = "Average"
-  threshold           = 70 # 70% CPU utilization
-  alarm_description   = "CPU utilization is too high for ${each.key}"
+  threshold           = 80
+  alarm_description   = "CPU utilization is too high for Redis instance"
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
-    ClusterName = aws_ecs_cluster.trading_bots_cluster.name
-    ServiceName = aws_ecs_service.services[each.key].name
+    InstanceId = aws_instance.redis_instance.id
   }
 
   alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
   ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
   tags = {
-    Service = each.key
+    Name = "redis-instance-cpu-usage-alarm"
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "memory_alarms" {
-  for_each            = local.bots
-  alarm_name          = "${each.key}-memory-alarm"
+# Memory Utilization (from CloudWatch Agent)
+resource "aws_cloudwatch_metric_alarm" "redis_memory_alarm" {
+  alarm_name          = "redis-instance-memory-used-alarm"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
-  metric_name         = "MemoryUtilization"
-  namespace           = "AWS/ECS"
+  metric_name         = "MEM_USED_PERCENT"
+  namespace           = "TradingBots/Redis"
   period              = 10 # 10 seconds
   statistic           = "Average"
-  threshold           = 70 # 70% memory utilization
-  alarm_description   = "Memory utilization is too high for ${each.key}"
+  threshold           = 80
+  alarm_description   = "Memory utilization is too high for Redis instance"
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
-    ClusterName = aws_ecs_cluster.trading_bots_cluster.name
-    ServiceName = aws_ecs_service.services[each.key].name
+    InstanceId = aws_instance.redis_instance.id
   }
 
   alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
   ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
   tags = {
-    Service = each.key
+    Name = "redis-instance-memory-used-alarm"
   }
 }
 
-###############################################################################
-# CloudWatch Permissions for ECS Tasks
-###############################################################################
-resource "aws_iam_policy" "cloudwatch_metrics_policy" {
-  name        = "CloudWatchMetricsPolicy"
-  description = "Allows ECS tasks to publish metrics and write logs to CloudWatch"
+# Disk Space Utilization for Redis
+resource "aws_cloudwatch_metric_alarm" "redis_disk_alarm" {
+  alarm_name          = "redis-instance-disk-used-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "DISK_USED_PERCENT"
+  namespace           = "TradingBots/Redis"
+  period              = 10 # 10 seconds
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "Disk utilization is too high for Redis instance"
+  treat_missing_data  = "notBreaching"
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "cloudwatch:PutMetricData",
-          "cloudwatch:GetMetricStatistics",
-          "cloudwatch:GetMetricData",
-          "cloudwatch:ListMetrics",
-          "cloudwatch:DescribeAlarms",
-          "cloudwatch:DescribeAlarmsForMetric",
-          "cloudwatch:DescribeAlarmHistory"
-        ]
-        Resource = "arn:aws:cloudwatch:${var.aws_region}:${var.aws_account_id}:*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogStreams"
-        ]
-        Resource = [for log_group in aws_cloudwatch_log_group.log_groups : "${log_group.arn}:*"]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "attach_cloudwatch_metrics_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = aws_iam_policy.cloudwatch_metrics_policy.arn
-}
-
-###############################################################################
-# ElastiCache Redis Cluster
-###############################################################################
-# Security group allows access from:
-#   - ECS tasks (via shared security group)
-#   - Bastion host (for external access - local database access)
-resource "aws_security_group" "elasticache_security_group" {
-  name        = "elasticache-security-group"
-  description = "Allows Redis access from ECS tasks and bastion host"
-  vpc_id      = aws_default_vpc.default.id
-
-  ingress {
-    description     = "Allow Redis access from ECS tasks"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.trading_bots_security_group.id]
+  dimensions = {
+    InstanceId = aws_instance.redis_instance.id
   }
 
-  ingress {
-    description     = "Allow Redis access from Bastion host"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [data.aws_security_group.bastion.id]
-  }
-
-  egress {
-    description = "Allow all outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
   tags = {
-    Name = "elasticache-security-group"
+    Name = "redis-instance-disk-used-alarm"
   }
 }
 
-# Data source to get the default security group
-data "aws_security_group" "default" {
-  name   = "default"
-  vpc_id = aws_default_vpc.default.id
-}
+# Status Check Failed
+resource "aws_cloudwatch_metric_alarm" "redis_status_check_alarm" {
+  alarm_name          = "redis-instance-status-check-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "StatusCheckFailed"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 0
+  alarm_description   = "Status check failed for Redis instance"
+  treat_missing_data  = "notBreaching"
 
-# Data source to get the bastion security group
-data "aws_security_group" "bastion" {
-  name   = "bastion"
-  vpc_id = aws_default_vpc.default.id
-}
-
-# Subnet group for ElastiCache (requires multiple AZs for failover)
-resource "aws_elasticache_subnet_group" "trading_bots_cache_subnet" {
-  name       = "trading-bots-cache-subnet"
-  subnet_ids = [aws_default_subnet.default_a.id, aws_default_subnet.default_b.id, aws_default_subnet.default_c.id]
-
-  tags = {
-    Name        = "trading-bots-cache-subnet"
-    Description = "Subnet for ElastiCache for trading-bots"
+  dimensions = {
+    InstanceId = aws_instance.redis_instance.id
   }
-}
 
-# Redis cluster with automatic failover
-resource "aws_elasticache_replication_group" "trading_bots_cache" {
-  replication_group_id       = "trading-bots-cache"
-  description                = "Redis cluster for trading-bots"
-  engine                     = "redis"
-  engine_version             = "7.1"
-  node_type                  = "cache.t4g.micro"
-  port                       = 6379
-  parameter_group_name       = "default.redis7"
-  num_cache_clusters         = 2 # Primary + 1 replica
-  automatic_failover_enabled = true
-  multi_az_enabled           = false
-  at_rest_encryption_enabled = true
-  transit_encryption_enabled = false # TLS disabled to reduce connection overhead from applications
-  auto_minor_version_upgrade = true
-  snapshot_retention_limit   = 0 # No automatic backups
-
-  subnet_group_name = aws_elasticache_subnet_group.trading_bots_cache_subnet.name
-  security_group_ids = [
-    aws_security_group.elasticache_security_group.id,
-    data.aws_security_group.default.id
-  ]
+  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
   tags = {
-    Name = "trading-bots-cache"
+    Name = "redis-instance-status-check-alarm"
   }
 }

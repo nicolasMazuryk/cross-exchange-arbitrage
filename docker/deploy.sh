@@ -2,16 +2,23 @@
 
 aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin 846941037195.dkr.ecr.eu-central-1.amazonaws.com
 
-# Bot names to be build and pushed to ECR
-BOTS=("funding_arbitrage_bot")
-# BOTS=("funding_arbitrage_bot" "spread_arbitrage_bot")
+# Bot name to be pulled and started
+BOT="funding_arbitrage_bot"
+# BOT="spread_arbitrage_bot"
 
-for BOT in "${BOTS[@]}"; do
-    echo "Building and pushing $BOT..."
-    
-    docker build -f "./docker/Dockerfile.$BOT" -t "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest" .
-    
-    docker push "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest"
-done
+echo "Pulling $BOT image from ECR..."
 
-echo "All images have been pushed to ECR successfully!"
+docker pull "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest" || echo "Image not yet available for $BOT! Please build and push the image first."
+
+docker stop $BOT 2>/dev/null || true
+docker rm $BOT 2>/dev/null || true
+
+docker run -d \
+      --name $BOT \
+      --restart unless-stopped \
+      -v /var/log/trading-bot/$BOT:/app/logs \
+      "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest"
+    
+docker ps
+
+echo "Container $BOT started successfully!"

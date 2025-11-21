@@ -16,9 +16,15 @@ variable "slack_webhook_url" {
   description = "Slack webhook URL for notifications"
 }
 
-variable "ec2_instance_type" {
+variable "app_instance_type" {
   type        = string
-  default     = "c6gn.large" // migrate to c8g.large
-  description = "EC2 instance type for ECS cluster (ARM64 compatible). Recommended: c(7-8)gn.(x)large for HFT workloads with many websockets. Monitor and upgrade to c7gn.xlarge or even c8gn.xlarge if network metrics are consistently high."
+  default     = "c8g.large"
+  description = "EC2 instance type for Application instance (ARM64 compatible). c8g.large provides 4GB RAM and 2 vCPUs suitable for Application instance"
   # or just c6g.large, c7g.large or even c8g.large - without Networking optimization, cheaper.
+}
+
+variable "redis_instance_type" {
+  type        = string
+  default     = "t4g.micro"
+  description = "EC2 instance type for Redis server (ARM64 compatible). t4g.micro provides 1GB RAM and 2 vCPUs (burstable) suitable for Redis cache"
 }
