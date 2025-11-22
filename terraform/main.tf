@@ -29,6 +29,9 @@ locals {
     #   log_level = "INFO"
     # }
   }
+
+  # Deploy script content (base64 encoded for safe transfer)
+  deploy_script_base64 = base64encode(file("${path.module}/../docker/deploy.sh"))
 }
 
 provider "aws" {
@@ -430,17 +433,20 @@ resource "aws_instance" "redis_instance" {
           },
           "disk": {
             "measurement": [
-              {"name": "used_percent", "rename": "DISK_USED", "unit": "Percent"}
+              {"name": "used_percent", "rename": "DISK_USED_PERCENT", "unit": "Percent"}
             ],
             "metrics_collection_interval": 60,
             "resources": ["*"]
           },
           "mem": {
             "measurement": [
-              {"name": "mem_used_percent", "rename": "MEM_USED", "unit": "Percent"}
+              {"name": "mem_used_percent", "rename": "MEM_USED_PERCENT", "unit": "Percent"}
             ],
             "metrics_collection_interval": 60
           }
+        },
+        "append_dimensions": {
+          "InstanceId": "$${aws:InstanceId}"
         }
       }
     }
@@ -685,6 +691,11 @@ resource "aws_instance" "app_instances" {
     # Create directories for application logs
     mkdir -p /var/log/trading-bot/${each.key}
     chmod -R 755 /var/log/trading-bot
+    
+    # Copy deploy.sh to home directory (using base64 to avoid interpolation issues)
+    echo "${local.deploy_script_base64}" | base64 -d > /home/ec2-user/deploy.sh
+    chmod +x /home/ec2-user/deploy.sh
+    chown ec2-user:ec2-user /home/ec2-user/deploy.sh
     
     echo "${each.key} instance setup complete"
   EOT
