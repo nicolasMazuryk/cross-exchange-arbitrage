@@ -1,26 +1,25 @@
 ###############################################################################
 # EC2 Instance Outputs
 ###############################################################################
-# output "app_instances" {
-#   description = "Map of bot names to their instance details"
-#   value = {
-#     for key, instance in aws_instance.app_instances : key => {
-#       instance_id = instance.id
-#       private_ip  = instance.private_ip
-#       public_ip   = aws_eip.app_instance_eips[key].public_ip
-#     }
-#   }
-# }
+output "app_instances" {
+  description = "Map of bot names to their instance details"
+  value = {
+    for key, instance in aws_instance.app_instances : key => {
+      instance_id = instance.id
+      private_ip  = instance.private_ip
+      public_ip   = aws_eip.app_instance_eips[key].public_ip
+    }
+  }
+}
 
-# output "redis_instance_id" {
-#   description = "Instance ID of the Redis EC2 instance"
-#   value       = aws_instance.redis_instance.id
-# }
-
-# output "redis_instance_private_ip" {
-#   description = "Private IP address of the Redis instance"
-#   value       = aws_instance.redis_instance.private_ip
-# }
+output "redis_instance" {
+  description = "Redis instance details"
+  value = {
+    instance_id = aws_instance.redis_instance.id
+    private_ip  = aws_instance.redis_instance.private_ip
+    public_ip   = aws_instance.redis_instance.public_ip
+  }
+}
 
 output "redis_connection_url" {
   description = "Redis connection URL for the Application"
@@ -77,9 +76,12 @@ output "connection_instructions" {
     # View all bot instances
     terraform output app_instances
     
+    # SSH to Redis instance
+    ssh -i ~/.ssh/nicolas ec2-user@${aws_instance.redis_instance.public_ip}  # redis
+
     # SSH to specific bot
     %{for bot_name in keys(aws_instance.app_instances)~}
-    ssh -i ~/.ssh/nicolas.pem ec2-user@${aws_eip.app_instance_eips[bot_name].public_ip}  # ${bot_name}
+    ssh -i ~/.ssh/nicolas ec2-user@${aws_eip.app_instance_eips[bot_name].public_ip}  # ${bot_name}
     %{endfor~}
     
     ========================================

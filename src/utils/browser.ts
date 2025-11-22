@@ -1,155 +1,93 @@
-import { chromium, Browser as PlaywrightBrowser, BrowserContext, Page } from 'playwright'
+import { Worker } from 'worker_threads'
 import { Logger } from './logger'
+import { join } from 'path'
+import type { WorkerRequest, WorkerResponse } from './browser.types'
 
 const logger = new Logger('browser')
 
 /**
  * Browser utility for fetching data from exchange endpoints protected by Cloudflare
+ * Uses worker threads to offload CPU-intensive browser operations
  */
 export class Browser {
-  private browser: PlaywrightBrowser | null = null
-  private context: BrowserContext | null = null
+  private worker: Worker | null = null
+  private pendingRequests: Map<
+    string,
+    { resolve: (value: any) => void; reject: (error: Error) => void; timeoutId: NodeJS.Timeout }
+  > = new Map()
+  private requestIdCounter: number = 0
 
-  /**
-   * Initialize browser instance
-   */
-  private async initBrowser(): Promise<void> {
-    try {
-      if (!this.browser) {
-        this.browser = await chromium.launch({
-          headless: true,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--disable-http2',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-extensions',
-            '--disable-plugins',
-            '--disable-images',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--disable-translate',
-            '--hide-scrollbars',
-            '--mute-audio',
-            '--no-default-browser-check',
-            '--no-pings',
-            '--disable-logging',
-            '--disable-permissions-api',
-            '--disable-presentation-api',
-            '--disable-print-preview',
-            '--disable-speech-api',
-            '--disable-file-system',
-            '--disable-notifications',
-            '--disable-geolocation',
-            '--disable-media-session',
-            '--disable-client-side-phishing-detection',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-renderer-backgrounding',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-ipc-flooding-protection',
-            '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          ],
-        })
-        logger.trace({ msg: 'Browser instance launched successfully', function: 'Browser.initBrowser' })
-      }
+  private async getWorker(): Promise<Worker> {
+    if (!this.worker) {
+      const workerPath = join(__dirname, 'browser.worker.js')
+      this.worker = new Worker(workerPath)
 
-      if (!this.context) {
-        this.context = await this.browser.newContext({
-          userAgent:
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          viewport: { width: 1920, height: 1080 },
-          ignoreHTTPSErrors: true,
-          javaScriptEnabled: true,
-          locale: 'en-US',
-          timezoneId: 'America/New_York',
-          geolocation: { latitude: 40.7128, longitude: -74.006 },
-          permissions: ['geolocation'],
-          extraHTTPHeaders: {
-            Accept: 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-origin',
-            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"macOS"',
-            'Upgrade-Insecure-Requests': '1',
-            DNT: '1',
-          },
-        })
-        logger.trace({ msg: 'Browser context created successfully', function: 'Browser.initBrowser' })
-      }
-    } catch (error) {
-      logger.error({ msg: 'Failed to initialize browser', function: 'Browser.initBrowser', error })
-      throw error
+      this.worker.on('message', (response: WorkerResponse) => {
+        const pending = this.pendingRequests.get(response.id)
+        if (pending) {
+          clearTimeout(pending.timeoutId)
+          this.pendingRequests.delete(response.id)
+          if (response.success) {
+            pending.resolve(response.data)
+          } else {
+            pending.reject(new Error(response.error || 'Unknown error occurred while fetching funding data via browser'))
+          }
+        }
+      })
+
+      this.worker.on('error', error => {
+        logger.error({ msg: 'Worker error', function: 'Browser.getWorker', error })
+      })
+
+      this.worker.on('exit', code => {
+        if (code !== 0) {
+          logger.error({ msg: 'Worker exited', function: 'Browser.getWorker', code })
+        }
+        // Reject all pending requests if worker exits unexpectedly
+        for (const pending of this.pendingRequests.values()) {
+          clearTimeout(pending.timeoutId)
+          pending.reject(new Error('Worker exited unexpectedly'))
+        }
+        this.pendingRequests.clear()
+        this.worker = null
+      })
     }
+    return this.worker
+  }
+
+  private async sendRequest(request: WorkerRequest): Promise<any> {
+    const worker = await this.getWorker()
+    const id = `req_${++this.requestIdCounter}_${Date.now()}`
+
+    return new Promise((resolve, reject) => {
+      // Timeout for requests (default 30s, or use request timeoutMs + buffer)
+      const timeout = request.type === 'fetchJson' ? request.timeoutMs + 5000 : 30000
+      const timeoutId = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id)
+          reject(new Error('Request timeout'))
+        }
+      }, timeout)
+
+      this.pendingRequests.set(id, { resolve, reject, timeoutId })
+      worker.postMessage({ ...request, id })
+    })
   }
 
   public async fetchJson(url: string, timeoutMs: number = 30000): Promise<any> {
-    let page: Page | null = null
-
     try {
-      await this.initBrowser()
-
-      if (!this.context) {
-        throw new Error('Browser context not initialized')
-      }
-
-      page = await this.context.newPage()
       logger.trace({ msg: 'Fetching JSON data via browser', function: 'Browser.fetchJson', url, timeoutMs })
-
-      page.setDefaultTimeout(timeoutMs)
-
-      // Simple navigation without stealth
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: timeoutMs,
+      const data = await this.sendRequest({
+        type: 'fetchJson',
+        url,
+        timeoutMs,
+        id: '', // Will be set by sendRequest
       })
-
-      // Wait for content
-      //   await page.waitForTimeout(1000)
-
-      // Get the page content
-      const content = await page.textContent('body')
-
-      if (!content) {
-        throw new Error('No content received from page')
-      }
-
-      // Try to parse as JSON
-      try {
-        const json = JSON.parse(content)
-        logger.trace({ msg: 'Successfully fetched and parsed JSON', function: 'Browser.fetchJson', url })
-        return json
-      } catch (parseError) {
-        logger.error({ msg: 'Failed to parse JSON response', function: 'Browser.fetchJson', url, error: parseError })
-        throw parseError
-      }
+      logger.trace({ msg: 'Successfully fetched and parsed JSON', function: 'Browser.fetchJson', url })
+      return data
     } catch (error) {
       logger.error({ msg: 'Error fetching data via browser', function: 'Browser.fetchJson', url, timeoutMs, error })
       throw error
-    } finally {
-      if (page) {
-        await page.close().catch(err => {
-          logger.error({ msg: 'Error closing browser page', function: 'Browser.fetchJson', url, error: err })
-        })
-      }
     }
   }
 
@@ -158,19 +96,15 @@ export class Browser {
    */
   public async close(): Promise<void> {
     try {
-      if (this.context) {
-        await this.context.close()
-        this.context = null
-        logger.trace({ msg: 'Browser context closed', function: 'Browser.close' })
+      if (this.worker) {
+        await this.sendRequest({
+          type: 'close',
+          id: '', // Will be set by sendRequest
+        })
+        await this.worker.terminate()
+        this.worker = null
+        logger.trace({ msg: 'Browser resources cleaned up successfully', function: 'Browser.close' })
       }
-
-      if (this.browser) {
-        await this.browser.close()
-        this.browser = null
-        logger.trace({ msg: 'Browser instance closed', function: 'Browser.close' })
-      }
-
-      logger.trace({ msg: 'Browser resources cleaned up successfully', function: 'Browser.close' })
     } catch (error) {
       logger.error({ msg: 'Error closing browser', function: 'Browser.close', error })
       throw error
@@ -181,7 +115,7 @@ export class Browser {
    * Check if browser is initialized
    */
   public isInitialized(): boolean {
-    return this.browser !== null && this.context !== null
+    return this.worker !== null
   }
 }
 

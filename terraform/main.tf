@@ -366,6 +366,7 @@ resource "aws_instance" "redis_instance" {
   subnet_id              = aws_default_subnet.default_a.id
   vpc_security_group_ids = [aws_security_group.redis_security_group.id]
   iam_instance_profile   = aws_iam_instance_profile.redis_instance_profile.name
+  key_name               = "nicolas"
   monitoring             = true
 
   user_data = <<-EOT
@@ -379,6 +380,15 @@ resource "aws_instance" "redis_instance" {
     dnf install -y docker
     systemctl enable docker
     systemctl start docker
+    
+    # Wait for Docker daemon to be ready
+    sleep 10
+    
+    # Add ec2-user to docker group so they can run docker commands without sudo
+    usermod -aG docker ec2-user
+    
+    # Ensure docker socket has correct permissions
+    chmod 666 /var/run/docker.sock 2>/dev/null || true
     
     # Install CloudWatch agent
     wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/arm64/latest/amazon-cloudwatch-agent.rpm
@@ -445,13 +455,15 @@ resource "aws_instance" "redis_instance" {
     
     # Create directory for Redis logs
     mkdir -p /var/log/redis
-    chmod 755 /var/log/redis
+    chmod 777 /var/log/redis
     
     # Create Redis data directory
     mkdir -p /data/redis
     chmod 755 /data/redis
     
-    # Run Redis container
+    # Run Redis container (remove if exists to allow idempotent runs)
+    docker rm -f redis 2>/dev/null || true
+    
     docker run -d \
       --name redis \
       --restart unless-stopped \
@@ -514,6 +526,7 @@ resource "aws_instance" "app_instances" {
   subnet_id              = aws_default_subnet.default_a.id
   vpc_security_group_ids = [aws_security_group.app_security_group.id]
   iam_instance_profile   = aws_iam_instance_profile.app_instance_profile.name
+  key_name               = "nicolas"
   monitoring             = true
 
   user_data = <<-EOT
@@ -527,6 +540,15 @@ resource "aws_instance" "app_instances" {
     dnf install -y docker
     systemctl enable docker
     systemctl start docker
+    
+    # Wait for Docker daemon to be ready
+    sleep 10
+    
+    # Add ec2-user to docker group so they can run docker commands without sudo
+    usermod -aG docker ec2-user
+    
+    # Ensure docker socket has correct permissions
+    chmod 666 /var/run/docker.sock 2>/dev/null || true
     
     # Install CloudWatch agent
     wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/arm64/latest/amazon-cloudwatch-agent.rpm
@@ -576,16 +598,14 @@ resource "aws_instance" "app_instances" {
           "mem": {
             "measurement": [
               {"name": "mem_used_percent", "rename": "MEM_USED_PERCENT", "unit": "Percent"},
-              {"name": "mem_available_percent", "rename": "MEM_AVAILABLE_PERCENT", "unit": "Percent"},
-              {"name": "swap_used_percent", "rename": "SWAP_USED_PERCENT", "unit": "Percent"}
+              {"name": "mem_available_percent", "rename": "MEM_AVAILABLE_PERCENT", "unit": "Percent"}
             ],
-            "metrics_collection_interval": 60
+            "metrics_collection_interval": 60,
+            "totalmem": true
           },
           "disk": {
             "measurement": [
-              {"name": "used_percent", "rename": "DISK_USED_PERCENT", "unit": "Percent"},
-              {"name": "read_ops", "rename": "DISK_READ_OPS", "unit": "Count"},
-              {"name": "write_ops", "rename": "DISK_WRITE_OPS", "unit": "Count"}
+              {"name": "used_percent", "rename": "DISK_USED_PERCENT", "unit": "Percent"}
             ],
             "metrics_collection_interval": 60,
             "resources": ["*"]
@@ -594,7 +614,9 @@ resource "aws_instance" "app_instances" {
             "measurement": [
               {"name": "io_time", "unit": "Milliseconds"},
               {"name": "read_bytes", "unit": "Bytes"},
-              {"name": "write_bytes", "unit": "Bytes"}
+              {"name": "write_bytes", "unit": "Bytes"},
+              {"name": "reads", "rename": "DISK_READ_OPS", "unit": "Count"},
+              {"name": "writes", "rename": "DISK_WRITE_OPS", "unit": "Count"}
             ],
             "metrics_collection_interval": 60,
             "resources": ["*"]
@@ -614,30 +636,33 @@ resource "aws_instance" "app_instances" {
               {"name": "running", "rename": "PROCESSES_RUNNING", "unit": "Count"},
               {"name": "sleeping", "rename": "PROCESSES_SLEEPING", "unit": "Count"},
               {"name": "dead", "rename": "PROCESSES_DEAD", "unit": "Count"}
-            ]
+            ],
+            "metrics_collection_interval": 60
           },
           "procstat": [
             {
               "pattern": "${each.key}",
               "measurement": [
-                {"name": "cpu_usage", "rename": "PROCESS_CPU_USAGE", "unit": "Percent"},
-                {"name": "memory_rss", "rename": "PROCESS_MEMORY_RSS", "unit": "Bytes"},
-                {"name": "num_threads", "rename": "PROCESS_THREADS", "unit": "Count"},
-                {"name": "num_fds", "rename": "PROCESS_FDS_OPEN", "unit": "Count"}
-              ]
+                "cpu_usage",
+                "memory_rss",
+                "num_threads",
+                "num_fds"
+              ],
+              "metrics_collection_interval": 60
             }
           ],
           "swap": {
             "measurement": [
-              {"name": "used_percent", "rename": "SWAP_USED", "unit": "Percent"},
+              {"name": "used_percent", "rename": "SWAP_USED_PERCENT", "unit": "Percent"},
               {"name": "free", "rename": "SWAP_FREE", "unit": "Bytes"}
-            ]
+            ],
+            "metrics_collection_interval": 60
           },
           "system": {
             "measurement": [
-              {"name": "load1", "rename": "LOAD_AVERAGE_1M", "unit": "None"},
-              {"name": "load5", "rename": "LOAD_AVERAGE_5M", "unit": "None"},
-              {"name": "load15", "rename": "LOAD_AVERAGE_15M", "unit": "None"}
+              "load1",
+              "load5",
+              "load15"
             ],
             "metrics_collection_interval": 60
           }
@@ -659,8 +684,7 @@ resource "aws_instance" "app_instances" {
     
     # Create directories for application logs
     mkdir -p /var/log/trading-bot/${each.key}
-    chmod 755 /var/log/trading-bot
-    chmod 755 /var/log/trading-bot/${each.key}
+    chmod -R 755 /var/log/trading-bot
     
     echo "${each.key} instance setup complete"
   EOT
