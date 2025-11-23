@@ -156,5 +156,12 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
         instId: symbol,
       })
     }
+    logger.info({
+      msg: 'Subscribed to symbols',
+      function: 'BitgetPublicWebSocketClient.subscribeToSymbols',
+      exchange: this.exchangeName,
+      batchId: batch.id,
+      symbolCount: batch.symbols.length,
+    })
   }
 }

@@ -147,5 +147,12 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
     for (const symbol of batch.symbols) {
       batch.client.subscribeV5(`orderbook.50.${symbol}`, 'linear')
     }
+    logger.info({
+      msg: 'Subscribed to symbols',
+      function: 'BybitPublicWebSocketClient.subscribeToSymbols',
+      exchange: this.exchangeName,
+      batchId: batch.id,
+      symbolCount: batch.symbols.length,
+    })
   }
 }

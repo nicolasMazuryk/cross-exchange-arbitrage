@@ -162,5 +162,12 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
     for (const symbol of batch.symbols) {
       batch.client.subscribePartialBookDepths(symbol, 5, 100, 'usdm')
     }
+    logger.info({
+      msg: 'Subscribed to symbols',
+      function: 'BinancePublicWebSocketClient.subscribeToSymbols',
+      exchange: this.exchangeName,
+      batchId: batch.id,
+      symbolCount: batch.symbols.length,
+    })
   }
 }

@@ -161,5 +161,12 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
         instId: symbol,
       })
     }
+    logger.info({
+      msg: 'Subscribed to symbols',
+      function: 'OkxPublicWebSocketClient.subscribeToSymbols',
+      exchange: this.exchangeName,
+      batchId: batch.id,
+      symbolCount: batch.symbols.length,
+    })
   }
 }
