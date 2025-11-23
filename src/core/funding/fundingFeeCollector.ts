@@ -252,20 +252,24 @@ export class FundingFeeCollector {
       now
     )
 
+    const closedTimestamp = trade.status === 'closed' ? trade.exitTimestamp : undefined
+
     // Fetch funding data for both exchanges if needed
     const [buyExchangeFundingData, sellExchangeFundingData] = await Promise.all([
       isBuyExchangeFundingDataNeeded
         ? this.fetchExchangeFundingData(
             trade.opportunity.buyExchange,
             trade.opportunity.buyExchangeSymbol,
-            trade.buyExchangeNextFundingTimestamp!
+            trade.buyExchangeNextFundingTimestamp!,
+            closedTimestamp
           )
         : Promise.resolve(null),
       isSellExchangeFundingDataNeeded
         ? this.fetchExchangeFundingData(
             trade.opportunity.sellExchange,
             trade.opportunity.sellExchangeSymbol,
-            trade.sellExchangeNextFundingTimestamp!
+            trade.sellExchangeNextFundingTimestamp!,
+            closedTimestamp
           )
         : Promise.resolve(null),
     ])
@@ -279,8 +283,6 @@ export class FundingFeeCollector {
         fundingEventsMap.set(event.fundingTimestamp, event)
       }
     }
-
-    const closedTimestamp = trade.status === 'closed' ? trade.exitTimestamp : undefined
 
     // Get all trades for proportional funding calculation
     const allTrades = await this.state.getAllTrackedTrades()
@@ -318,6 +320,10 @@ export class FundingFeeCollector {
 
     // Calculate aggregate funding metrics
     const fundingMetrics = this.calculateFundingMetrics(updatedFundingEvents)
+
+    // Calculate updated PnL including fees, slippage, delta, and funding fees
+    const updatedPnLUsd = fundingMetrics.fundingProfitUsd + trade.deltaProfitUsd - trade.feesUsd.total + trade.slippageUsd.total
+    const updatedPnLPercent = fundingMetrics.fundingProfitPercent + trade.deltaProfitPercent - trade.feesPercent.total + trade.slippagePercent.total
 
     // Update next funding timestamps from fundingService state if we populated new data
     let newBuyNextFundingTimestamp = trade.buyExchangeNextFundingTimestamp
@@ -384,6 +390,8 @@ export class FundingFeeCollector {
       buyExchangeNextFundingTimestamp: newBuyNextFundingTimestamp,
       sellExchangeNextFundingTimestamp: newSellNextFundingTimestamp,
       ...fundingMetrics,
+      pnlUsd: updatedPnLUsd,
+      pnlPercent: updatedPnLPercent,
       lastUpdateTimestamp: Date.now(),
     }
 
@@ -397,7 +405,25 @@ export class FundingFeeCollector {
       fundingEvents: updatedFundingEvents,
       buyExchangeNextFundingTimestamp: newBuyNextFundingTimestamp,
       sellExchangeNextFundingTimestamp: newSellNextFundingTimestamp,
+      feesPercent: trade.feesPercent.total,
+      slippagePercent: trade.slippagePercent.total,
+      deltaProfitPercent: trade.deltaProfitPercent,
+      fundingProfitPercent: fundingMetrics.fundingProfitPercent,
+      pnlPercent: updatedPnLPercent,
     })
+  }
+
+  /**
+   * Check if a timestamp is within the valid range for funding data collection
+   */
+  private isFundingEventInValidRange(
+    timestamp: number,
+    sinceTimestamp: number,
+    closedTimestamp?: number
+  ): boolean {
+    const isAfterOrAt = timestamp >= sinceTimestamp
+    const isBeforeClosed = !closedTimestamp || timestamp < closedTimestamp
+    return isAfterOrAt && isBeforeClosed
   }
 
   /**
@@ -406,7 +432,8 @@ export class FundingFeeCollector {
   private async fetchExchangeFundingData(
     exchange: string,
     symbol: string,
-    sinceTimestamp: number
+    sinceTimestamp: number,
+    closedTimestamp?: number
   ): Promise<{ fundingRateHistory: FundingRateHistory[]; fundingFeeHistory: FundingFeeHistory[]; combined: FundingRateAndFeeHistory[] } | null> {
     try {
       const restClient = this.restClients.get(exchange)
@@ -423,7 +450,7 @@ export class FundingFeeCollector {
       const since = sinceTimestamp - 30 * 60 * 1000
 
       // Fetch both funding rate history and funding fees history in parallel
-      const [fundingRateHistory, fundingFeeHistory] = await Promise.all([
+      const [fundingRateHistorySince, fundingFeeHistorySince] = await Promise.all([
         restClient.fetchFundingRateHistory(symbol, since).catch(error => {
           logger.error({
             msg: 'Failed to fetch funding rate history',
@@ -448,12 +475,19 @@ export class FundingFeeCollector {
         }),
       ])
 
-      if (fundingRateHistory.length === 0 || fundingFeeHistory.length === 0) {
+      if (fundingRateHistorySince.length === 0 || fundingFeeHistorySince.length === 0) {
         return null
       }
 
+      const fundingRateHistory = fundingRateHistorySince.filter((data: FundingRateHistory) =>
+        this.isFundingEventInValidRange(data.timestamp, sinceTimestamp, closedTimestamp)
+      )
+      const fundingFeeHistory = fundingFeeHistorySince.filter((data: FundingFeeHistory) =>
+        this.isFundingEventInValidRange(data.timestamp, sinceTimestamp, closedTimestamp)
+      )
+
       // Combine data by exact timestamp
-      const combined = this.combineFundingRateAndFeeHistoryByTimestamp(fundingRateHistory, fundingFeeHistory)
+      const combined = this.combineFundingRateAndFeeHistoryByTimestamp(exchange, symbol, fundingRateHistory, fundingFeeHistory)
 
       if (combined.length === 0) {
         return null
@@ -480,32 +514,37 @@ export class FundingFeeCollector {
    * Combine funding rate and fee history by exact timestamp
    */
   private combineFundingRateAndFeeHistoryByTimestamp(
+    exchange: string,
+    symbol: string,
     rateHistory: FundingRateHistory[],
     feeHistory: FundingFeeHistory[]
   ): FundingRateAndFeeHistory[] {
     const combinedMap = new Map<number, FundingRateAndFeeHistory>()
 
-    // Add rate data
-    for (const rate of rateHistory) {
-      combinedMap.set(rate.timestamp, {
-        fundingRatePercent: rate.fundingRate * 100,
-        fundingFeeUsd: 0,
-        timestamp: rate.timestamp,
-        date: rate.datetime,
+    // Add fee data
+    for (const fee of feeHistory) {
+      combinedMap.set(fee.timestamp, {
+        fundingRatePercent: 0,
+        fundingFeeUsd: fee.amount,
+        timestamp: fee.timestamp,
+        date: fee.datetime,
       })
     }
 
-    // Add fee data
-    for (const fee of feeHistory) {
-      const existing = combinedMap.get(fee.timestamp)
+    // Add rate data
+    for (const rate of rateHistory) {
+      const existing = combinedMap.get(rate.timestamp)
       if (existing) {
-        existing.fundingFeeUsd = fee.amount
+        // Apply the sign from fundingFeeUsd to fundingRatePercent
+        const feeSign = Math.sign(existing.fundingFeeUsd)
+        const rateValuePercent = Math.abs(rate.fundingRate * 100)
+        existing.fundingRatePercent = feeSign * rateValuePercent
       } else {
-        combinedMap.set(fee.timestamp, {
-          fundingRatePercent: 0,
-          fundingFeeUsd: fee.amount,
-          timestamp: fee.timestamp,
-          date: fee.datetime,
+        combinedMap.set(rate.timestamp, {
+          fundingRatePercent: rate.fundingRate * 100,
+          fundingFeeUsd: 0,
+          timestamp: rate.timestamp,
+          date: rate.datetime,
         })
       }
     }
@@ -517,6 +556,8 @@ export class FundingFeeCollector {
         logger.error({
           msg: 'Inconsistent funding data: fundingRatePercent or fundingFeeUsd is zero but the other is non-zero',
           function: 'FundingFeeCollector.combineFundingRateAndFeeHistoryByTimestamp',
+          exchange,
+          symbol,
           fundingRatePercent: entry.fundingRatePercent,
           fundingFeeUsd: entry.fundingFeeUsd,
           timestamp,
@@ -542,11 +583,9 @@ export class FundingFeeCollector {
     allTrades: TrackedTrade[]
   ): Promise<void> {
     // Filter combined data to only include those from (and including) nextFundingTimestamp onwards
-    const relevantFundingData = fundingData.combined.filter(data => {
-      const isAfterOrAt = data.timestamp >= nextFundingTimestamp
-      const isBeforeClosed = !closedTimestamp || data.timestamp < closedTimestamp
-      return isAfterOrAt && isBeforeClosed
-    })
+    const relevantFundingData = fundingData.combined.filter(data =>
+      this.isFundingEventInValidRange(data.timestamp, nextFundingTimestamp, closedTimestamp)
+    )
 
     // Process each funding event
     for (const data of relevantFundingData) {

@@ -16,7 +16,7 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "terraform": "cd terraform && terraform apply",
-    "deploy": "bash docker/deploy.sh"
+    "push:ecr": "bash docker/push-to-ecr.sh"
   },
   "dependencies": {
     "@hyperdrive-eng/mcp-nodejs-debugger": "^0.2.2",

@@ -6,6 +6,7 @@ import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
 import { getPositionSide, positionId } from '../../utils/utils'
+import { FundingHistory } from 'ccxt'
 
 const EXCHANGE_NAME = 'bybit'
 const CCXT_EXCHANGE_NAME = 'bybit'
@@ -262,5 +263,14 @@ export class BybitExchange extends BaseExchange {
       })
       return new Map()
     }
+  }
+
+  protected parseExchangeSpecificFundingFeeHistoryResponse(response: FundingHistory[]): FundingHistory[] {
+    return response.map((entry: FundingHistory) => {
+      return {
+        ...entry,
+        amount: parseFloat(entry.info.execFeeV2),
+      }
+    })
   }
 }

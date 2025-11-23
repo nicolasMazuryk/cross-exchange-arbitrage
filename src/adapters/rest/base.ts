@@ -1,8 +1,9 @@
-import ccxt, { Exchange, Market, Order, Dictionary } from 'ccxt'
+import ccxt, { Exchange, Market, Order, Dictionary, FundingHistory } from 'ccxt'
 import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
 import { ParsedFunding } from '../../core/funding/types'
 import appConfig from '../../utils/config'
 import { Logger } from '../../utils/logger'
+import { normalizeFundingTimestamp } from '../../utils/utils'
 
 const logger = new Logger('rest-base')
 
@@ -181,9 +182,31 @@ export abstract class BaseExchange implements RestClientInterface {
     return this.exchangeId
   }
 
+  /**
+ * Override this method in exchange-specific implementations to provide
+ * exchange-specific response body parsing for funding fee history
+ */
+  protected parseExchangeSpecificFundingFeeHistoryResponse(response: FundingHistory[]): FundingHistory[] {
+    return response
+  }
+
   async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
     try {
-      return await this.exchange.fetchFundingHistory(symbol, since, limit, params)
+      const extraParams = { subType: 'linear', ...params }
+
+      const response = await this.exchange.fetchFundingHistory(symbol, since, limit, extraParams)
+
+      const parsedResponse = this.parseExchangeSpecificFundingFeeHistoryResponse(response)
+      
+      return parsedResponse.map((entry: any) => {
+        const { normalizedTimestamp, actualTimestamp } = normalizeFundingTimestamp(entry.timestamp)
+        return {
+          ...entry,
+          actualTimestamp,
+          timestamp: normalizedTimestamp,
+          datetime: new Date(normalizedTimestamp).toISOString(),
+        }
+      })
     } catch (error) {
       logger.error({
         msg: 'Failed to fetch funding fee history from exchange',
@@ -202,7 +225,17 @@ export abstract class BaseExchange implements RestClientInterface {
 
   async fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
     try {
-      return await this.exchange.fetchFundingRateHistory(symbol, since, limit, params)
+      const rawData = await this.exchange.fetchFundingRateHistory(symbol, since, limit, params)
+
+      return rawData.map((entry: any) => {
+        const { normalizedTimestamp, actualTimestamp } = normalizeFundingTimestamp(entry.timestamp)
+        return {
+          ...entry,
+          actualTimestamp,
+          timestamp: normalizedTimestamp,
+          datetime: new Date(normalizedTimestamp).toISOString(),
+        }
+      })
     } catch (error) {
       logger.error({
         msg: 'Failed to fetch funding rate history from exchange',

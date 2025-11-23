@@ -37,3 +37,26 @@ export const getPositionSide = (orderSide: OrderSide, reduceOnly: boolean): Posi
   if (orderSide === 'SELL') return reduceOnly ? ('LONG' as PositionSide) : ('SHORT' as PositionSide)
   throw new Error(`Can't get position side for orderSide: ${orderSide} and reduceOnly: ${reduceOnly}`)
 }
+
+/**
+ * Normalize timestamp to beginning of hour if it funding event occurs within the first minute of the hour
+ * This handles cases where funding events occur with a delay of a few seconds
+ */
+export const normalizeFundingTimestamp = (timestamp: number): { normalizedTimestamp: number; actualTimestamp: number } => {
+  const actualTimestamp = timestamp
+  const date = new Date(timestamp)
+  const minutes = date.getMinutes()
+
+  // If timestamp is within the first minute (minutes === 0), normalize to beginning of hour
+  if (minutes === 0) {
+    // Set to beginning of the hour
+    date.setMinutes(0)
+    date.setSeconds(0)
+    date.setMilliseconds(0)
+    const normalizedTimestamp = date.getTime()
+    return { normalizedTimestamp, actualTimestamp }
+  }
+
+  // Otherwise, keep the original timestamp
+  return { normalizedTimestamp: timestamp, actualTimestamp: timestamp }
+}
