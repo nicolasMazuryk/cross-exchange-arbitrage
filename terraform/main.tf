@@ -535,6 +535,11 @@ resource "aws_instance" "app_instances" {
   key_name               = "nicolas"
   monitoring             = true
 
+  root_block_device {
+    volume_size = 12
+    volume_type = "gp3"
+  }
+
   user_data = <<-EOT
     #!/bin/bash
     set -e

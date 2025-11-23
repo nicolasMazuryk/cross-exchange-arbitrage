@@ -23,7 +23,9 @@ output "redis_instance" {
 
 output "redis_connection_url" {
   description = "Redis connection URL for the Application"
-  value       = "redis://${aws_instance.redis_instance.private_ip}:6379"
+  value       = {
+    connection_url = "redis://${aws_instance.redis_instance.private_ip}:6379"
+  }
 }
 
 ###############################################################################
@@ -83,7 +85,6 @@ output "connection_instructions" {
     %{for bot_name in keys(aws_instance.app_instances)~}
     ssh -i ~/.ssh/nicolas ec2-user@${aws_eip.app_instance_eips[bot_name].public_ip}  # ${bot_name}
     %{endfor~}
-    
     ========================================
   EOT
 }

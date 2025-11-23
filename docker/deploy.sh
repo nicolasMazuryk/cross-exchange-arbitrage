@@ -6,12 +6,15 @@ aws ecr get-login-password --region eu-central-1 | docker login --username AWS -
 BOT="funding_arbitrage_bot"
 # BOT="spread_arbitrage_bot"
 
-echo "Pulling $BOT image from ECR..."
-
-docker pull "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest" || echo "Image not yet available for $BOT! Please build and push the image first."
-
+echo "Stopping and removing existing $BOT container..."
 docker stop $BOT 2>/dev/null || true
 docker rm $BOT 2>/dev/null || true
+
+echo "Removing existing $BOT image..."
+docker rmi "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest" 2>/dev/null || true
+
+echo "Pulling $BOT image from ECR..."
+docker pull "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest" || echo "Image not yet available for $BOT! Please build and push the image first."
 
 docker run -d \
       --name $BOT \
@@ -19,6 +22,6 @@ docker run -d \
       -v /var/log/trading-bot/$BOT:/app/logs \
       "846941037195.dkr.ecr.eu-central-1.amazonaws.com/$BOT:latest"
     
-docker ps
+docker ps -a
 
 echo "Container $BOT started successfully!"

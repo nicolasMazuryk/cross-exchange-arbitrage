@@ -5,7 +5,7 @@ app:
 
 redis:
   # url: "redis://host.docker.internal:6379"  # Docker Container (local testing)
-  url: "redis://trading-bots-cache.y8flew.ng.0001.euc1.cache.amazonaws.com:6379"  # ElastiCache Redis
+  url: "redis://172.31.17.135:6379"  # Redis instance
   keyPrefix: "spread:"
 
 exchanges:
@@ -102,6 +102,9 @@ funding:
     - "bitget"
   # Funding Arbitrage Projection Settings
   projectionHours: 20  # number of hours to project funding profitability
+
+fundingFeeCollector:
+  cronPattern: "0 2 * * * *"  # Run at 2 minutes after every hour (sec min hour day month dayOfWeek)
 
 strategy:
   # Funding Arbitrage Strategy Configuration
