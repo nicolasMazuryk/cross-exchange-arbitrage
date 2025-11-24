@@ -55,6 +55,11 @@ export class OrderbookManager extends EventEmitter {
     try {
       const { exchange, symbol, bids, asks, finalUpdateId, timestamp, type, traceId } = update
 
+      // Filter out updates with empty bids and asks arrays
+      if (bids.length === 0 && asks.length === 0) {
+        return
+      }
+
       // Initialize exchange maps if they don't exist
       if (!this.orderbooks.has(exchange)) {
         this.orderbooks.set(exchange, new Map())

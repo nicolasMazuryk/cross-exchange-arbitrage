@@ -1,7 +1,7 @@
 import { BaseExchange } from './base'
 import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
-import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
@@ -30,6 +30,10 @@ export class BitgetExchange extends BaseExchange {
       ...baseParams,
       hedged: true, // Bitget requires hedged parameter
     }
+  }
+
+  protected getExchangeFundingFeeHistoryParams(): any {
+    return { subType: 'linear' }
   }
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {

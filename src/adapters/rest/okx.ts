@@ -1,11 +1,11 @@
 import { BaseExchange } from './base'
 import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
-import { OrderSide, OrderType, OrderStatus, PositionSide, MarketType } from '../../types/exchange'
+import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { convertExchangeSymbolToUnifiedSymbol, getPositionSide } from '../../utils/utils'
+import { getPositionSide } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'okx'
 const CCXT_EXCHANGE_NAME = 'okx'

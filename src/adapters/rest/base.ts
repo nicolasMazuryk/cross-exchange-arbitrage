@@ -161,6 +161,14 @@ export abstract class BaseExchange implements RestClientInterface {
     return baseParams
   }
 
+  /**
+   * Override this method in exchange-specific implementations to provide
+   * exchange-specific parameters for funding fee history requests
+   */
+  protected getExchangeFundingFeeHistoryParams(): any {
+    return {}
+  }
+
   async cancelOrder(id: string, symbol: string): Promise<Order> {
     try {
       return (await this.exchange.cancelOrder(id, symbol)) as Order
@@ -190,11 +198,12 @@ export abstract class BaseExchange implements RestClientInterface {
     return response
   }
 
-  async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
+  async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number): Promise<any> {
     try {
-      const extraParams = { subType: 'linear', ...params }
+      // Get exchange-specific parameters
+      const exchangeParams = this.getExchangeFundingFeeHistoryParams()
 
-      const response = await this.exchange.fetchFundingHistory(symbol, since, limit, extraParams)
+      const response = await this.exchange.fetchFundingHistory(symbol, since, limit, exchangeParams)
 
       const parsedResponse = this.parseExchangeSpecificFundingFeeHistoryResponse(response)
       
@@ -216,7 +225,6 @@ export abstract class BaseExchange implements RestClientInterface {
         symbol,
         since,
         limit,
-        params,
         error,
       })
       throw error

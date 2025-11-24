@@ -22,6 +22,10 @@ export class BybitExchange extends BaseExchange {
   // Note: Bybit doesn't require exchange-specific parameters for order creation
   // The base implementation will be used
 
+  protected getExchangeFundingFeeHistoryParams(): any {
+    return { subType: 'linear' }
+  }
+
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
     // TODO: review response structure and normalize it for all assets
     try {

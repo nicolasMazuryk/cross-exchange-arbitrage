@@ -21,6 +21,10 @@ export class BinanceExchange extends BaseExchange {
   // Note: Binance doesn't require exchange-specific parameters for order creation
   // The base implementation will be used
 
+  protected getExchangeFundingFeeHistoryParams(): any {
+    return { subType: 'linear' }
+  }
+
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
     try {
       const balances = await this.exchange.fetchBalance()
