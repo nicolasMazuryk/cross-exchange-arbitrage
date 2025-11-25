@@ -77,7 +77,12 @@ export class OrderbookManager extends EventEmitter {
       }
 
       // Get the updated orderbook
-      const updatedOrderbook = exchangeOrderbooks.get(symbol)!
+      const updatedOrderbook = exchangeOrderbooks.get(symbol)
+      if (!updatedOrderbook) {
+        // Orderbook doesn't exist yet (e.g., delta received before snapshot)
+        return
+      }
+
       const bestBid = updatedOrderbook.bids[0]
       const bestAsk = updatedOrderbook.asks[0]
 
