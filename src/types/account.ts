@@ -27,12 +27,13 @@ export interface OrderInfo {
   positionSide: PositionSide
   type: OrderType
   price: number
-  expectedPrice?: number
   averagePrice: number
   quantity: number
   status: OrderStatus
   timestamp: number
   date: Date
+  expectedPrice?: number
+  slippagePercent?: number
 }
 
 export interface AccountState {

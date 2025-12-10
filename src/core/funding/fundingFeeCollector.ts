@@ -594,12 +594,12 @@ export class FundingFeeCollector {
 
       if (!fundingEvent) {
         fundingEvent = {
+          netFundingRatePercent: 0,
           buyExchangeFundingRatePercent: 0,
           sellExchangeFundingRatePercent: 0,
-          netFundingRatePercent: 0,
+          netFundingFeeUsd: 0,
           buyExchangeFundingFeeUsd: 0,
           sellExchangeFundingFeeUsd: 0,
-          netFundingFeeUsd: 0,
           fundingTimestamp,
           fundingDate: data.date
         }

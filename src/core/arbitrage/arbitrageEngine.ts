@@ -92,14 +92,16 @@ export interface ArbitrageOpportunity {
   buyExchangeVolume: number
   sellExchangeVolume: number
   orderAmountUsd: number
+  
   confidenceScore: number
+  traceId: string
+  orderbookUpdateTimestamp: number
   // Strategy type
   strategy: StrategyType
   // Funding tracking
   buyExchangeNextFundingTimestamp: number
   sellExchangeNextFundingTimestamp: number
   targetFundingTimestamp: number
-  fundingProjection: FundingProjection
   // Profitability metrics
   costs: number
   costsPercent: number
@@ -109,8 +111,6 @@ export interface ArbitrageOpportunity {
   fundingProfitPercent: number
   estimatedProfitUsd: number
   estimatedProfitPercent: number
-  // Trace context
-  traceId: string
 }
 
 export class ArbitrageEngine extends EventEmitter {
@@ -838,6 +838,7 @@ export class ArbitrageEngine extends EventEmitter {
         topOfBook.exchange,
         topOfBook.symbol,
         allOrderbooks,
+        topOfBook.timestamp,
         topOfBook.traceId
       )
 
@@ -859,6 +860,7 @@ export class ArbitrageEngine extends EventEmitter {
     updatingExchange: string,
     symbol: string,
     allOrderbooks: Map<string, Map<string, OrderBook>>,
+    orderbookUpdateTimestamp: number,
     traceId: string
   ): ArbitrageOpportunity[] {
     const opportunities: ArbitrageOpportunity[] = []
@@ -932,6 +934,7 @@ export class ArbitrageEngine extends EventEmitter {
               fundingDataA,
               fundingDataB,
               updatingExchange,
+              orderbookUpdateTimestamp,
               traceId
             )
           } catch (error) {
@@ -961,6 +964,7 @@ export class ArbitrageEngine extends EventEmitter {
               fundingDataB,
               fundingDataA,
               updatingExchange,
+              orderbookUpdateTimestamp,
               traceId
             )
           } catch (error) {
@@ -1004,6 +1008,7 @@ export class ArbitrageEngine extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     updatingExchange: string,
+    orderbookUpdateTimestamp: number,
     traceId: string
   ): void {
     // === PRICE NORMALIZATION ===
@@ -1278,25 +1283,26 @@ export class ArbitrageEngine extends EventEmitter {
     // Create the final opportunity object with funding-aware data and strategy annotation
     opportunities.push({
       id: persistenceResult.candidate!.id,
-      normalizedPair,
-      buyExchangeSymbol,
-      sellExchangeSymbol,
+      strategy: strategyResult.strategy,
       buyExchange,
       sellExchange,
+      normalizedPair,
+      normalizedVolume: finalNormalizedVolume,
+      orderAmountUsd: orderAmountMaxSideUsd,
       avgBuyNormalizedExecutionPrice: entryBuySimulation.avgNormalizedExecutionPrice,
       avgSellNormalizedExecutionPrice: entrySellSimulation.avgNormalizedExecutionPrice,
-      normalizedVolume: finalNormalizedVolume,
+      buyExchangeSymbol,
+      sellExchangeSymbol,
       buyExchangeVolume: finalBuyExchangeVolume,
       sellExchangeVolume: finalSellExchangeVolume,
-      orderAmountUsd: orderAmountMaxSideUsd,
+      // Additional properties
       confidenceScore: profitEstimate.confidenceScore,
-      // Strategy type annotation
-      strategy: strategyResult.strategy,
+      orderbookUpdateTimestamp,
+      traceId,
       // Funding tracking
       buyExchangeNextFundingTimestamp: buyFundingData.nextFundingTimestamp,
       sellExchangeNextFundingTimestamp: sellFundingData.nextFundingTimestamp,
       targetFundingTimestamp,
-      fundingProjection: fundingProjection,
       // Profitability metrics
       costs: profitEstimate.costs,
       costsPercent: profitEstimate.costsPercent,
@@ -1306,8 +1312,6 @@ export class ArbitrageEngine extends EventEmitter {
       fundingProfitPercent: profitEstimate.fundingProfitPercent,
       estimatedProfitUsd: profitEstimate.estimatedProfitUsd, // Use combined profit as the main metric
       estimatedProfitPercent: profitEstimate.estimatedProfitPercent, // Use combined profit percent as the main metric
-      // Trace context
-      traceId,
     })
   }
 

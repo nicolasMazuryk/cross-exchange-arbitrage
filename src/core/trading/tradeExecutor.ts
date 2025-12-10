@@ -24,15 +24,14 @@ export interface TradeParams {
 
 export interface TradeResult {
   id: string
-  opportunity: ArbitrageOpportunity
   success: boolean
+  latencyMs: number
   buyOrder: OrderInfo | null
   sellOrder: OrderInfo | null
   feesUsd: number
   feesPercent: number
   slippageUsd: number
   slippagePercent: number
-  latencyMs: number
 }
 
 export interface TradeValidationResult {
@@ -68,7 +67,6 @@ export class TradeExecutor extends EventEmitter {
   async executeTrade(tradeParams: TradeParams): Promise<TradeResult | null> {
     const { opportunity } = tradeParams
     const tradeId = generateTradeId()
-    const startTime = Date.now()
 
     // Check if pair is already being processed
     if (this.isPairProcessing(opportunity.normalizedPair)) {
@@ -101,8 +99,7 @@ export class TradeExecutor extends EventEmitter {
         return null
       }
 
-      const latencyMs = Date.now() - startTime
-      entryTradeResult.latencyMs = latencyMs
+      entryTradeResult.latencyMs = Date.now() - opportunity.orderbookUpdateTimestamp
 
       return entryTradeResult
     } catch (error) {
@@ -446,13 +443,15 @@ export class TradeExecutor extends EventEmitter {
       const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
       const sellSlippage = calculateSlippage(sellOrder, sellOrder.orderSide)
 
+      buyOrder.slippagePercent = buySlippage.slippagePercent
+      sellOrder.slippagePercent = sellSlippage.slippagePercent
+
       return {
         id: tradeId,
-        opportunity,
-        buyOrder,
-        sellOrder,
         success: true,
         latencyMs: 0, // Will be set by caller
+        buyOrder,
+        sellOrder,
         feesUsd: buyFees.feesUsd + sellFees.feesUsd,
         feesPercent: buyFees.feesPercent + sellFees.feesPercent,
         slippageUsd: buySlippage.slippageUsd + sellSlippage.slippageUsd,

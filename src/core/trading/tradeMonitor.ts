@@ -25,26 +25,30 @@ interface DepthSimulationResult {
 
 // Core interfaces
 export interface FundingFeeCollectedEvent {
+  netFundingRatePercent: number
   buyExchangeFundingRatePercent: number
   sellExchangeFundingRatePercent: number
-  netFundingRatePercent: number
+  netFundingFeeUsd: number
   buyExchangeFundingFeeUsd: number
   sellExchangeFundingFeeUsd: number
-  netFundingFeeUsd: number
   fundingTimestamp: number
   fundingDate: string
 }
 
 export interface TrackedTrade {
   id: string
-  opportunity: ArbitrageOpportunity
+  status: 'open' | 'closed' | 'error'
+  strategy: StrategyType
+  exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
+  entryDate: string
+  exitDate?: string
   entryTimestamp: number
   exitTimestamp?: number
-  status: 'open' | 'closed' | 'error'
-  strategy: StrategyType // Track which strategy the trade uses
+  opportunity: ArbitrageOpportunity
+
   entryTrade: TradeResult
   exitTrade?: TradeResult
-  exitReason?: 'convergence' | 'timeout' | 'manual' | 'error'
+
   lastUpdateTimestamp: number
   // Funding tracking
   buyExchangeNextFundingTimestamp?: number
@@ -487,7 +491,7 @@ export class TradeMonitor extends EventEmitter {
   private async handleOrderbookUpdate(topOfBook: TopOfBook): Promise<void> {
     if (!this.isRunning) return
 
-    const { exchange, symbol } = topOfBook
+    const { exchange, symbol, timestamp } = topOfBook
 
     try {
       // Check if this update affects any open trades
@@ -531,7 +535,7 @@ export class TradeMonitor extends EventEmitter {
 
           try {
             this.processingTrades.add(trade.id)
-            await this.processTradeExitConditions(trade, exchange)
+            await this.processTradeExitConditions(trade, exchange, timestamp)
           } catch (error) {
             logger.error({
               msg: 'Error processing trade exit conditions',
@@ -766,7 +770,7 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Process exit conditions for a trade based on real-time orderbook update
    */
-  private async processTradeExitConditions(trade: TrackedTrade, updatingExchange: string): Promise<void> {
+  private async processTradeExitConditions(trade: TrackedTrade, updatingExchange: string, orderbookUpdateTimestamp: number): Promise<void> {
     // Simulate exit slippage for current orderbook state
     const exitSimulation = this.simulateExitSlippage(trade)
     if (!exitSimulation) {
@@ -895,7 +899,7 @@ export class TradeMonitor extends EventEmitter {
         tradeId: trade.id,
         reason: strategyExitResult.reason,
       })
-      await this.executeExitTrade(trade, exitSimulation, 'convergence', updatingExchange)
+      await this.executeExitTrade(trade, exitSimulation, 'convergence', updatingExchange, orderbookUpdateTimestamp)
     }
   }
 
@@ -1025,23 +1029,31 @@ export class TradeMonitor extends EventEmitter {
   /**
    * Add a new trade to monitoring
    */
-  addTrade(tradeResult: TradeResult): void {
+  addTrade(opportunity: ArbitrageOpportunity, tradeResult: TradeResult): void {
     if (!tradeResult.success || !tradeResult.buyOrder || !tradeResult.sellOrder) {
       logger.error({ msg: 'Cannot monitor failed trade', function: 'TradeMonitor.addTrade', tradeId: tradeResult.id })
       return
     }
 
+    const entryTimestamp = Math.min(tradeResult.buyOrder.timestamp, tradeResult.sellOrder.timestamp)
+    const entryDate = new Date(entryTimestamp).toISOString()
+
     const trackedTrade: TrackedTrade = {
       id: tradeResult.id,
-      opportunity: tradeResult.opportunity,
-      entryTimestamp: Math.min(tradeResult.buyOrder.timestamp, tradeResult.sellOrder.timestamp),
       status: 'open',
-      strategy: tradeResult.opportunity.strategy, // Capture strategy type from opportunity
+      strategy: opportunity.strategy,
+      exitReason: undefined,
+      entryDate,
+      exitDate: undefined,
+      entryTimestamp,
+      exitTimestamp: undefined,
+      opportunity: opportunity,
       entryTrade: tradeResult,
+      exitTrade: undefined,
       lastUpdateTimestamp: Date.now(),
       // Funding tracking
-      buyExchangeNextFundingTimestamp: tradeResult.opportunity.buyExchangeNextFundingTimestamp,
-      sellExchangeNextFundingTimestamp: tradeResult.opportunity.sellExchangeNextFundingTimestamp,
+      buyExchangeNextFundingTimestamp: opportunity.buyExchangeNextFundingTimestamp,
+      sellExchangeNextFundingTimestamp: opportunity.sellExchangeNextFundingTimestamp,
       fundingEvents: [],
       feesUsd: {
         entry: tradeResult.feesUsd,
@@ -1241,7 +1253,8 @@ export class TradeMonitor extends EventEmitter {
     trade: TrackedTrade,
     exitSimulation: ExitSlippageSimulationResult,
     exitReason: 'convergence' | 'timeout' | 'manual' | 'error',
-    updatingExchange?: string
+    updatingExchange?: string,
+    orderbookUpdateTimestamp?: number
   ): Promise<void> {
     // Calculate convergence for exit prices
     const exitExchangeBuyPrice = exitSimulation.avgBuyNormalizedExecutionPrice
@@ -1326,14 +1339,16 @@ export class TradeMonitor extends EventEmitter {
       const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
       const sellSlippage = calculateSlippage(sellOrder, sellOrder.orderSide)
 
+      buyOrder.slippagePercent = buySlippage.slippagePercent
+      sellOrder.slippagePercent = sellSlippage.slippagePercent
+
       // Create exit trade result
       const exitTradeResult: TradeResult = {
         id: `${trade.id}EXIT`,
-        opportunity: trade.opportunity,
+        success: true,
+        latencyMs: Date.now() - orderbookUpdateTimestamp!,
         buyOrder,
         sellOrder,
-        success: true,
-        latencyMs: 0,
         feesUsd: buyFees.feesUsd + sellFees.feesUsd,
         feesPercent: buyFees.feesPercent + sellFees.feesPercent,
         slippageUsd: buySlippage.slippageUsd + sellSlippage.slippageUsd,
@@ -1346,8 +1361,9 @@ export class TradeMonitor extends EventEmitter {
       // Update tracked trade
       trade.status = 'closed'
       trade.exitReason = exitReason
-      trade.exitTrade = exitTradeResult
       trade.exitTimestamp = Math.max(trade.exitTrade?.buyOrder?.timestamp ?? 0, trade.exitTrade?.sellOrder?.timestamp ?? 0)
+      trade.exitDate = new Date(trade.exitTimestamp).toISOString()
+      trade.exitTrade = exitTradeResult
       
       // Clear any pending exit candidates for this trade
       this.clearExitCandidatesForTrade(trade.id)

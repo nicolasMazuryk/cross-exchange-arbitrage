@@ -471,17 +471,17 @@ export class Orchestrator extends EventEmitter {
         }
 
         // Execute the trade
-        const result = await this.tradeExecutor.executeTrade(tradeParams)
+        const tradeResult = await this.tradeExecutor.executeTrade(tradeParams)
 
-        if (result && result.success) {
+        if (tradeResult && tradeResult.success) {
           // Add successful trade to monitoring
-          this.tradeMonitor.addTrade(result)
+          this.tradeMonitor.addTrade(opportunity, tradeResult)
 
           logger.info({
             msg: 'Trade executed successfully',
             function: 'Orchestrator.processArbitrageOpportunities',
-            tradeId: result.id,
-            latencyMs: result.latencyMs,
+            tradeId: tradeResult.id,
+            latencyMs: tradeResult.latencyMs,
           })
         } else {
           logger.debug({
