@@ -67,6 +67,7 @@ trading:
   maxPositionAmountUsd: 21  # maximum position amount in USD
   minBalanceBufferPercent: 10  # minimum balance buffer in percent
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
+  leverage: 1  # leverage multiplier for trading (1 = no leverage)
   monitor:
     maxHoldTimeMs: 31536000000  # 365 days max hold time
     checkIntervalMs: 5000  # 5 second check interval
@@ -101,30 +102,33 @@ funding:
     - "okx"
     - "bitget"
   # Funding Arbitrage Projection Settings
-  projectionHours: 20  # number of hours to project funding profitability
+  projectionHours: 10  # number of hours to project funding profitability
 
 fundingFeeCollector:
-  cronPattern: "0 2 * * * *"  # Run at 2 minutes after every hour (sec min hour day month dayOfWeek)
+  cronPattern: "0 3 * * * *"  # Run at 2 minutes after every hour (sec min hour day month dayOfWeek)
 
 strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
     enabled: false  # Enable/disable funding arbitrage strategy
-    windowStart: 14400  # Start execution window in seconds before next funding event
-    windowEnd: 30  # End execution window in seconds before next funding event
-    minFundingProfitPercent: 0.20  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
+    entryWindowStart: 300  # Start entry execution window in seconds before next funding event
+    entryWindowEnd: 30  # End entry execution window in seconds before next funding event
+    exitWindowStart: 120  # Start exit execution window in seconds AFTER previous funding event
+    exitWindowEnd: 30  # End exit execution window in seconds before next funding event
+    minFundingProfitPercent: 0.10  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
     minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit
-    spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold
+    spreadWideningThresholdPercent: 0.3  # Exit if spread widens excessively beyond this percent threshold
   
   # Spread Arbitrage Strategy Configuration
   spread:
     enabled: true  # Enable/disable spread arbitrage strategy
-    windowStart: 300  # Start execution window in seconds after previous funding event
-    windowEnd: 60  # End execution window in seconds before next funding event
-    windowEndClose: 60  # Close execution window in seconds before next funding event (for exits)
+    entryWindowStart: 300  # Start entry execution window in seconds after previous funding event
+    entryWindowEnd: 60  # End entry execution window in seconds before next funding event
+    exitWindowStart: 300  # Start exit execution window in seconds after previous funding event
+    exitWindowEnd: 60  # End exit execution window in seconds before next funding event
     minSpreadProfitPercent: 0.8  # Minimum spread profit in percent after costs
     minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative

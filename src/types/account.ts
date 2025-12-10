@@ -29,6 +29,7 @@ export interface OrderInfo {
   price: number
   averagePrice: number
   quantity: number
+  leverage?: number
   status: OrderStatus
   timestamp: number
   date: Date

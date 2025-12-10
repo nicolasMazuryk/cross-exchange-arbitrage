@@ -111,6 +111,8 @@ export abstract class BaseExchange implements RestClientInterface {
     clientOrderId?: string
   ): Promise<Order> {
     try {
+      await this.setLeverage(symbol, appConfig.trading.leverage)
+
       const baseParams: ExchangeOrderParams = {
         reduceOnly,
         clientOrderId,
@@ -140,6 +142,23 @@ export abstract class BaseExchange implements RestClientInterface {
         price,
         reduceOnly,
         clientOrderId,
+        error,
+      })
+      throw error
+    }
+  }
+
+  async setLeverage(symbol: string, leverage: number): Promise<void> {
+    try {
+        await this.exchange.setLeverage(leverage, symbol)
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to set leverage on exchange',
+        function: 'BaseExchange.setLeverage',
+        exchange: this.exchangeName,
+        exchangeId: this.exchangeId,
+        symbol,
+        leverage,
         error,
       })
       throw error

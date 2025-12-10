@@ -29,6 +29,7 @@ export async function placeOrderAndMonitor(
 
     orderInfo.expectedPrice = price
     orderInfo.exchange = exchange
+    orderInfo.leverage = config.trading.leverage
 
     return orderInfo
   } catch (error) {

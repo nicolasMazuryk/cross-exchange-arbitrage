@@ -38,6 +38,7 @@ trading:
   minBalanceBufferPercent: 10
   maxPositionAmountUsd: 10
   orderConfirmationTimeoutMs: 10000
+  leverage: 1  # leverage multiplier for trading (1 = no leverage)
   monitor:
     maxHoldTimeMs: 1000 * 60 * 60 * 24
     checkIntervalMs: 5000

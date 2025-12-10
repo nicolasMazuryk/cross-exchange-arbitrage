@@ -137,13 +137,13 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly projectionHours: number
   // Strategy configuration
   private readonly fundingStrategyEnabled: boolean
-  private readonly fundingStrategyWindowStart: number
-  private readonly fundingStrategyWindowEnd: number
+  private readonly fundingStrategyEntryWindowStart: number
+  private readonly fundingStrategyEntryWindowEnd: number
   private readonly fundingMinFundingProfitPercent: number
   private readonly fundingMinTotalProfitPercent: number
   private readonly spreadStrategyEnabled: boolean
-  private readonly spreadStrategyWindowStart: number
-  private readonly spreadStrategyWindowEnd: number
+  private readonly spreadStrategyEntryWindowStart: number
+  private readonly spreadStrategyEntryWindowEnd: number
   private readonly spreadMinSpreadProfitPercent: number
   private readonly spreadMinTotalProfitPercent: number
   private readonly spreadNegativeFundingMultiplier: number
@@ -181,13 +181,13 @@ export class ArbitrageEngine extends EventEmitter {
     this.projectionHours = config.funding.projectionHours
     // Strategy configuration
     this.fundingStrategyEnabled = config.strategy.funding.enabled
-    this.fundingStrategyWindowStart = config.strategy.funding.windowStart
-    this.fundingStrategyWindowEnd = config.strategy.funding.windowEnd
+    this.fundingStrategyEntryWindowStart = config.strategy.funding.entryWindowStart
+    this.fundingStrategyEntryWindowEnd = config.strategy.funding.entryWindowEnd
     this.fundingMinFundingProfitPercent = config.strategy.funding.minFundingProfitPercent
     this.fundingMinTotalProfitPercent = config.strategy.funding.minTotalProfitPercent
     this.spreadStrategyEnabled = config.strategy.spread.enabled
-    this.spreadStrategyWindowStart = config.strategy.spread.windowStart
-    this.spreadStrategyWindowEnd = config.strategy.spread.windowEnd
+    this.spreadStrategyEntryWindowStart = config.strategy.spread.entryWindowStart
+    this.spreadStrategyEntryWindowEnd = config.strategy.spread.entryWindowEnd
     this.spreadMinSpreadProfitPercent = config.strategy.spread.minSpreadProfitPercent
     this.spreadMinTotalProfitPercent = config.strategy.spread.minTotalProfitPercent
     this.spreadNegativeFundingMultiplier = config.strategy.spread.negativeFundingMultiplier
@@ -471,12 +471,12 @@ export class ArbitrageEngine extends EventEmitter {
    */
   private isWithinFundingWindow(nextFundingTimestamp: number): boolean {
     const now = Date.now()
-    const timeUntilFunding = nextFundingTimestamp - now
-    const timeUntilFundingSec = timeUntilFunding / 1000
+    const timeUntilNextFunding = nextFundingTimestamp - now
+    const timeUntilNextFundingSec = timeUntilNextFunding / 1000
 
-    // Within window if time until funding is between windowStart and windowEnd (in seconds)
+    // Within window if time until funding is between entryWindowStart and entryWindowEnd (in seconds)
     return (
-      timeUntilFundingSec <= this.fundingStrategyWindowStart && timeUntilFundingSec >= this.fundingStrategyWindowEnd
+      timeUntilNextFundingSec <= this.fundingStrategyEntryWindowStart && timeUntilNextFundingSec >= this.fundingStrategyEntryWindowEnd
     )
   }
 
@@ -490,10 +490,10 @@ export class ArbitrageEngine extends EventEmitter {
     const timeUntilNextFunding = nextFundingTimestamp - now
     const timeUntilNextFundingSec = timeUntilNextFunding / 1000
 
-    // Within window if time since previous funding > windowStart AND time until next > windowEnd
+    // Within window if time since previous funding > entryWindowStart AND time until next > entryWindowEnd
     return (
-      timeSincePreviousFundingSec >= this.spreadStrategyWindowStart &&
-      timeUntilNextFundingSec >= this.spreadStrategyWindowEnd
+      timeSincePreviousFundingSec >= this.spreadStrategyEntryWindowStart &&
+      timeUntilNextFundingSec >= this.spreadStrategyEntryWindowEnd
     )
   }
 

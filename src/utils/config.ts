@@ -82,6 +82,7 @@ interface TradingConfig {
   minBalanceBufferPercent: number
   maxPositionAmountUsd: number
   orderConfirmationTimeoutMs: number
+  leverage: number
   monitor: {
     maxHoldTimeMs: number
     checkIntervalMs: number
@@ -117,8 +118,10 @@ export type StrategyType = 'funding' | 'spread'
 interface StrategyConfig {
   funding: {
     enabled: boolean
-    windowStart: number
-    windowEnd: number
+    entryWindowStart: number
+    entryWindowEnd: number
+    exitWindowStart: number
+    exitWindowEnd: number
     minFundingProfitPercent: number
     minTotalProfitPercent: number
     convergenceThresholdPercent: number
@@ -127,9 +130,10 @@ interface StrategyConfig {
   }
   spread: {
     enabled: boolean
-    windowStart: number
-    windowEnd: number
-    windowEndClose: number
+    entryWindowStart: number
+    entryWindowEnd: number
+    exitWindowStart: number
+    exitWindowEnd: number
     minSpreadProfitPercent: number
     minTotalProfitPercent: number
     negativeFundingMultiplier: number
@@ -232,6 +236,7 @@ const config: Config = {
     minBalanceBufferPercent: yamlConfig?.trading?.minBalanceBufferPercent,
     maxPositionAmountUsd: yamlConfig?.trading?.maxPositionAmountUsd,
     orderConfirmationTimeoutMs: yamlConfig?.trading?.orderConfirmationTimeoutMs,
+    leverage: yamlConfig?.trading?.leverage,
     monitor: yamlConfig?.trading?.monitor,
   },
   accountSync: {
@@ -250,8 +255,10 @@ const config: Config = {
   strategy: {
     funding: {
       enabled: yamlConfig?.strategy?.funding?.enabled ?? false,
-      windowStart: yamlConfig?.strategy?.funding?.windowStart,
-      windowEnd: yamlConfig?.strategy?.funding?.windowEnd,
+      entryWindowStart: yamlConfig?.strategy?.funding?.entryWindowStart,
+      entryWindowEnd: yamlConfig?.strategy?.funding?.entryWindowEnd,
+      exitWindowStart: yamlConfig?.strategy?.funding?.exitWindowStart,
+      exitWindowEnd: yamlConfig?.strategy?.funding?.exitWindowEnd,
       minFundingProfitPercent: yamlConfig?.strategy?.funding?.minFundingProfitPercent,
       minTotalProfitPercent: yamlConfig?.strategy?.funding?.minTotalProfitPercent,
       convergenceThresholdPercent: yamlConfig?.strategy?.funding?.convergenceThresholdPercent,
@@ -260,9 +267,10 @@ const config: Config = {
     },
     spread: {
       enabled: yamlConfig?.strategy?.spread?.enabled ?? false,
-      windowStart: yamlConfig?.strategy?.spread?.windowStart,
-      windowEnd: yamlConfig?.strategy?.spread?.windowEnd,
-      windowEndClose: yamlConfig?.strategy?.spread?.windowEndClose,
+      entryWindowStart: yamlConfig?.strategy?.spread?.entryWindowStart,
+      entryWindowEnd: yamlConfig?.strategy?.spread?.entryWindowEnd,
+      exitWindowStart: yamlConfig?.strategy?.spread?.exitWindowStart,
+      exitWindowEnd: yamlConfig?.strategy?.spread?.exitWindowEnd,
       minSpreadProfitPercent: yamlConfig?.strategy?.spread?.minSpreadProfitPercent,
       minTotalProfitPercent: yamlConfig?.strategy?.spread?.minTotalProfitPercent,
       negativeFundingMultiplier: yamlConfig?.strategy?.spread?.negativeFundingMultiplier,
