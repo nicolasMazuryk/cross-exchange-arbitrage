@@ -5,7 +5,7 @@ app:
 
 redis:
   # url: "redis://host.docker.internal:6379"  # Docker Container (local testing)
-  url: "redis://172.31.17.135:6379"  # Redis instance
+  url: "redis://172.31.26.182:6379"  # Redis instance
   keyPrefix: "funding:"
 
 exchanges:
@@ -63,11 +63,11 @@ trackedPairs:
   - DOGEUSDT
 
 trading:
-  orderAmountUsd: 15  # in USDT, default order size for arbitrage opportunities
-  maxPositionAmountUsd: 21  # maximum position amount in USD
+  orderAmountUsd: 20  # in USDT, default order size for arbitrage opportunities
+  maxPositionAmountUsd: 25  # maximum position amount in USD
   minBalanceBufferPercent: 10  # minimum balance buffer in percent
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
-  leverage: 1  # leverage multiplier for trading (1 = no leverage)
+  leverage: 4  # leverage multiplier for trading (1 = no leverage)
   monitor:
     maxHoldTimeMs: 31536000000  # 365 days max hold time
     checkIntervalMs: 5000  # 5 second check interval

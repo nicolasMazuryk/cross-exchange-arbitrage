@@ -7,7 +7,7 @@ output "app_instances" {
     for key, instance in aws_instance.app_instances : key => {
       instance_id = instance.id
       private_ip  = instance.private_ip
-      public_ip   = aws_eip.app_instance_eips[key].public_ip
+      public_ip   = instance.public_ip
     }
   }
 }
@@ -83,7 +83,7 @@ output "connection_instructions" {
 
     # SSH to specific bot
     %{for bot_name in keys(aws_instance.app_instances)~}
-    ssh -i ~/.ssh/nicolas ec2-user@${aws_eip.app_instance_eips[bot_name].public_ip}  # ${bot_name}
+    ssh -i ~/.ssh/nicolas ec2-user@${aws_instance.app_instances[bot_name].public_ip}  # ${bot_name}
     %{endfor~}
     ========================================
   EOT

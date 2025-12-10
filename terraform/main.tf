@@ -90,15 +90,6 @@ resource "aws_security_group" "redis_security_group" {
     security_groups = [aws_security_group.app_security_group.id]
   }
 
-  # Allow Redis port (6379) from Bastion
-  ingress {
-    description     = "Redis from Bastion"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [data.aws_security_group.bastion.id]
-  }
-
   # Allow SSH from anywhere for maintenance
   ingress {
     description = "SSH from anywhere"
@@ -147,12 +138,6 @@ resource "aws_security_group" "app_security_group" {
   tags = {
     Name = "trading-bots-app-sg"
   }
-}
-
-# Data source for bastion security group
-data "aws_security_group" "bastion" {
-  name   = "bastion"
-  vpc_id = aws_default_vpc.default.id
 }
 
 ###############################################################################
@@ -507,21 +492,6 @@ resource "aws_instance" "redis_instance" {
 }
 
 ###############################################################################
-# Elastic IPs for Application Instances (One per Bot)
-###############################################################################
-resource "aws_eip" "app_instance_eips" {
-  for_each = local.bots
-  domain   = "vpc"
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${each.key}-eip"
-    }
-  )
-}
-
-###############################################################################
 # Application EC2 Instances (One per Bot)
 ###############################################################################
 resource "aws_instance" "app_instances" {
@@ -621,17 +591,6 @@ resource "aws_instance" "app_instances" {
             "metrics_collection_interval": 60,
             "resources": ["*"]
           },
-          "diskio": {
-            "measurement": [
-              {"name": "io_time", "unit": "Milliseconds"},
-              {"name": "read_bytes", "unit": "Bytes"},
-              {"name": "write_bytes", "unit": "Bytes"},
-              {"name": "reads", "rename": "DISK_READ_OPS", "unit": "Count"},
-              {"name": "writes", "rename": "DISK_WRITE_OPS", "unit": "Count"}
-            ],
-            "metrics_collection_interval": 60,
-            "resources": ["*"]
-          },
           "netstat": {
             "measurement": [
               {"name": "tcp_established", "rename": "TCP_ESTABLISHED", "unit": "Count"},
@@ -642,38 +601,10 @@ resource "aws_instance" "app_instances" {
             ],
             "metrics_collection_interval": 60
           },
-          "processes": {
-            "measurement": [
-              {"name": "running", "rename": "PROCESSES_RUNNING", "unit": "Count"},
-              {"name": "sleeping", "rename": "PROCESSES_SLEEPING", "unit": "Count"},
-              {"name": "dead", "rename": "PROCESSES_DEAD", "unit": "Count"}
-            ],
-            "metrics_collection_interval": 60
-          },
-          "procstat": [
-            {
-              "pattern": "${each.key}",
-              "measurement": [
-                "cpu_usage",
-                "memory_rss",
-                "num_threads",
-                "num_fds"
-              ],
-              "metrics_collection_interval": 60
-            }
-          ],
           "swap": {
             "measurement": [
               {"name": "used_percent", "rename": "SWAP_USED_PERCENT", "unit": "Percent"},
               {"name": "free", "rename": "SWAP_FREE", "unit": "Bytes"}
-            ],
-            "metrics_collection_interval": 60
-          },
-          "system": {
-            "measurement": [
-              "load1",
-              "load5",
-              "load15"
             ],
             "metrics_collection_interval": 60
           }
@@ -724,15 +655,6 @@ resource "aws_instance" "app_instances" {
       Name = "${each.key}-instance"
     }
   )
-}
-
-###############################################################################
-# Associate Elastic IPs with Application Instances
-###############################################################################
-resource "aws_eip_association" "app_instance_eip_assocs" {
-  for_each      = local.bots
-  instance_id   = aws_instance.app_instances[each.key].id
-  allocation_id = aws_eip.app_instance_eips[each.key].id
 }
 
 ###############################################################################
@@ -852,32 +774,32 @@ resource "aws_cloudwatch_metric_alarm" "app_cpu_alarms" {
 }
 
 # CPU IOWait (I/O bottleneck detection)
-resource "aws_cloudwatch_metric_alarm" "app_cpu_iowait_alarms" {
-  for_each            = local.bots
-  alarm_name          = "${each.key}-cpu-iowait-alarm"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "CPU_IOWAIT"
-  namespace           = "TradingBots/${each.key}"
-  period              = 10 # 10 seconds
-  statistic           = "Average"
-  threshold           = 30
-  alarm_description   = "High CPU IOWait for ${each.key} - I/O bottleneck detected"
-  treat_missing_data  = "notBreaching"
+# resource "aws_cloudwatch_metric_alarm" "app_cpu_iowait_alarms" {
+#   for_each            = local.bots
+#   alarm_name          = "${each.key}-cpu-iowait-alarm"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = 2
+#   metric_name         = "CPU_IOWAIT"
+#   namespace           = "TradingBots/${each.key}"
+#   period              = 10 # 10 seconds
+#   statistic           = "Average"
+#   threshold           = 30
+#   alarm_description   = "High CPU IOWait for ${each.key} - I/O bottleneck detected"
+#   treat_missing_data  = "notBreaching"
 
-  dimensions = {
-    InstanceId = aws_instance.app_instances[each.key].id
-    BotName    = each.key
-  }
+#   dimensions = {
+#     InstanceId = aws_instance.app_instances[each.key].id
+#     BotName    = each.key
+#   }
 
-  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
-  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
-  tags = {
-    Name = "${each.key}-cpu-iowait-alarm"
-    Bot  = each.key
-  }
-}
+#   tags = {
+#     Name = "${each.key}-cpu-iowait-alarm"
+#     Bot  = each.key
+#   }
+# }
 
 # Memory Utilization (from CloudWatch Agent)
 resource "aws_cloudwatch_metric_alarm" "app_memory_alarms" {
@@ -936,88 +858,88 @@ resource "aws_cloudwatch_metric_alarm" "app_disk_alarms" {
 }
 
 # Load Average (System overload detection)
-resource "aws_cloudwatch_metric_alarm" "app_load_average_alarms" {
-  for_each            = local.bots
-  alarm_name          = "${each.key}-load-average-alarm"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "LOAD_AVERAGE_1M"
-  namespace           = "TradingBots/${each.key}"
-  period              = 10 # 10 seconds
-  statistic           = "Average"
-  threshold           = 2.0 # For 2 vCPU instance (c8g.large)
-  alarm_description   = "High load average for ${each.key} - system overloaded"
-  treat_missing_data  = "notBreaching"
+# resource "aws_cloudwatch_metric_alarm" "app_load_average_alarms" {
+#   for_each            = local.bots
+#   alarm_name          = "${each.key}-load-average-alarm"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = 2
+#   metric_name         = "LOAD_AVERAGE_1M"
+#   namespace           = "TradingBots/${each.key}"
+#   period              = 10 # 10 seconds
+#   statistic           = "Average"
+#   threshold           = 2.0 # For 2 vCPU instance (c8g.large)
+#   alarm_description   = "High load average for ${each.key} - system overloaded"
+#   treat_missing_data  = "notBreaching"
 
-  dimensions = {
-    InstanceId = aws_instance.app_instances[each.key].id
-    BotName    = each.key
-  }
+#   dimensions = {
+#     InstanceId = aws_instance.app_instances[each.key].id
+#     BotName    = each.key
+#   }
 
-  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
-  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
-  tags = {
-    Name = "${each.key}-load-average-alarm"
-    Bot  = each.key
-  }
-}
+#   tags = {
+#     Name = "${each.key}-load-average-alarm"
+#     Bot  = each.key
+#   }
+# }
 
 # TCP Close Wait (Connection leak detection - CRITICAL)
-resource "aws_cloudwatch_metric_alarm" "app_tcp_close_wait_alarms" {
-  for_each            = local.bots
-  alarm_name          = "${each.key}-tcp-close-wait-alarm"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "TCP_CLOSE_WAIT"
-  namespace           = "TradingBots/${each.key}"
-  period              = 10 # 10 seconds
-  statistic           = "Average"
-  threshold           = 100
-  alarm_description   = "High TCP_CLOSE_WAIT for ${each.key} - connection leak detected (stuck sockets)"
-  treat_missing_data  = "notBreaching"
+# resource "aws_cloudwatch_metric_alarm" "app_tcp_close_wait_alarms" {
+#   for_each            = local.bots
+#   alarm_name          = "${each.key}-tcp-close-wait-alarm"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = 2
+#   metric_name         = "TCP_CLOSE_WAIT"
+#   namespace           = "TradingBots/${each.key}"
+#   period              = 10 # 10 seconds
+#   statistic           = "Average"
+#   threshold           = 100
+#   alarm_description   = "High TCP_CLOSE_WAIT for ${each.key} - connection leak detected (stuck sockets)"
+#   treat_missing_data  = "notBreaching"
 
-  dimensions = {
-    InstanceId = aws_instance.app_instances[each.key].id
-    BotName    = each.key
-  }
+#   dimensions = {
+#     InstanceId = aws_instance.app_instances[each.key].id
+#     BotName    = each.key
+#   }
 
-  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
-  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
-  tags = {
-    Name = "${each.key}-tcp-close-wait-alarm"
-    Bot  = each.key
-  }
-}
+#   tags = {
+#     Name = "${each.key}-tcp-close-wait-alarm"
+#     Bot  = each.key
+#   }
+# }
 
 # Process File Descriptors (FD leak detection - CRITICAL)
-resource "aws_cloudwatch_metric_alarm" "app_process_fds_alarms" {
-  for_each            = local.bots
-  alarm_name          = "${each.key}-process-fds-open-alarm"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "PROCESS_FDS_OPEN"
-  namespace           = "TradingBots/${each.key}"
-  period              = 10 # 10 seconds
-  statistic           = "Average"
-  threshold           = 800 # Critical - approaching system limit (typically 1024)
-  alarm_description   = "High file descriptor count for ${each.key} - FD leak detected"
-  treat_missing_data  = "notBreaching"
+# resource "aws_cloudwatch_metric_alarm" "app_process_fds_alarms" {
+#   for_each            = local.bots
+#   alarm_name          = "${each.key}-process-fds-open-alarm"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = 2
+#   metric_name         = "PROCESS_FDS_OPEN"
+#   namespace           = "TradingBots/${each.key}"
+#   period              = 10 # 10 seconds
+#   statistic           = "Average"
+#   threshold           = 800 # Critical - approaching system limit (typically 1024)
+#   alarm_description   = "High file descriptor count for ${each.key} - FD leak detected"
+#   treat_missing_data  = "notBreaching"
 
-  dimensions = {
-    InstanceId = aws_instance.app_instances[each.key].id
-    BotName    = each.key
-  }
+#   dimensions = {
+#     InstanceId = aws_instance.app_instances[each.key].id
+#     BotName    = each.key
+#   }
 
-  alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
-  ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   alarm_actions = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
+#   ok_actions    = [aws_sns_topic.trading_bot_resource_utilization_alarms.arn]
 
-  tags = {
-    Name = "${each.key}-process-fds-open-alarm"
-    Bot  = each.key
-  }
-}
+#   tags = {
+#     Name = "${each.key}-process-fds-open-alarm"
+#     Bot  = each.key
+#   }
+# }
 
 # Status Check Failed
 resource "aws_cloudwatch_metric_alarm" "app_status_check_alarms" {
