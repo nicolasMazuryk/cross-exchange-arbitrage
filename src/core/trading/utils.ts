@@ -19,7 +19,8 @@ export async function placeOrderAndMonitor(
   isReduceOnly: boolean,
   clientOrderId: string,
   exchange: string,
-  accountStateManager: AccountStateManager
+  accountStateManager: AccountStateManager,
+  orderbookUpdateTimestamp: number
 ): Promise<OrderInfo> {
   try {
     // Place the order
@@ -30,6 +31,7 @@ export async function placeOrderAndMonitor(
     orderInfo.expectedPrice = price
     orderInfo.exchange = exchange
     orderInfo.leverage = config.trading.leverage
+    orderInfo.latencyMs = Date.now() - orderbookUpdateTimestamp
 
     return orderInfo
   } catch (error) {

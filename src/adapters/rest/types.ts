@@ -1,6 +1,7 @@
 import { Market, Order, Dictionary } from 'ccxt'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { ParsedFunding } from '../../core/funding/types'
+import { FundingRateHistory, FundingFeeHistory } from '../../core/funding/fundingFeeCollector'
 
 export interface ExchangeConfig {
   apiKey: string
@@ -39,8 +40,8 @@ export interface RestClientInterface {
 
   // Funding
   fetchFundingData?(): Promise<Map<string, ParsedFunding>>
-  fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any>
-  fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any>
+  fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<FundingRateHistory[]>
+  fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<FundingFeeHistory[]>
 
   // Utility
   getExchangeId(): string

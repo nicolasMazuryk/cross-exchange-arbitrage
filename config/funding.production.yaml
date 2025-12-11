@@ -5,7 +5,7 @@ app:
 
 redis:
   # url: "redis://host.docker.internal:6379"  # Docker Container (local testing)
-  url: "redis://172.31.26.182:6379"  # Redis instance
+  url: "redis://172.31.24.102:6379"  # Redis instance
   keyPrefix: "funding:"
 
 exchanges:
@@ -111,16 +111,16 @@ strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
     enabled: true  # Enable/disable funding arbitrage strategy
-    entryWindowStart: 300  # Start entry execution window in seconds before next funding event
-    entryWindowEnd: 30  # End entry execution window in seconds before next funding event
-    exitWindowStart: 120  # Start exit execution window in seconds AFTER previous funding event
-    exitWindowEnd: 30  # End exit execution window in seconds before next funding event
+    entryWindowStart: 120  # Start entry execution window in seconds before next funding event
+    entryWindowEnd: 5  # End entry execution window in seconds before next funding event
+    exitWindowStart: 15  # Start exit execution window in seconds AFTER previous funding event
+    exitWindowEnd: 5  # End exit execution window in seconds before next funding event
     minFundingProfitPercent: 0.10  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
     minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit
-    spreadWideningThresholdPercent: 0.3  # Exit if spread widens excessively beyond this percent threshold
+    spreadWideningThresholdPercent: 0.2  # Exit if spread widens excessively beyond this percent threshold
   
   # Spread Arbitrage Strategy Configuration
   spread:

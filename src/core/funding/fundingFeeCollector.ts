@@ -8,27 +8,30 @@ import { TraceContext } from '../../utils/traceContext'
 
 const logger = new Logger('funding-fee-collector')
 
-interface FundingRateHistory {
+export interface FundingRateHistory {
   symbol: string
   fundingRate: number
+  actualTimestamp: number
   timestamp: number
   datetime: string
   info?: any
 }
 
-interface FundingFeeHistory {
+export interface FundingFeeHistory {
   symbol: string
   amount: number
   id: string
   code: string
+  actualTimestamp: number
   timestamp: number
   datetime: string
   info?: any
 }
 
-interface FundingRateAndFeeHistory {
+export interface FundingRateAndFeeHistory {
   fundingRatePercent: number
   fundingFeeUsd: number
+  actualTimestamp: number
   timestamp: number
   date: string
 }
@@ -321,9 +324,9 @@ export class FundingFeeCollector {
     // Calculate aggregate funding metrics
     const fundingMetrics = this.calculateFundingMetrics(updatedFundingEvents)
 
-    // Calculate updated PnL including fees, slippage, delta, and funding fees
-    const updatedPnLUsd = fundingMetrics.fundingProfitUsd + trade.deltaProfitUsd - trade.feesUsd.total + trade.slippageUsd.total
-    const updatedPnLPercent = fundingMetrics.fundingProfitPercent + trade.deltaProfitPercent - trade.feesPercent.total + trade.slippagePercent.total
+    // Calculate updated PnL including delta, funding fees, and trading fees
+    const updatedPnLUsd = trade.deltaProfitUsd + fundingMetrics.fundingProfitUsd - trade.feesUsd.total
+    const updatedPnLPercent = trade.deltaProfitPercent + fundingMetrics.fundingProfitPercent - trade.feesPercent.total
 
     // Update next funding timestamps from fundingService state if we populated new data
     let newBuyNextFundingTimestamp = trade.buyExchangeNextFundingTimestamp
@@ -526,6 +529,7 @@ export class FundingFeeCollector {
       combinedMap.set(fee.timestamp, {
         fundingRatePercent: 0,
         fundingFeeUsd: fee.amount,
+        actualTimestamp: fee.actualTimestamp,
         timestamp: fee.timestamp,
         date: fee.datetime,
       })
@@ -543,6 +547,7 @@ export class FundingFeeCollector {
         combinedMap.set(rate.timestamp, {
           fundingRatePercent: rate.fundingRate * 100,
           fundingFeeUsd: 0,
+          actualTimestamp: 0,
           timestamp: rate.timestamp,
           date: rate.datetime,
         })
@@ -600,6 +605,7 @@ export class FundingFeeCollector {
           netFundingFeeUsd: 0,
           buyExchangeFundingFeeUsd: 0,
           sellExchangeFundingFeeUsd: 0,
+          actualFundingDate: new Date(data.actualTimestamp).toISOString(),
           fundingTimestamp,
           fundingDate: data.date
         }
@@ -626,6 +632,7 @@ export class FundingFeeCollector {
           function: 'FundingFeeCollector.processFundingDataForExchange',
           exchangeType,
           fundingTimestamp,
+          actualTimestamp: data.actualTimestamp,
           fundingRatePercent: data.fundingRatePercent,
           fundingFeeUsd: data.fundingFeeUsd,
         })

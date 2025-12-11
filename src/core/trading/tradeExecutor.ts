@@ -419,7 +419,8 @@ export class TradeExecutor extends EventEmitter {
           false,
           buyClientOrderId,
           opportunity.buyExchange,
-          this.accountStateManager
+          this.accountStateManager,
+          opportunity.orderbookUpdateTimestamp
         ),
         placeOrderAndMonitor(
           sellClient,
@@ -430,7 +431,8 @@ export class TradeExecutor extends EventEmitter {
           false,
           sellClientOrderId,
           opportunity.sellExchange,
-          this.accountStateManager
+          this.accountStateManager,
+          opportunity.orderbookUpdateTimestamp
         ),
       ])
 
@@ -442,6 +444,10 @@ export class TradeExecutor extends EventEmitter {
       const sellFees = calculateFees(sellOrder, sellFeeRatePercent)
       const buySlippage = calculateSlippage(buyOrder, buyOrder.orderSide)
       const sellSlippage = calculateSlippage(sellOrder, sellOrder.orderSide)
+
+      // Store per-order fees
+      buyOrder.feesUsd = buyFees.feesUsd
+      sellOrder.feesUsd = sellFees.feesUsd
 
       buyOrder.slippagePercent = buySlippage.slippagePercent
       sellOrder.slippagePercent = sellSlippage.slippagePercent

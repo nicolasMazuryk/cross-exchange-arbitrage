@@ -4,6 +4,7 @@ import { ParsedFunding } from '../../core/funding/types'
 import appConfig from '../../utils/config'
 import { Logger } from '../../utils/logger'
 import { normalizeFundingTimestamp } from '../../utils/utils'
+import { FundingFeeHistory, FundingRateHistory } from '../../core/funding/fundingFeeCollector'
 
 const logger = new Logger('rest-base')
 
@@ -217,7 +218,7 @@ export abstract class BaseExchange implements RestClientInterface {
     return response
   }
 
-  async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number): Promise<any> {
+  async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number): Promise<FundingFeeHistory[]> {
     try {
       // Get exchange-specific parameters
       const exchangeParams = this.getExchangeFundingFeeHistoryParams()
@@ -250,7 +251,7 @@ export abstract class BaseExchange implements RestClientInterface {
     }
   }
 
-  async fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<any> {
+  async fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<FundingRateHistory[]> {
     try {
       const rawData = await this.exchange.fetchFundingRateHistory(symbol, since, limit, params)
 
