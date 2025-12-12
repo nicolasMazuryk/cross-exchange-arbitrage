@@ -36,3 +36,4 @@ coverage/
 # Redis data
 redis-data/ 
 redis-dump/
+redis-dump-archive/
