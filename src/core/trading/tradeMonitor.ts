@@ -31,7 +31,8 @@ export interface FundingFeeCollectedEvent {
   netFundingFeeUsd: number
   buyExchangeFundingFeeUsd: number
   sellExchangeFundingFeeUsd: number
-  actualFundingDate: string
+  buyExchangeActualFundingDate: string
+  sellExchangeActualFundingDate: string
   fundingTimestamp: number
   fundingDate: string
 }

@@ -150,6 +150,8 @@ export abstract class BaseExchange implements RestClientInterface {
   }
 
   async setLeverage(symbol: string, leverage: number): Promise<void> {
+    if (this.exchangeName === 'bybit') return
+
     try {
         await this.exchange.setLeverage(leverage, symbol)
     } catch (error) {

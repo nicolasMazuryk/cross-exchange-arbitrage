@@ -605,7 +605,8 @@ export class FundingFeeCollector {
           netFundingFeeUsd: 0,
           buyExchangeFundingFeeUsd: 0,
           sellExchangeFundingFeeUsd: 0,
-          actualFundingDate: new Date(data.actualTimestamp).toISOString(),
+          buyExchangeActualFundingDate: '',
+          sellExchangeActualFundingDate: '',
           fundingTimestamp,
           fundingDate: data.date
         }
@@ -623,9 +624,11 @@ export class FundingFeeCollector {
       if (exchangeType === 'buy') {
         fundingEvent.buyExchangeFundingRatePercent = data.fundingRatePercent
         fundingEvent.buyExchangeFundingFeeUsd = proportionalFundingFeeUsd
+        fundingEvent.buyExchangeActualFundingDate = new Date(data.actualTimestamp).toISOString()
       } else if (exchangeType === 'sell') {
         fundingEvent.sellExchangeFundingRatePercent = data.fundingRatePercent
         fundingEvent.sellExchangeFundingFeeUsd = proportionalFundingFeeUsd
+        fundingEvent.sellExchangeActualFundingDate = new Date(data.actualTimestamp).toISOString()
       } else {
         logger.error({
           msg: 'Invalid exchange type for funding fee collection',

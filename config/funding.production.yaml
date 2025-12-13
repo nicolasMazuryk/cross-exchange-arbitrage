@@ -111,7 +111,7 @@ strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
     enabled: true  # Enable/disable funding arbitrage strategy
-    entryWindowStart: 120  # Start entry execution window in seconds before next funding event
+    entryWindowStart: 60  # Start entry execution window in seconds before next funding event
     entryWindowEnd: 5  # End entry execution window in seconds before next funding event
     exitWindowStart: 15  # Start exit execution window in seconds AFTER previous funding event
     exitWindowEnd: 5  # End exit execution window in seconds before next funding event
@@ -120,7 +120,7 @@ strategy:
     # Exit Conditions
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
     minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit
-    spreadWideningThresholdPercent: 0.2  # Exit if spread widens excessively beyond this percent threshold
+    spreadWideningThresholdPercent: 0.1  # Exit if spread widens excessively beyond this percent threshold
   
   # Spread Arbitrage Strategy Configuration
   spread:
