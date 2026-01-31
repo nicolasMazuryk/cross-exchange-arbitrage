@@ -1,7 +1,9 @@
 // ssh -i ~/.ssh/nicolas -L 6379:localhost:6379 -f -N ec2-user@EC2_HOST
-// pkill -f "ssh.*6379.*EC2_HOST"
 
 // npx ts-node scripts/dump_redis.ts
+
+// pkill -f "ssh.*6379.*EC2_HOST"
+
 
 import Redis from 'ioredis'
 import * as fs from 'fs'

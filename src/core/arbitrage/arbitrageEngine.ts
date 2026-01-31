@@ -30,8 +30,10 @@ interface OpportunityScore {
   spreadProfitPercent: number
   fundingProfitUsd: number
   fundingProfitPercent: number
-  costs: number
+  costsUsd: number
   costsPercent: number
+  tradingFeesUsd: number
+  tradingFeesPercent: number
   latencyPenalty: number
   confidenceScore: number
 }
@@ -103,8 +105,10 @@ export interface ArbitrageOpportunity {
   sellExchangeNextFundingTimestamp: number
   targetFundingTimestamp: number
   // Profitability metrics
-  costs: number
+  costsUsd: number
   costsPercent: number
+  tradingFeesUsd: number
+  tradingFeesPercent: number
   spreadProfitUsd: number
   spreadProfitPercent: number
   fundingProfitUsd: number
@@ -350,7 +354,8 @@ export class ArbitrageEngine extends EventEmitter {
     const exitSellFeeCosts =
       exitSellSimulation.avgNormalizedExecutionPrice * normalizedVolume * (sellFeeModel.taker / 100)
 
-    const totalTradingFeesCosts = entryBuyFeeCosts + entrySellFeeCosts + exitBuyFeeCosts + exitSellFeeCosts
+    const totalTradingFeesCostsUsd = entryBuyFeeCosts + entrySellFeeCosts + exitBuyFeeCosts + exitSellFeeCosts
+    const totalTradingFeesCostsPercent = (totalTradingFeesCostsUsd / orderAmountUsd) * 100
 
     // 2. SLIPPAGE COSTS (Entry + Exit)
     const entryBuySlippageCosts =
@@ -383,8 +388,8 @@ export class ArbitrageEngine extends EventEmitter {
     const totalSpreadCosts = buyMarketSpreadCosts + sellMarketSpreadCosts
 
     // 4. TOTAL COSTS
-    const totalCosts = totalTradingFeesCosts + totalSlippageCosts + totalSpreadCosts
-    const totalCostsPercent = (totalCosts / orderAmountUsd) * 100
+    const totalCostsUsd = totalTradingFeesCostsUsd + totalSlippageCosts + totalSpreadCosts
+    const totalCostsPercent = (totalCostsUsd / orderAmountUsd) * 100
 
     // === SPREAD PROFIT CALCULATION ===
     const spreadProfitUsd = (normalizedSellPrice - normalizedBuyPrice) * normalizedVolume
@@ -395,7 +400,7 @@ export class ArbitrageEngine extends EventEmitter {
     const fundingProfitPercent = fundingProjection.timeline[0].netFundingRate * 100
 
     // === COMBINED PROFIT CALCULATION ===
-    const estimatedProfitUsd = fundingProfitUsd + spreadProfitUsd - totalCosts
+    const estimatedProfitUsd = fundingProfitUsd + spreadProfitUsd - totalCostsUsd
     const estimatedProfitPercent = fundingProfitPercent + spreadProfitPercent - totalCostsPercent
 
     const latencyPenalty = this.calculateLatencyPenalty()
@@ -412,8 +417,10 @@ export class ArbitrageEngine extends EventEmitter {
       spreadProfitPercent,
       fundingProfitUsd,
       fundingProfitPercent,
-      costs: totalCosts,
+      costsUsd: totalCostsUsd,
       costsPercent: totalCostsPercent,
+      tradingFeesUsd: totalTradingFeesCostsUsd,
+      tradingFeesPercent: totalTradingFeesCostsPercent,
       latencyPenalty,
       confidenceScore,
     }
@@ -1304,7 +1311,9 @@ export class ArbitrageEngine extends EventEmitter {
       sellExchangeNextFundingTimestamp: sellFundingData.nextFundingTimestamp,
       targetFundingTimestamp,
       // Profitability metrics
-      costs: profitEstimate.costs,
+      tradingFeesUsd: profitEstimate.tradingFeesUsd,
+      tradingFeesPercent: profitEstimate.tradingFeesPercent,
+      costsUsd: profitEstimate.costsUsd,
       costsPercent: profitEstimate.costsPercent,
       spreadProfitUsd: profitEstimate.spreadProfitUsd,
       spreadProfitPercent: profitEstimate.spreadProfitPercent,

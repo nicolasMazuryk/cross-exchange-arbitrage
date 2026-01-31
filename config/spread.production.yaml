@@ -118,6 +118,7 @@ strategy:
     minFundingProfitPercent: 0.10  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
+    takeProfitTargetPercent: 0.2  # Exit when take profit target is reached: (entry spread - current spread) + funding - costs > takeProfitTargetPercent
     convergenceThresholdPercent: 0.01  # Exit funding trade when funding diff drops below this percent
     minFundingProfitAsyncSyncExitPercent: 0.10  # Minimum cumulative funding rate in percent for nextPlusOneSync ASYNC-SYNC exit
     spreadWideningThresholdPercent: 0.2  # Exit if spread widens excessively beyond this percent threshold
@@ -133,5 +134,6 @@ strategy:
     minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative
     # Exit Conditions
+    takeProfitTargetPercent: 0.2  # Exit when take profit target is reached: (entry spread - current spread) + funding - costs > takeProfitTargetPercent
     convergenceThresholdPercent: 0.0  # convergence threshold in percent for exits
     spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold

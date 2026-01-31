@@ -41,7 +41,7 @@ export interface TrackedTrade {
   id: string
   status: 'open' | 'closed' | 'error'
   strategy: StrategyType
-  exitReason?: 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
+  exitReason?: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
   entryDate: string
   exitDate?: string
   entryTimestamp: number
@@ -99,15 +99,15 @@ export interface TrackedTrade {
     net: number
   }
   deltaProfitUsd: number
-  deltaProfitPercent: number
   fundingProfitUsd: number
-  fundingProfitPercent: number
   pnlUsd: number
+  deltaProfitPercent: number
+  fundingProfitPercent: number
   pnlPercent: number
 }
 
 export interface ExitCondition {
-  type: 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
+  type: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
   value?: number
   description: string
 }
@@ -127,6 +127,7 @@ export interface MonitorConfig {
       exitWindowEnd: number
       minFundingProfitPercent: number
       minFundingProfitAsyncSyncExitPercent: number
+      takeProfitTargetPercent: number
       convergenceThresholdPercent: number
       spreadWideningThresholdPercent: number
     }
@@ -134,6 +135,7 @@ export interface MonitorConfig {
       enabled: boolean
       exitWindowStart: number
       exitWindowEnd: number
+      takeProfitTargetPercent: number
       convergenceThresholdPercent: number
       spreadWideningThresholdPercent: number
     }
@@ -154,7 +156,7 @@ interface ExitSlippageSimulationResult {
 // Exit Persistence Validation interfaces
 interface ExitCandidate {
   tradeId: string
-  exitType: 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
+  exitType: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
   firstDetectedAt: number
   lastDetectedAt: number
   convergencePercent: number
@@ -193,6 +195,7 @@ export class TradeMonitor extends EventEmitter {
   private readonly fundingStrategyEnabled: boolean
   private readonly fundingStrategyExitWindowStart: number
   private readonly fundingStrategyExitWindowEnd: number
+  private readonly fundingTakeProfitTargetPercent: number
   private readonly fundingConvergenceThresholdPercent: number
   private readonly fundingSpreadWideningThresholdPercent: number
   private readonly fundingMinFundingProfitPercent: number
@@ -200,6 +203,7 @@ export class TradeMonitor extends EventEmitter {
   private readonly spreadStrategyEnabled: boolean
   private readonly spreadStrategyExitWindowStart: number
   private readonly spreadStrategyExitWindowEnd: number
+  private readonly spreadTakeProfitTargetPercent: number
   private readonly spreadConvergenceThresholdPercent: number
   private readonly spreadSpreadWideningThresholdPercent: number
 
@@ -226,6 +230,7 @@ export class TradeMonitor extends EventEmitter {
     this.fundingStrategyEnabled = config.strategy.funding.enabled
     this.fundingStrategyExitWindowStart = config.strategy.funding.exitWindowStart
     this.fundingStrategyExitWindowEnd = config.strategy.funding.exitWindowEnd
+    this.fundingTakeProfitTargetPercent = config.strategy.funding.takeProfitTargetPercent
     this.fundingConvergenceThresholdPercent = config.strategy.funding.convergenceThresholdPercent
     this.fundingSpreadWideningThresholdPercent = config.strategy.funding.spreadWideningThresholdPercent
     this.fundingMinFundingProfitPercent = config.strategy.funding.minFundingProfitPercent
@@ -233,6 +238,7 @@ export class TradeMonitor extends EventEmitter {
     this.spreadStrategyEnabled = config.strategy.spread.enabled
     this.spreadStrategyExitWindowStart = config.strategy.spread.exitWindowStart
     this.spreadStrategyExitWindowEnd = config.strategy.spread.exitWindowEnd
+    this.spreadTakeProfitTargetPercent = config.strategy.spread.takeProfitTargetPercent
     this.spreadConvergenceThresholdPercent = config.strategy.spread.convergenceThresholdPercent
     this.spreadSpreadWideningThresholdPercent = config.strategy.spread.spreadWideningThresholdPercent
 
@@ -306,7 +312,7 @@ export class TradeMonitor extends EventEmitter {
   }
 
   // Exit Persistence Validation Methods
-  private generateExitCandidateKey(tradeId: string, exitType: 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'): string {
+  private generateExitCandidateKey(tradeId: string, exitType: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'): string {
     return `${tradeId}::${exitType}`
   }
 
@@ -337,7 +343,7 @@ export class TradeMonitor extends EventEmitter {
 
   private validateExitPersistence(
     trade: TrackedTrade,
-    exitType: 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error',
+    exitType: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error',
     convergencePercent: number,
     avgBuyNormalizedExecutionPrice: number,
     avgSellNormalizedExecutionPrice: number,
@@ -614,6 +620,35 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
+   * Calculate actual entry spread difference percent from entry trade
+   */
+  private calculateActualEntrySpreadDifferencePercent(trade: TrackedTrade): number {
+    if (!trade.entryTrade.buyOrder || !trade.entryTrade.sellOrder) {
+      throw new Error('Entry trade buy or sell order not found')
+    }
+
+    const buyMetadataService = this.marketMetadataServices.get(trade.opportunity.buyExchange)
+    const sellMetadataService = this.marketMetadataServices.get(trade.opportunity.sellExchange)
+
+    if (!buyMetadataService || !sellMetadataService) {
+      throw new Error('Market metadata service not found for buy or sell exchange')
+    }
+
+    // Normalize entry prices
+    const normalizedBuyEntryPrice = buyMetadataService.normalizePrice(
+      trade.entryTrade.buyOrder.averagePrice,
+      trade.opportunity.buyExchangeSymbol
+    )
+    const normalizedSellEntryPrice = sellMetadataService.normalizePrice(
+      trade.entryTrade.sellOrder.averagePrice,
+      trade.opportunity.sellExchangeSymbol
+    )
+
+    // Calculate spread difference percent: (sellPrice - buyPrice) / buyPrice * 100
+    return ((normalizedSellEntryPrice - normalizedBuyEntryPrice) / normalizedBuyEntryPrice) * 100
+  }
+
+  /**
    * Check funding arbitrage exit conditions (SYNC mode)
    */
   private shouldExitFundingSyncTrade(
@@ -621,7 +656,7 @@ export class TradeMonitor extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     currentSpreadDifferencePercent: number
-  ): { shouldExit: boolean; reason?: string; exitType?: 'convergence' | 'spread-widening' } {
+  ): { shouldExit: boolean; reason?: string; exitType?: 'take-profit' | 'convergence' | 'spread-widening' } {
     // Exit Condition 2: Spread widened excessively (dynamic based on entry spread)
     const spreadWideningThresholdPercent =
       trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
@@ -645,6 +680,21 @@ export class TradeMonitor extends EventEmitter {
       }
     }
 
+    // Exit Condition 3: Take profit target reached
+    const actualEntrySpreadDifferencePercent = this.calculateActualEntrySpreadDifferencePercent(trade)
+    const currentTakeProfitPercent =
+      (actualEntrySpreadDifferencePercent - currentSpreadDifferencePercent) +
+      trade.opportunity.fundingProfitPercent -
+      trade.opportunity.tradingFeesPercent
+
+    if (currentTakeProfitPercent > this.fundingTakeProfitTargetPercent) {
+      return {
+        shouldExit: true,
+        exitType: 'take-profit',
+        reason: `Take profit reached: ${currentTakeProfitPercent.toFixed(3)}% > ${this.fundingTakeProfitTargetPercent.toFixed(3)}% (entry spread: ${actualEntrySpreadDifferencePercent.toFixed(3)}%, current spread: ${currentSpreadDifferencePercent.toFixed(3)}%, funding: ${trade.opportunity.fundingProfitPercent.toFixed(3)}%, trading fees: ${trade.opportunity.tradingFeesPercent.toFixed(3)}%)`,
+      }
+    }
+
     return { shouldExit: false }
   }
 
@@ -656,7 +706,7 @@ export class TradeMonitor extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     currentSpreadDifferencePercent: number
-  ): { shouldExit: boolean; reason?: string; exitType?: 'convergence' | 'spread-widening' } {
+  ): { shouldExit: boolean; reason?: string; exitType?: 'take-profit' | 'convergence' | 'spread-widening' } {
     // Exit Condition: Spread widened excessively (dynamic based on entry spread)
     const spreadWideningThresholdPercent =
       trade.opportunity.spreadProfitPercent + this.fundingSpreadWideningThresholdPercent
@@ -732,6 +782,21 @@ export class TradeMonitor extends EventEmitter {
       }
     }
 
+    // Exit Condition: Take profit target reached
+    const actualEntrySpreadDifferencePercent = this.calculateActualEntrySpreadDifferencePercent(trade)
+    const currentTakeProfitPercent =
+      (actualEntrySpreadDifferencePercent - currentSpreadDifferencePercent) +
+      trade.opportunity.fundingProfitPercent -
+      trade.opportunity.tradingFeesPercent
+
+    if (currentTakeProfitPercent > this.fundingTakeProfitTargetPercent) {
+      return {
+        shouldExit: true,
+        exitType: 'take-profit',
+        reason: `Take profit reached: ${currentTakeProfitPercent.toFixed(3)}% > ${this.fundingTakeProfitTargetPercent.toFixed(3)}% (entry spread: ${actualEntrySpreadDifferencePercent.toFixed(3)}%, current spread: ${currentSpreadDifferencePercent.toFixed(3)}%, funding: ${trade.opportunity.fundingProfitPercent.toFixed(3)}%, trading fees: ${trade.opportunity.tradingFeesPercent.toFixed(3)}%)`,
+      }
+    }
+
     return { shouldExit: false }
   }
 
@@ -742,7 +807,7 @@ export class TradeMonitor extends EventEmitter {
     trade: TrackedTrade,
     currentSpreadDifferencePercent: number,
     exitSimulation: ExitSlippageSimulationResult
-  ): { shouldExit: boolean; reason?: string; exitType?: 'convergence' | 'spread-widening' } {
+  ): { shouldExit: boolean; reason?: string; exitType?: 'take-profit' | 'convergence' | 'spread-widening' } {
     // Check if spread widened excessively (dynamic based on entry spread)
     const spreadWideningThresholdPercent = trade.opportunity.spreadProfitPercent + this.spreadSpreadWideningThresholdPercent
     if (currentSpreadDifferencePercent > spreadWideningThresholdPercent) {
@@ -769,6 +834,21 @@ export class TradeMonitor extends EventEmitter {
         shouldExit: true,
         exitType: 'convergence',
         reason: `SPREAD: Price convergence: ${convergencePercent.toFixed(3)}% < ${this.spreadConvergenceThresholdPercent.toFixed(3)}%`,
+      }
+    }
+
+    // Exit Condition: Take profit target reached
+    const actualEntrySpreadDifferencePercent = this.calculateActualEntrySpreadDifferencePercent(trade)
+    const currentTakeProfitPercent =
+      (actualEntrySpreadDifferencePercent - currentSpreadDifferencePercent) +
+      trade.opportunity.fundingProfitPercent -
+      trade.opportunity.tradingFeesPercent
+
+    if (currentTakeProfitPercent > this.spreadTakeProfitTargetPercent) {
+      return {
+        shouldExit: true,
+        exitType: 'take-profit',
+        reason: `Take profit reached: ${currentTakeProfitPercent.toFixed(3)}% > ${this.spreadTakeProfitTargetPercent.toFixed(3)}% (entry spread: ${actualEntrySpreadDifferencePercent.toFixed(3)}%, current spread: ${currentSpreadDifferencePercent.toFixed(3)}%, funding: ${trade.opportunity.fundingProfitPercent.toFixed(3)}%, trading fees: ${trade.opportunity.tradingFeesPercent.toFixed(3)}%)`,
       }
     }
 
@@ -865,7 +945,7 @@ export class TradeMonitor extends EventEmitter {
     const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
 
     // Check time window and strategy enabled conditions
-    let strategyExitResult: { shouldExit: boolean; reason?: string; exitType?: 'convergence' | 'spread-widening' } = { shouldExit: false }
+    let strategyExitResult: { shouldExit: boolean; reason?: string; exitType?: 'take-profit' | 'convergence' | 'spread-widening' } = { shouldExit: false }
 
     if (trade.strategy === 'funding' && this.fundingStrategyEnabled) {
       // Check if target funding event has occurred
@@ -1129,10 +1209,10 @@ export class TradeMonitor extends EventEmitter {
         net: 0,
       },
       deltaProfitUsd: 0,
-      deltaProfitPercent: 0,
       fundingProfitUsd: 0,
-      fundingProfitPercent: 0,
       pnlUsd: 0,
+      deltaProfitPercent: 0,
+      fundingProfitPercent: 0,
       pnlPercent: 0,
     }
 
@@ -1295,7 +1375,7 @@ export class TradeMonitor extends EventEmitter {
   private async executeExitTrade(
     trade: TrackedTrade,
     exitSimulation: ExitSlippageSimulationResult,
-    exitReason: 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error',
+    exitReason: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error',
     updatingExchange?: string,
     orderbookUpdateTimestamp?: number
   ): Promise<void> {
@@ -1305,8 +1385,8 @@ export class TradeMonitor extends EventEmitter {
 
     const convergencePercent = ((exitExchangeSellPrice - exitExchangeBuyPrice) / exitExchangeBuyPrice) * 100
 
-    // Validate exit persistence for convergence and spread-widening
-    if (exitReason === 'convergence' || exitReason === 'spread-widening') {
+    // Validate exit persistence for convergence, spread-widening, and take-profit
+    if (exitReason === 'take-profit' || exitReason === 'convergence' || exitReason === 'spread-widening') {
       const validation = this.validateExitPersistence(
         trade,
         exitReason,

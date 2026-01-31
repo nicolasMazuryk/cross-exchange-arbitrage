@@ -124,6 +124,7 @@ interface StrategyConfig {
     exitWindowEnd: number
     minFundingProfitPercent: number
     minTotalProfitPercent: number
+    takeProfitTargetPercent: number
     convergenceThresholdPercent: number
     minFundingProfitAsyncSyncExitPercent: number
     spreadWideningThresholdPercent: number
@@ -137,6 +138,7 @@ interface StrategyConfig {
     minSpreadProfitPercent: number
     minTotalProfitPercent: number
     negativeFundingMultiplier: number
+    takeProfitTargetPercent: number
     convergenceThresholdPercent: number
     spreadWideningThresholdPercent: number
   }
@@ -261,6 +263,7 @@ const config: Config = {
       exitWindowEnd: yamlConfig?.strategy?.funding?.exitWindowEnd,
       minFundingProfitPercent: yamlConfig?.strategy?.funding?.minFundingProfitPercent,
       minTotalProfitPercent: yamlConfig?.strategy?.funding?.minTotalProfitPercent,
+      takeProfitTargetPercent: yamlConfig?.strategy?.funding?.takeProfitTargetPercent,
       convergenceThresholdPercent: yamlConfig?.strategy?.funding?.convergenceThresholdPercent,
       minFundingProfitAsyncSyncExitPercent: yamlConfig?.strategy?.funding?.minFundingProfitAsyncSyncExitPercent,
       spreadWideningThresholdPercent: yamlConfig?.strategy?.funding?.spreadWideningThresholdPercent,
@@ -274,6 +277,7 @@ const config: Config = {
       minSpreadProfitPercent: yamlConfig?.strategy?.spread?.minSpreadProfitPercent,
       minTotalProfitPercent: yamlConfig?.strategy?.spread?.minTotalProfitPercent,
       negativeFundingMultiplier: yamlConfig?.strategy?.spread?.negativeFundingMultiplier,
+      takeProfitTargetPercent: yamlConfig?.strategy?.spread?.takeProfitTargetPercent,
       convergenceThresholdPercent: yamlConfig?.strategy?.spread?.convergenceThresholdPercent,
       spreadWideningThresholdPercent: yamlConfig?.strategy?.spread?.spreadWideningThresholdPercent,
     },
