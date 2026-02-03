@@ -114,6 +114,7 @@ interface FundingFeeCollectorConfig {
 }
 
 export type StrategyType = 'funding' | 'spread'
+export type StrategyVariant = 'sync' | 'async' | 'spread' | null
 
 interface StrategyConfig {
   funding: {

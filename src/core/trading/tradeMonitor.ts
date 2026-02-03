@@ -7,7 +7,7 @@ import { OrderbookManager, TopOfBook, OrderBookLevel } from '../orderbook/orderb
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
-import config, { StrategyType } from '../../utils/config'
+import config, { StrategyType, StrategyVariant } from '../../utils/config'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
 import { FundingService } from '../funding/fundingService'
 import { ParsedFunding } from '../funding/types'
@@ -41,6 +41,7 @@ export interface TrackedTrade {
   id: string
   status: 'open' | 'closed' | 'error'
   strategy: StrategyType
+  strategyVariant: StrategyVariant
   exitReason?: 'take-profit' | 'convergence' | 'spread-widening' | 'timeout' | 'manual' | 'error'
   entryDate: string
   exitDate?: string
@@ -668,17 +669,17 @@ export class TradeMonitor extends EventEmitter {
       }
     }
 
-    // // Calculate current funding difference
-    // const fundingDifferencePercent = (-buyFundingData.fundingRate + sellFundingData.fundingRate) * 100
+    // Calculate current funding difference
+    const fundingDifferencePercent = (-buyFundingData.fundingRate + sellFundingData.fundingRate) * 100
 
-    // // Exit Condition 1: Funding rates converged (< 0.02%)
-    // if (fundingDifferencePercent < this.fundingConvergenceThresholdPercent) {
-    //   return {
-    //     shouldExit: true,
-    //     exitType: 'convergence',
-    //     reason: `Funding converged: ${fundingDifferencePercent.toFixed(3)}% < ${this.fundingConvergenceThresholdPercent.toFixed(3)}%`,
-    //   }
-    // }
+    // Exit Condition 1: Funding rates converged (< 0.02%)
+    if (fundingDifferencePercent < this.fundingConvergenceThresholdPercent) {
+      return {
+        shouldExit: true,
+        exitType: 'convergence',
+        reason: `Funding converged: ${fundingDifferencePercent.toFixed(3)}% < ${this.fundingConvergenceThresholdPercent.toFixed(3)}%`,
+      }
+    }
 
     // Exit Condition 3: Take profit target reached
     const actualEntrySpreadDifferencePercent = this.calculateActualEntrySpreadDifferencePercent(trade)
@@ -718,68 +719,68 @@ export class TradeMonitor extends EventEmitter {
       }
     }
 
-    // const fundingEvents = this.fundingService.generateFundingEvents(
-    //   buyFundingData,
-    //   sellFundingData,
-    //   config.funding.projectionHours
-    // )
+    const fundingEvents = this.fundingService.generateFundingEvents(
+      buyFundingData,
+      sellFundingData,
+      config.funding.projectionHours
+    )
 
     // Check if currently synchronized (upcoming event is a sync)
     const isNextEventSync = buyFundingData.nextFundingTimestamp === sellFundingData.nextFundingTimestamp
 
     if (!isNextEventSync) {
-      // // CASE 1: ASYNC - upcoming event is NOT a sync
-      // // Calculate cumulative funding profit until the next sync event
-      // const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFundingData, sellFundingData)
-      // const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(nextSyncTimestamp, fundingEvents)
+      // CASE 1: ASYNC - upcoming event is NOT a sync
+      // Calculate cumulative funding profit until the next sync event
+      const nextSyncTimestamp = this.fundingService.findNextSyncTimestamp(buyFundingData, sellFundingData)
+      const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(nextSyncTimestamp, fundingEvents)
 
-      // // Exit Condition: cumulativeFundingRate < 0 (should be profitable before sync)
-      // if (cumulativeFundingRate * 100 < this.fundingConvergenceThresholdPercent) {
-      //   return {
-      //     shouldExit: true,
-      //     exitType: 'convergence',
-      //     reason: `ASYNC-ASYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < 0%`,
-      //   }
-      // }
+      // Exit Condition: cumulativeFundingRate < 0 (should be profitable before sync)
+      if (cumulativeFundingRate * 100 < this.fundingConvergenceThresholdPercent) {
+        return {
+          shouldExit: true,
+          exitType: 'convergence',
+          reason: `ASYNC-ASYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < 0%`,
+        }
+      }
     } else {
-      // // CASE 2: SYNC - upcoming event IS a sync, need to look beyond it
-      // // Find the next sync AFTER the upcoming sync (next + 1)
-      // const currentSyncTimestamp = buyFundingData.nextFundingTimestamp
+      // CASE 2: SYNC - upcoming event IS a sync, need to look beyond it
+      // Find the next sync AFTER the upcoming sync (next + 1)
+      const currentSyncTimestamp = buyFundingData.nextFundingTimestamp
 
-      // // Find the next sync + 1 event
-      // let nextPlusOneSyncTimestamp = 0
-      // let foundCurrentSync = false
+      // Find the next sync + 1 event
+      let nextPlusOneSyncTimestamp = 0
+      let foundCurrentSync = false
 
-      // for (const event of fundingEvents) {
-      //   if (
-      //     event.timestamp === currentSyncTimestamp &&
-      //     event.buyExchangeFundingRate !== 0 &&
-      //     event.sellExchangeFundingRate !== 0
-      //   ) {
-      //     foundCurrentSync = true
-      //     continue // Skip current sync
-      //   }
+      for (const event of fundingEvents) {
+        if (
+          event.timestamp === currentSyncTimestamp &&
+          event.buyExchangeFundingRate !== 0 &&
+          event.sellExchangeFundingRate !== 0
+        ) {
+          foundCurrentSync = true
+          continue // Skip current sync
+        }
 
-      //   if (foundCurrentSync && event.buyExchangeFundingRate !== 0 && event.sellExchangeFundingRate !== 0) {
-      //     nextPlusOneSyncTimestamp = event.timestamp
-      //     break
-      //   }
-      // }
+        if (foundCurrentSync && event.buyExchangeFundingRate !== 0 && event.sellExchangeFundingRate !== 0) {
+          nextPlusOneSyncTimestamp = event.timestamp
+          break
+        }
+      }
 
-      // // Calculate cumulative funding rate for all events until nextSyncPlusOne
-      // const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
-      //   nextPlusOneSyncTimestamp,
-      //   fundingEvents
-      // )
+      // Calculate cumulative funding rate for all events until nextSyncPlusOne
+      const cumulativeFundingRate = this.fundingService.calculateCumulativeFundingRate(
+        nextPlusOneSyncTimestamp,
+        fundingEvents
+      )
 
-      // // Exit Condition: cumulativeFundingRate < minFundingProfitPercent
-      // if (cumulativeFundingRate * 100 < this.fundingMinFundingProfitAsyncSyncExitPercent) {
-      //   return {
-      //     shouldExit: true,
-      //     exitType: 'convergence',
-      //     reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${this.fundingMinFundingProfitAsyncSyncExitPercent.toFixed(3)}%`,
-      //   }
-      // }
+      // Exit Condition: cumulativeFundingRate < minFundingProfitPercent
+      if (cumulativeFundingRate * 100 < this.fundingMinFundingProfitAsyncSyncExitPercent) {
+        return {
+          shouldExit: true,
+          exitType: 'convergence',
+          reason: `ASYNC-SYNC: Cumulative funding rate ${(cumulativeFundingRate * 100).toFixed(3)}% < ${this.fundingMinFundingProfitAsyncSyncExitPercent.toFixed(3)}%`,
+        }
+      }
     }
 
     // Exit Condition: Take profit target reached
@@ -1154,6 +1155,7 @@ export class TradeMonitor extends EventEmitter {
       id: tradeResult.id,
       status: 'open',
       strategy: opportunity.strategy,
+      strategyVariant: opportunity.strategyVariant,
       exitReason: undefined,
       entryDate,
       exitDate: undefined,

@@ -6,7 +6,7 @@ import { FundingService } from '../funding/fundingService'
 import { ParsedFunding } from '../funding/types'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
-import config, { StrategyType } from '../../utils/config'
+import config, { StrategyType, StrategyVariant } from '../../utils/config'
 
 const logger = new Logger('arbitrage-engine')
 
@@ -100,6 +100,7 @@ export interface ArbitrageOpportunity {
   orderbookUpdateTimestamp: number
   // Strategy type
   strategy: StrategyType
+  strategyVariant: StrategyVariant
   // Funding tracking
   buyExchangeNextFundingTimestamp: number
   sellExchangeNextFundingTimestamp: number
@@ -564,12 +565,12 @@ export class ArbitrageEngine extends EventEmitter {
     buyFundingData: ParsedFunding,
     sellFundingData: ParsedFunding,
     profitEstimate: OpportunityScore
-  ): { strategy: StrategyType | null; reason?: string } {
+  ): { strategy: StrategyType | null; variant: 'sync' | 'async' | 'spread' | null; reason?: string } {
     const now = Date.now()
 
     // Validate funding data is not outdated
     if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
-      return { strategy: null, reason: 'Outdated funding data (nextFundingTimestamp < now)' }
+      return { strategy: null, variant: null, reason: 'Outdated funding data (nextFundingTimestamp < now)' }
     }
 
     const isSynchronized = this.fundingService.isFundingSynchronizedEntry(buyFundingData, sellFundingData)
@@ -603,7 +604,7 @@ export class ArbitrageEngine extends EventEmitter {
     if (this.fundingStrategyEnabled && withinFundingWindow) {
       if (isSynchronized) {
         if (this.validateFundingSyncEntry(fundingRateDifferencePercent, profitEstimate)) {
-          return { strategy: 'funding' }
+          return { strategy: 'funding', variant: 'sync' }
         }
         if (fundingRateDifferencePercent > 0.3) {
           if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
@@ -620,10 +621,10 @@ export class ArbitrageEngine extends EventEmitter {
             this.antiSpamLogTime = Date.now()
           }
         }
-        return { strategy: null, reason: 'Funding window (SYNC) but validation failed' }
+        return { strategy: null, variant: null, reason: 'Funding window (SYNC) but validation failed' }
       } else {
         if (this.validateFundingAsyncEntry(buyFundingData, sellFundingData, profitEstimate, fundingEvents)) {
-          return { strategy: 'funding' }
+          return { strategy: 'funding', variant: 'async' }
         }
         if (fundingRateDifferencePercent > 0.3) {
           if (Date.now() - this.antiSpamLogTime > 60 * 1000) {
@@ -640,20 +641,20 @@ export class ArbitrageEngine extends EventEmitter {
             this.antiSpamLogTime = Date.now()
           }
         }
-        return { strategy: null, reason: 'Funding window (ASYNC) but validation failed' }
+        return { strategy: null, variant: null, reason: 'Funding window (ASYNC) but validation failed' }
       }
     }
 
     // Try spread strategy if within window, not in funding window, and enabled
     if (this.spreadStrategyEnabled && withinSpreadWindow && !(this.fundingStrategyEnabled && withinFundingWindow)) {
       if (this.validateSpreadEntry(fundingRateDifferencePercent, profitEstimate)) {
-        return { strategy: 'spread' }
+        return { strategy: 'spread', variant: 'spread' }
       }
-      return { strategy: null, reason: 'Spread window but validation failed' }
+      return { strategy: null, variant: null, reason: 'Spread window but validation failed' }
     }
 
     // Not within any valid strategy window or strategies disabled
-    return { strategy: null, reason: 'Not within any valid strategy execution window' }
+    return { strategy: null, variant: null, reason: 'Not within any valid strategy execution window' }
   }
 
   // Temporal Persistence Validation Methods
@@ -1254,6 +1255,7 @@ export class ArbitrageEngine extends EventEmitter {
       buyExchange,
       sellExchange,
       strategy: strategyResult.strategy,
+      variant: strategyResult.variant,
     })
 
     // Use the validated opportunity from the persistence check
@@ -1291,6 +1293,7 @@ export class ArbitrageEngine extends EventEmitter {
     opportunities.push({
       id: persistenceResult.candidate!.id,
       strategy: strategyResult.strategy,
+      strategyVariant: strategyResult.variant,
       buyExchange,
       sellExchange,
       normalizedPair,
