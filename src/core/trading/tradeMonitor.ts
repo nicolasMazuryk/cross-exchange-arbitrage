@@ -593,13 +593,18 @@ export class TradeMonitor extends EventEmitter {
    */
   private isWithinFundingWindowForExit(previousFundingTimestamp: number, nextFundingTimestamp: number): boolean {
     const now = Date.now()
-    const timeSincePreviousFunding = now - previousFundingTimestamp
-    const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
+    // const timeSincePreviousFunding = now - previousFundingTimestamp
+    // const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
     const timeUntilNextFunding = nextFundingTimestamp - now
     const timeUntilNextFundingSec = timeUntilNextFunding / 1000
 
     return (
-      timeSincePreviousFundingSec >= this.fundingStrategyExitWindowStart &&
+      // // Start exit execution window in seconds AFTER previous funding event
+      // timeSincePreviousFundingSec >= this.fundingStrategyExitWindowStart &&
+      // timeUntilNextFundingSec >= this.fundingStrategyExitWindowEnd
+
+      // Start exit execution window in seconds BEFORE NEXT funding event
+      timeUntilNextFundingSec <= this.fundingStrategyExitWindowStart &&
       timeUntilNextFundingSec >= this.fundingStrategyExitWindowEnd
     )
   }
