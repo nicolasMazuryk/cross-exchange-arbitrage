@@ -126,6 +126,8 @@ export interface MonitorConfig {
       enabled: boolean
       exitWindowStart: number
       exitWindowEnd: number
+      exitWindowStartTakeProfitStopLoss: number
+      exitWindowEndTakeProfitStopLoss: number
       minFundingProfitPercent: number
       minFundingProfitAsyncSyncExitPercent: number
       takeProfitTargetPercent: number
@@ -196,6 +198,8 @@ export class TradeMonitor extends EventEmitter {
   private readonly fundingStrategyEnabled: boolean
   private readonly fundingStrategyExitWindowStart: number
   private readonly fundingStrategyExitWindowEnd: number
+  private readonly fundingStrategyExitWindowStartTakeProfitStopLoss: number
+  private readonly fundingStrategyExitWindowEndTakeProfitStopLoss: number
   private readonly fundingTakeProfitTargetPercent: number
   private readonly fundingConvergenceThresholdPercent: number
   private readonly fundingSpreadWideningThresholdPercent: number
@@ -231,6 +235,10 @@ export class TradeMonitor extends EventEmitter {
     this.fundingStrategyEnabled = config.strategy.funding.enabled
     this.fundingStrategyExitWindowStart = config.strategy.funding.exitWindowStart
     this.fundingStrategyExitWindowEnd = config.strategy.funding.exitWindowEnd
+    this.fundingStrategyExitWindowStartTakeProfitStopLoss =
+      config.strategy.funding.exitWindowStartTakeProfitStopLoss
+    this.fundingStrategyExitWindowEndTakeProfitStopLoss =
+      config.strategy.funding.exitWindowEndTakeProfitStopLoss
     this.fundingTakeProfitTargetPercent = config.strategy.funding.takeProfitTargetPercent
     this.fundingConvergenceThresholdPercent = config.strategy.funding.convergenceThresholdPercent
     this.fundingSpreadWideningThresholdPercent = config.strategy.funding.spreadWideningThresholdPercent
@@ -589,23 +597,40 @@ export class TradeMonitor extends EventEmitter {
   }
 
   /**
-   * Check if current time is within funding strategy execution window
+   * Check if current time is within funding strategy exit window for convergence exits
    */
-  private isWithinFundingWindowForExit(previousFundingTimestamp: number, nextFundingTimestamp: number): boolean {
+  private isWithinFundingWindowForExitConvergence(
+    previousFundingTimestamp: number,
+    nextFundingTimestamp: number
+  ): boolean {
     const now = Date.now()
-    // const timeSincePreviousFunding = now - previousFundingTimestamp
-    // const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
     const timeUntilNextFunding = nextFundingTimestamp - now
     const timeUntilNextFundingSec = timeUntilNextFunding / 1000
 
     return (
-      // // Start exit execution window in seconds AFTER previous funding event
-      // timeSincePreviousFundingSec >= this.fundingStrategyExitWindowStart &&
-      // timeUntilNextFundingSec >= this.fundingStrategyExitWindowEnd
-
-      // Start exit execution window in seconds BEFORE NEXT funding event
       timeUntilNextFundingSec <= this.fundingStrategyExitWindowStart &&
       timeUntilNextFundingSec >= this.fundingStrategyExitWindowEnd
+    )
+  }
+
+  /**
+   * Check if current time is within funding strategy exit window for take-profit / spread-widening exits.
+   * Start = seconds AFTER previous funding event; End = seconds before next funding event.
+   */
+  private isWithinFundingWindowForExitTakeProfitStopLoss(
+    previousFundingTimestamp: number,
+    nextFundingTimestamp: number
+  ): boolean {
+    const now = Date.now()
+    const timeSincePreviousFunding = now - previousFundingTimestamp
+    const timeSincePreviousFundingSec = timeSincePreviousFunding / 1000
+    const timeUntilNextFunding = nextFundingTimestamp - now
+    const timeUntilNextFundingSec = timeUntilNextFunding / 1000
+
+    return (
+      // Start exit execution window in seconds AFTER previous funding event
+      timeSincePreviousFundingSec >= this.fundingStrategyExitWindowStartTakeProfitStopLoss &&
+      timeUntilNextFundingSec >= this.fundingStrategyExitWindowEndTakeProfitStopLoss
     )
   }
 
@@ -950,11 +975,8 @@ export class TradeMonitor extends EventEmitter {
     const fundingIntervalMs = nextFundingInterval * 60 * 60 * 1000
     const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
 
-    // Check time window and strategy enabled conditions
-    let strategyExitResult: { shouldExit: boolean; reason?: string; exitType?: 'take-profit' | 'convergence' | 'spread-widening' } = { shouldExit: false }
-
     if (trade.strategy === 'funding' && this.fundingStrategyEnabled) {
-      // Check if target funding event has occurred
+      // --- Funding strategy: target funding, window checks, then gate by exit-type window ---
       if (now < trade.opportunity.targetFundingTimestamp) {
         logger.trace({
           msg: 'Target funding event not reached yet, skipping exit check',
@@ -965,35 +987,74 @@ export class TradeMonitor extends EventEmitter {
         return
       }
 
-      // Check if within funding window
-      if (!this.isWithinFundingWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
+      if (
+        !this.isWithinFundingWindowForExitConvergence(previousFundingTimestamp, nextFundingTimestamp) &&
+        !this.isWithinFundingWindowForExitTakeProfitStopLoss(previousFundingTimestamp, nextFundingTimestamp)
+      ) {
         logger.trace({
-          msg: 'Not within funding window, skipping exit check',
+          msg: 'Not within funding window for convergence or take profit/spread widening, skipping exit check',
           function: 'TradeMonitor.processTradeExitConditions',
           tradeId: trade.id,
         })
         return
       }
 
-      // Determine if this is SYNC or ASYNC funding arbitrage
       const isSynchronized = this.fundingService.isFundingSynchronizedExit(buyFundingData, sellFundingData)
+      const strategyExitResult = isSynchronized
+        ? this.shouldExitFundingSyncTrade(
+            trade,
+            buyFundingData,
+            sellFundingData,
+            currentSpreadDifferencePercent
+          )
+        : this.shouldExitFundingAsyncTrade(
+            trade,
+            buyFundingData,
+            sellFundingData,
+            currentSpreadDifferencePercent
+          )
 
-      if (isSynchronized) {
-        strategyExitResult = this.shouldExitFundingSyncTrade(
-          trade,
-          buyFundingData,
-          sellFundingData,
-          currentSpreadDifferencePercent
+      if (strategyExitResult.shouldExit) {
+        const exitReason = strategyExitResult.exitType!
+        const isConvergenceExit = exitReason === 'convergence'
+        const isTakeProfitOrSpreadWidening =
+          exitReason === 'take-profit' || exitReason === 'spread-widening'
+
+        const inConvergenceWindow = this.isWithinFundingWindowForExitConvergence(
+          previousFundingTimestamp,
+          nextFundingTimestamp
         )
-      } else {
-        strategyExitResult = this.shouldExitFundingAsyncTrade(
-          trade,
-          buyFundingData,
-          sellFundingData,
-          currentSpreadDifferencePercent
+        const inTakeProfitWindow = this.isWithinFundingWindowForExitTakeProfitStopLoss(
+          previousFundingTimestamp,
+          nextFundingTimestamp
         )
+        const allowedByWindow =
+          (isConvergenceExit && inConvergenceWindow) || (isTakeProfitOrSpreadWidening && inTakeProfitWindow)
+
+        if (!allowedByWindow) {
+          logger.trace({
+            msg: 'Exit condition met but not within allowed funding window for this exit type, skipping',
+            function: 'TradeMonitor.processTradeExitConditions',
+            tradeId: trade.id,
+            exitReason,
+          })
+          return
+        }
+
+        logger.info({
+          msg: 'Strategy exit condition met',
+          function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+          reason: strategyExitResult.reason,
+          exitReason,
+        })
+        await this.executeExitTrade(trade, exitSimulation, exitReason, updatingExchange, orderbookUpdateTimestamp)
       }
-    } else if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
+      return
+    }
+
+    if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
+      // --- Spread strategy: window check, then execute if exit condition met ---
       if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
         logger.trace({
           msg: 'Not within spread window, skipping exit check',
@@ -1003,21 +1064,23 @@ export class TradeMonitor extends EventEmitter {
         return
       }
 
-      strategyExitResult = this.shouldExitSpreadTrade(trade, currentSpreadDifferencePercent, exitSimulation)
-    }
+      const strategyExitResult = this.shouldExitSpreadTrade(
+        trade,
+        currentSpreadDifferencePercent,
+        exitSimulation
+      )
 
-    // If strategy-specific exit condition is met, execute exit with validation
-    if (strategyExitResult.shouldExit) {
-      const exitReason = strategyExitResult.exitType!
-      
-      logger.info({
-        msg: 'Strategy exit condition met',
-        function: 'TradeMonitor.processTradeExitConditions',
-        tradeId: trade.id,
-        reason: strategyExitResult.reason,
-        exitReason,
-      })
-      await this.executeExitTrade(trade, exitSimulation, exitReason, updatingExchange, orderbookUpdateTimestamp)
+      if (strategyExitResult.shouldExit) {
+        const exitReason = strategyExitResult.exitType!
+        logger.info({
+          msg: 'Strategy exit condition met',
+          function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+          reason: strategyExitResult.reason,
+          exitReason,
+        })
+        await this.executeExitTrade(trade, exitSimulation, exitReason, updatingExchange, orderbookUpdateTimestamp)
+      }
     }
   }
 

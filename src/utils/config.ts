@@ -123,6 +123,8 @@ interface StrategyConfig {
     entryWindowEnd: number
     exitWindowStart: number
     exitWindowEnd: number
+    exitWindowStartTakeProfitStopLoss: number
+    exitWindowEndTakeProfitStopLoss: number
     minFundingProfitPercent: number
     minTotalProfitPercent: number
     takeProfitTargetPercent: number
@@ -262,6 +264,8 @@ const config: Config = {
       entryWindowEnd: yamlConfig?.strategy?.funding?.entryWindowEnd,
       exitWindowStart: yamlConfig?.strategy?.funding?.exitWindowStart,
       exitWindowEnd: yamlConfig?.strategy?.funding?.exitWindowEnd,
+      exitWindowStartTakeProfitStopLoss: yamlConfig?.strategy?.funding?.exitWindowStartTakeProfitStopLoss,
+      exitWindowEndTakeProfitStopLoss: yamlConfig?.strategy?.funding?.exitWindowEndTakeProfitStopLoss,
       minFundingProfitPercent: yamlConfig?.strategy?.funding?.minFundingProfitPercent,
       minTotalProfitPercent: yamlConfig?.strategy?.funding?.minTotalProfitPercent,
       takeProfitTargetPercent: yamlConfig?.strategy?.funding?.takeProfitTargetPercent,

@@ -408,6 +408,8 @@ export class Orchestrator extends EventEmitter {
               enabled: config.strategy.funding.enabled,
               exitWindowStart: config.strategy.funding.exitWindowStart,
               exitWindowEnd: config.strategy.funding.exitWindowEnd,
+              exitWindowStartTakeProfitStopLoss: config.strategy.funding.exitWindowStartTakeProfitStopLoss,
+              exitWindowEndTakeProfitStopLoss: config.strategy.funding.exitWindowEndTakeProfitStopLoss,
               takeProfitTargetPercent: config.strategy.funding.takeProfitTargetPercent,
               convergenceThresholdPercent: config.strategy.funding.convergenceThresholdPercent,
               spreadWideningThresholdPercent: config.strategy.funding.spreadWideningThresholdPercent,

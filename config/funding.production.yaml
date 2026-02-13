@@ -113,8 +113,10 @@ strategy:
     enabled: true  # Enable/disable funding arbitrage strategy
     entryWindowStart: 60  # Start entry execution window in seconds before next funding event
     entryWindowEnd: 5  # End entry execution window in seconds before next funding event
-    exitWindowStart: 120  # (Start exit execution window in seconds BEFORE NEXT funding event) Start exit execution window in seconds AFTER previous funding event
-    exitWindowEnd: 5  # End exit execution window in seconds before next funding event
+    exitWindowStart: 120  # (Convergence) Start exit execution window in seconds BEFORE NEXT funding event
+    exitWindowEnd: 5  # (Convergence) End exit execution window in seconds before next funding event
+    exitWindowStartTakeProfitStopLoss: 30  # (Take-profit / spread-widening) Start exit window in seconds AFTER PREVIOUS funding event
+    exitWindowEndTakeProfitStopLoss: 30  # (Take-profit / spread-widening) End exit window in seconds before next funding event
     minFundingProfitPercent: 0.20  # Minimum funding difference in percent after costs for SYNC or cumulative profit for ASYNC
     minTotalProfitPercent: 0.00  # Minimum acceptable net profit in percent after all costs
     # Exit Conditions
