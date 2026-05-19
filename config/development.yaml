@@ -110,7 +110,7 @@ fundingFeeCollector:
 strategy:
   # Funding Arbitrage Strategy Configuration
   funding:
-    enabled: true  # Enable/disable funding arbitrage strategy
+    enabled: false  # Enable/disable funding arbitrage strategy
     entryWindowStart: 120  # Start entry execution window in seconds before next funding event
     entryWindowEnd: 5  # End entry execution window in seconds before next funding event
     exitWindowStart: 120  # (Convergence) Start exit execution window in seconds BEFORE NEXT funding event
@@ -127,15 +127,15 @@ strategy:
   
   # Spread Arbitrage Strategy Configuration
   spread:
-    enabled: false  # Enable/disable spread arbitrage strategy
-    entryWindowStart: 300  # Start entry execution window in seconds after previous funding event
-    entryWindowEnd: 60  # End entry execution window in seconds before next funding event
-    exitWindowStart: 300  # Start exit execution window in seconds after previous funding event
-    exitWindowEnd: 60  # End exit execution window in seconds before next funding event
-    minSpreadProfitPercent: 0.8  # Minimum spread profit in percent after costs
+    enabled: true  # Enable/disable spread arbitrage strategy
+    entryWindowStart: 8  # Start entry execution window in seconds after previous funding event
+    entryWindowEnd: 14000  # End entry execution window in seconds before next funding event
+    exitWindowStart: 8  # Start exit execution window in seconds after previous funding event
+    exitWindowEnd: 2  # End exit execution window in seconds before next funding event
+    minSpreadProfitPercent: 0.4  # Minimum spread profit in percent after costs
     minTotalProfitPercent: -0.1  # Minimum acceptable net profit in percent after all costs
     negativeFundingMultiplier: 2  # Reduce exposure when funding difference is negative
     # Exit Conditions
-    takeProfitTargetPercent: 0.2  # Exit when take profit target is reached: (entry spread - current spread) + funding - costs > takeProfitTargetPercent
+    takeProfitTargetPercent: 0.4  # Exit when take profit target is reached: (entry spread - current spread) + funding - costs > takeProfitTargetPercent
     convergenceThresholdPercent: 0.0  # convergence threshold in percent for exits
-    spreadWideningThresholdPercent: 2.0  # Exit if spread widens excessively beyond this percent threshold
+    spreadWideningThresholdPercent: 5.0  # Exit if spread widens excessively beyond this percent threshold

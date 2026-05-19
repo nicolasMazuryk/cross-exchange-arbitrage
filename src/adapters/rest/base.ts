@@ -79,13 +79,14 @@ export abstract class BaseExchange implements RestClientInterface {
         appConfig.exchanges[this.exchangeName as keyof typeof appConfig.exchanges].ignoredMarkets || []
       const usdtPerpetualMarkets = Object.fromEntries(
         Object.entries(this.exchange.markets)
-          .filter(
-            ([, market]) =>
-              market.quote === 'USDT' && // TODO: add USDC
-              market.swap && // TODO: add SPOT markets
-              !market.inverse &&
-              market.active
-          )
+          // .filter(
+          //   ([, market]) =>
+          //     market.quote === 'USDT' && // TODO: add USDC
+          //     market.swap && // TODO: add SPOT markets
+          //     !market.inverse &&
+          //     market.active
+          // )
+          .filter(([, market]) => market.spot || market.margin || market.swap)
           .filter(([symbol]) => !ignoredMarkets.includes(symbol))
       )
       return usdtPerpetualMarkets

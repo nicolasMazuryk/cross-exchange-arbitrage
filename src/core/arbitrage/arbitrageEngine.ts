@@ -921,8 +921,28 @@ export class ArbitrageEngine extends EventEmitter {
           if (!metadataServiceA || !metadataServiceB) continue
 
           // Get funding data for both exchanges
-          const fundingDataA = this.fundingService.getSymbolFundingData(exchangeA, exchangeSymbolA)
-          const fundingDataB = this.fundingService.getSymbolFundingData(exchangeB, exchangeSymbolB)
+          // const fundingDataA = this.fundingService.getSymbolFundingData(exchangeA, exchangeSymbolA)
+          // const fundingDataB = this.fundingService.getSymbolFundingData(exchangeB, exchangeSymbolB)
+
+          const fundingDataA: ParsedFunding = {
+            exchange: exchangeA,
+            symbol: symbol,
+            fundingRate: 0,
+            fundingRatePercent: 0,
+            fundingInterval: 4,
+            nextFundingTimestamp: 1789148800000,
+            nextFundingDatetime: "2026-05-19T00:00:00.000Z" as any,
+          } 
+
+          const fundingDataB: ParsedFunding = {
+            exchange: exchangeB,
+            symbol: symbol,
+            fundingRate: 0,
+            fundingRatePercent: 0,
+            fundingInterval: 4,
+            nextFundingTimestamp: 1789148800000,
+            nextFundingDatetime: "2026-05-19T00:00:00.000Z" as any,
+          }
 
           if (!fundingDataA || !fundingDataB) continue
 
@@ -1227,6 +1247,13 @@ export class ArbitrageEngine extends EventEmitter {
       exitSellSimulation,
       fundingProjection
     )
+
+    if (profitEstimate.spreadProfitPercent > 0.5) {
+      console.log('profitEstimate.spreadProfitPercent', buyExchangeSymbol, profitEstimate.spreadProfitPercent)
+      if (profitEstimate.estimatedProfitPercent > 0.3) {
+        console.log('profitEstimate.estimatedProfitPercent', buyExchangeSymbol, profitEstimate.estimatedProfitPercent)
+      }
+    }
 
     // === CONFIDENCE VALIDATION ===
     if (profitEstimate.confidenceScore < this.minConfidenceScore) return

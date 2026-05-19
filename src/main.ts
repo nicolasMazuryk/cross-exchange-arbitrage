@@ -1,3 +1,6 @@
+import dns from 'node:dns'
+dns.setDefaultResultOrder('ipv4first')
+
 import { createOrchestrator } from './core/orchestration'
 import config from './utils/config'
 import { Logger } from './utils/logger'
