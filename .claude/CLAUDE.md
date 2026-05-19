@@ -1,5 +1,7 @@
 # CLAUDE.md — ArbiNet Codebase Guide
 
+IMPORTANT: Always read: [Agent Workflow](./agent-workflow.md)
+
 ## Project Overview
 
 ArbiNet is an automated spatial cryptocurrency arbitrage system. It monitors real-time orderbooks across multiple exchanges via WebSocket, detects profitable arbitrage opportunities (funding rate or spread-based), and executes hedged trades (buy on one exchange, sell on another). State is persisted in Redis for recovery across restarts.
