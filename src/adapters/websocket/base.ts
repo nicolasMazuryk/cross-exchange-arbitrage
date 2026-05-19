@@ -110,15 +110,22 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   protected cleanupClient(batch: StreamBatch): void {
     if (!batch.client) return
 
+    const oldClient = batch.client
+    batch.client = null as any
+    batch.isConnected = false
+
     try {
-      // Close all connections for the client
-      if (typeof batch.client.closeAll === 'function') {
-        batch.client.closeAll()
-      } else if (typeof batch.client.close === 'function') {
-        batch.client.close()
+      // Remove our listeners first so closeAll() errors don't trigger handleConnectionError again,
+      // then re-add a no-op error handler to absorb async errors from okx-api's internal reconnect
+      // timers that may fire after cleanup (without this, ERR_UNHANDLED_ERROR crashes the process).
+      oldClient.removeAllListeners()
+      oldClient.on('error', () => {})
+
+      if (typeof oldClient.closeAll === 'function') {
+        oldClient.closeAll()
+      } else if (typeof oldClient.close === 'function') {
+        oldClient.close()
       }
-      // Remove all event listeners to prevent memory leaks
-      batch.client.removeAllListeners()
     } catch (cleanupError) {
       logger.error({
         msg: 'Error during client cleanup',
@@ -127,9 +134,6 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
         batchId: batch.id,
         error: cleanupError,
       })
-    } finally {
-      batch.client = null as any
-      batch.isConnected = false
     }
   }
 
