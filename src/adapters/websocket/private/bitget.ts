@@ -3,10 +3,27 @@ import { BasePrivateWebSocketClient } from './base'
 import { WebSocketConfig, PrivateWebSocketMessageParser } from '../types'
 import { RestClientInterface } from '../../rest/types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../../types/account'
-import { OrderType, OrderStatus, PositionSide } from '../../../types/exchange'
+import { OrderType, OrderStatus, PositionSide, MarketType } from '../../../types/exchange'
 import { Logger } from '../../../utils/logger'
-import { MarketType } from '../../../types/exchange'
-import { convertExchangeSymbolToUnifiedSymbol, getOrderSide, positionId } from '../../../utils/utils'
+import { convertExchangeSymbolToUnifiedSymbol, getOrderSide, positionId, quoteCurrenciesFor } from '../../../utils/utils'
+import { BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE } from '../../rest/bitget'
+import appConfig from '../../../utils/config'
+
+function bitgetInstTypeToMarketType(instType: string): MarketType {
+  const upper = instType.toUpperCase()
+  if (upper === 'SPOT') return MarketType.SPOT
+  if (upper === 'COIN-FUTURES' || upper === 'DMCBL' || upper === 'COIN_FUTURES') return MarketType.INVERSE_PERP
+  if (upper === 'USDT-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES') return MarketType.LINEAR_PERP
+  throw new Error(`unknown bitget instType: ${instType}`)
+}
+
+function bitgetInstTypeToQuote(instType: string): string | undefined {
+  const upper = instType.toUpperCase()
+  if (upper === 'COIN-FUTURES' || upper === 'DMCBL' || upper === 'COIN_FUTURES') return 'USD'
+  if (upper === 'USDT-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES') return 'USDT'
+  if (upper === 'SUSDC-FUTURES') return 'USDC'
+  return undefined
+}
 
 const EXCHANGE_NAME = 'bitget'
 
@@ -30,6 +47,8 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
   }
 
   protected setupEventHandlers(): void {
+    let errorHandled = false
+
     this.client.on('open', (data: any) => {
       logger.debug({
         msg: 'Account WebSocket connection opened',
@@ -41,6 +60,8 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
     })
 
     this.client.on('close', () => {
+      if (errorHandled) return
+      errorHandled = true
       logger.warn({
         msg: 'WebSocket connection closed',
         function: 'BitgetPrivateWebSocketClient.setupEventHandlers.close',
@@ -80,6 +101,9 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
     })
 
     this.client.on('exception', (error: any) => {
+      if (errorHandled) return
+      errorHandled = true
+      
       logger.error({
         msg: 'WebSocket error',
         function: 'BitgetPrivateWebSocketClient.setupEventHandlers.error',
@@ -105,19 +129,40 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
   }
 
   protected async subscribeToAccountStreams(): Promise<void> {
-    // Subscribe to account updates for USDT futures
-    this.client.subscribeTopic('USDT-FUTURES', 'account', 'default')
+    // SPOT only supports account (balance) — positions/orders are futures-only on Bitget
+    this.client.subscribeTopic('SPOT' as any, 'account', 'default')
 
-    // Subscribe to positions updates for USDT futures
-    this.client.subscribeTopic('USDT-FUTURES', 'positions', 'default')
+    // Derive perp instTypes from config: use BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE for linear, COIN-FUTURES for inverse
+    const enabledQuotes = quoteCurrenciesFor('bitget')
+    const enabledMarketTypes = appConfig.exchanges.bitget.enabledMarketTypes
+    const perpInstTypes: string[] = []
+    for (const quote of enabledQuotes) {
+      const productType = BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE[quote]
+      if (productType && !perpInstTypes.includes(productType)) {
+        perpInstTypes.push(productType)
+      } else if (!productType) {
+        logger.warn({
+          msg: 'No Bitget linear instType mapping for quote, skipping subscription',
+          function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
+          quote,
+        })
+      }
+    }
+    if (!enabledMarketTypes || enabledMarketTypes.includes(MarketType.INVERSE_PERP)) {
+      perpInstTypes.push('COIN-FUTURES')
+    }
 
-    // Subscribe to orders updates for USDT futures
-    this.client.subscribeTopic('USDT-FUTURES', 'orders', 'default')
+    for (const instType of perpInstTypes) {
+      this.client.subscribeTopic(instType as any, 'account', 'default')
+      this.client.subscribeTopic(instType as any, 'positions', 'default')
+      this.client.subscribeTopic(instType as any, 'orders', 'default')
+    }
 
     logger.info({
       msg: 'Subscribed to account WebSocket streams',
       function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
       exchange: this.exchangeName,
+      perpInstTypes,
     })
   }
 }
@@ -139,12 +184,32 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
     return balances
   }
 
-  parsePositionUpdate(data: any): PositionInfo[] {
+  parsePositionUpdate(data: any, restClient: RestClientInterface): PositionInfo[] {
     const positions: PositionInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
+      if (!data.arg?.instType) throw new Error(`bitget private position update missing data.arg.instType: ${JSON.stringify(data)}`)
+      const instType = data.arg.instType
+      const marketType = bitgetInstTypeToMarketType(instType)
+
       for (const position of data.data) {
-        const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, MarketType.FUTURES, 'USDT')
+        const meta = restClient.getMarketMetadataService().getMetadataByNativeId(position.instId, marketType)
+        let symbol: string
+        if (meta) {
+          symbol = meta.symbol
+        } else {
+          const quote = bitgetInstTypeToQuote(instType)
+          if (!quote) {
+            logger.warn({
+              msg: 'Bitget WS: cannot resolve position symbol, unknown instType quote',
+              function: 'BitgetPrivateMessageParser.parsePositionUpdate',
+              instId: position.instId,
+              instType,
+            })
+            continue
+          }
+          symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, marketType, quote)
+        }
         const positionSide = position.holdSide.toUpperCase() as PositionSide
 
         positions.push({
@@ -157,6 +222,7 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
           unrealizedPnL: parseFloat(position.unrealizedPL) || 0,
           timestamp: Number(position.cTime),
           date: new Date(Number(position.cTime)),
+          marketType,
         })
       }
     }
@@ -164,15 +230,36 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
     return positions
   }
 
-  parseOrderUpdate(data: any): OrderInfo[] {
+  parseOrderUpdate(data: any, restClient: RestClientInterface): OrderInfo[] {
     const orders: OrderInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
+      if (!data.arg?.instType) throw new Error(`bitget private order update missing data.arg.instType: ${JSON.stringify(data)}`)
+      const instType = data.arg.instType
+      const marketType = bitgetInstTypeToMarketType(instType)
+
       for (const order of data.data) {
+        const orderMeta = restClient.getMarketMetadataService().getMetadataByNativeId(order.instId, marketType)
+        let orderSymbol: string
+        if (orderMeta) {
+          orderSymbol = orderMeta.symbol
+        } else {
+          const quote = bitgetInstTypeToQuote(instType)
+          if (!quote) {
+            logger.warn({
+              msg: 'Bitget WS: cannot resolve order symbol, unknown instType quote',
+              function: 'BitgetPrivateMessageParser.parseOrderUpdate',
+              instId: order.instId,
+              instType,
+            })
+            continue
+          }
+          orderSymbol = convertExchangeSymbolToUnifiedSymbol(order.instId, marketType, quote)
+        }
         orders.push({
           id: order.orderId,
           clientOrderId: order.clientOid,
-          symbol: convertExchangeSymbolToUnifiedSymbol(order.instId, MarketType.FUTURES, 'USDT'),
+          symbol: orderSymbol,
           exchange: EXCHANGE_NAME,
           orderSide: getOrderSide(order.posSide, order.tradeSide),
           positionSide: order.posSide.toUpperCase() as PositionSide,
@@ -183,6 +270,7 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
           status: this.normalizeOrderStatus(order.status),
           timestamp: parseInt(order.cTime),
           date: new Date(Number(order.cTime)),
+          marketType,
         })
       }
     }

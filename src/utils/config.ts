@@ -2,6 +2,7 @@ import dotenv from 'dotenv'
 import { parse } from 'yaml'
 import fs from 'fs'
 import path from 'path'
+import { MarketType } from '../types/exchange'
 
 // Load environment variables only in development
 const nodeEnv = process.env.NODE_ENV || 'development'
@@ -54,14 +55,24 @@ interface FeeConfig {
   taker: number
 }
 
+interface PerMarketTypeFees {
+  spot?: FeeConfig
+  linear?: FeeConfig
+  inverse?: FeeConfig
+}
+
 interface ExchangeConfiguration {
   apiKey: string
   apiSecret: string
   apiPass?: string
   maxStreamsPerConnection: number
   reconnectInterval: number
-  fees: FeeConfig
+  feesPerMarketType: PerMarketTypeFees
   ignoredMarkets: string[]
+  enabledMarketTypes?: string[]      // e.g. ['linear', 'spot', 'inverse'] — absent = all tradable
+  enabledQuoteCurrencies?: string[]  // e.g. ['USDT', 'USDC'] — absent = all
+  disabledQuoteCurrencies?: string[] // e.g. ['BRL'] — skip pairs quoted in these currencies
+  ignoredFundingSymbols?: string[]   // unified symbols to exclude from funding data (e.g. 'USDC/USDT:USDT')
 }
 
 interface ArbitrageConfig {
@@ -75,6 +86,7 @@ interface ArbitrageConfig {
   minPersistenceMs: number
   minConsecutiveSnapshots: number
   candidateCleanupMs: number
+  sellSpotBuyPerpEnabled: boolean
 }
 
 interface TradingConfig {
@@ -134,6 +146,7 @@ interface StrategyConfig {
   }
   spread: {
     enabled: boolean
+    fundingProfitEnabled: boolean
     entryWindowStart: number
     entryWindowEnd: number
     exitWindowStart: number
@@ -157,12 +170,22 @@ interface Config {
     bitget: ExchangeConfiguration
   }
   trackedPairs: string[]
+  trackedPairsByQuote?: Record<string, string[]>
   arbitrage: ArbitrageConfig
   trading: TradingConfig
   accountSync: AccountSyncConfig
   funding: FundingConfig
   fundingFeeCollector: FundingFeeCollectorConfig
   strategy: StrategyConfig
+}
+
+function buildPerMarketTypeFees(rawFees: any, exchangeName: string): PerMarketTypeFees {
+  if (!rawFees) throw new Error(`missing fees config for exchange: ${exchangeName}`)
+  const spot = rawFees.spot ? { maker: rawFees.spot.maker, taker: rawFees.spot.taker } : undefined
+  const linear = rawFees.linear ? { maker: rawFees.linear.maker, taker: rawFees.linear.taker } : undefined
+  const inverse = rawFees.inverse ? { maker: rawFees.inverse.maker, taker: rawFees.inverse.taker } : undefined
+  if (!spot && !linear && !inverse) throw new Error(`fees config for ${exchangeName} has no spot/linear/inverse entries`)
+  return { spot, linear, inverse }
 }
 
 const config: Config = {
@@ -181,22 +204,24 @@ const config: Config = {
       apiSecret: process.env.BINANCE_API_SECRET || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.binance?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.binance?.reconnectInterval,
-      fees: {
-        maker: yamlConfig?.exchanges?.binance?.fees?.maker,
-        taker: yamlConfig?.exchanges?.binance?.fees?.taker,
-      },
+      feesPerMarketType: buildPerMarketTypeFees(yamlConfig?.exchanges?.binance?.fees, 'binance'),
       ignoredMarkets: yamlConfig?.exchanges?.binance?.ignoredMarkets || [],
+      enabledMarketTypes: yamlConfig?.exchanges?.binance?.enabledMarketTypes,
+      enabledQuoteCurrencies: yamlConfig?.exchanges?.binance?.enabledQuoteCurrencies,
+      disabledQuoteCurrencies: yamlConfig?.exchanges?.binance?.disabledQuoteCurrencies,
+      ignoredFundingSymbols: yamlConfig?.exchanges?.binance?.ignoredFundingSymbols,
     },
     bybit: {
       apiKey: process.env.BYBIT_API_KEY || '',
       apiSecret: process.env.BYBIT_API_SECRET || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.bybit?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.bybit?.reconnectInterval,
-      fees: {
-        maker: yamlConfig?.exchanges?.bybit?.fees?.maker,
-        taker: yamlConfig?.exchanges?.bybit?.fees?.taker,
-      },
+      feesPerMarketType: buildPerMarketTypeFees(yamlConfig?.exchanges?.bybit?.fees, 'bybit'),
       ignoredMarkets: yamlConfig?.exchanges?.bybit?.ignoredMarkets || [],
+      enabledMarketTypes: yamlConfig?.exchanges?.bybit?.enabledMarketTypes,
+      enabledQuoteCurrencies: yamlConfig?.exchanges?.bybit?.enabledQuoteCurrencies,
+      disabledQuoteCurrencies: yamlConfig?.exchanges?.bybit?.disabledQuoteCurrencies,
+      ignoredFundingSymbols: yamlConfig?.exchanges?.bybit?.ignoredFundingSymbols,
     },
     okx: {
       apiKey: process.env.OKX_API_KEY || '',
@@ -204,11 +229,12 @@ const config: Config = {
       apiPass: process.env.OKX_API_PASS || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.okx?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.okx?.reconnectInterval,
-      fees: {
-        maker: yamlConfig?.exchanges?.okx?.fees?.maker,
-        taker: yamlConfig?.exchanges?.okx?.fees?.taker,
-      },
+      feesPerMarketType: buildPerMarketTypeFees(yamlConfig?.exchanges?.okx?.fees, 'okx'),
       ignoredMarkets: yamlConfig?.exchanges?.okx?.ignoredMarkets || [],
+      enabledMarketTypes: yamlConfig?.exchanges?.okx?.enabledMarketTypes,
+      enabledQuoteCurrencies: yamlConfig?.exchanges?.okx?.enabledQuoteCurrencies,
+      disabledQuoteCurrencies: yamlConfig?.exchanges?.okx?.disabledQuoteCurrencies,
+      ignoredFundingSymbols: yamlConfig?.exchanges?.okx?.ignoredFundingSymbols,
     },
     bitget: {
       apiKey: process.env.BITGET_API_KEY || '',
@@ -216,14 +242,19 @@ const config: Config = {
       apiPass: process.env.BITGET_API_PASS || '',
       maxStreamsPerConnection: yamlConfig?.exchanges?.bitget?.maxStreamsPerConnection,
       reconnectInterval: yamlConfig?.exchanges?.bitget?.reconnectInterval,
-      fees: {
-        maker: yamlConfig?.exchanges?.bitget?.fees?.maker,
-        taker: yamlConfig?.exchanges?.bitget?.fees?.taker,
-      },
+      feesPerMarketType: buildPerMarketTypeFees(yamlConfig?.exchanges?.bitget?.fees, 'bitget'),
       ignoredMarkets: yamlConfig?.exchanges?.bitget?.ignoredMarkets || [],
+      enabledMarketTypes: yamlConfig?.exchanges?.bitget?.enabledMarketTypes,
+      enabledQuoteCurrencies: yamlConfig?.exchanges?.bitget?.enabledQuoteCurrencies,
+      disabledQuoteCurrencies: yamlConfig?.exchanges?.bitget?.disabledQuoteCurrencies,
+      ignoredFundingSymbols: yamlConfig?.exchanges?.bitget?.ignoredFundingSymbols,
     },
   },
-  trackedPairs: yamlConfig?.trackedPairs,
+  trackedPairs: [
+    ...(yamlConfig?.trackedPairs ?? []),
+    ...Object.values(yamlConfig?.trackedPairsByQuote ?? {}).flat(),
+  ],
+  trackedPairsByQuote: yamlConfig?.trackedPairsByQuote,
   arbitrage: {
     blacklistPairs: yamlConfig?.arbitrage?.blacklistPairs || [],
     minConfidenceScore: yamlConfig?.arbitrage?.minConfidenceScore,
@@ -235,6 +266,7 @@ const config: Config = {
     minPersistenceMs: yamlConfig?.arbitrage?.minPersistenceMs,
     minConsecutiveSnapshots: yamlConfig?.arbitrage?.minConsecutiveSnapshots,
     candidateCleanupMs: yamlConfig?.arbitrage?.candidateCleanupMs,
+    sellSpotBuyPerpEnabled: yamlConfig?.arbitrage?.sellSpotBuyPerpEnabled ?? false,
   },
   trading: {
     orderAmountUsd: yamlConfig?.trading?.orderAmountUsd,
@@ -275,6 +307,7 @@ const config: Config = {
     },
     spread: {
       enabled: yamlConfig?.strategy?.spread?.enabled ?? false,
+      fundingProfitEnabled: yamlConfig?.strategy?.spread?.fundingProfitEnabled ?? true,
       entryWindowStart: yamlConfig?.strategy?.spread?.entryWindowStart,
       entryWindowEnd: yamlConfig?.strategy?.spread?.entryWindowEnd,
       exitWindowStart: yamlConfig?.strategy?.spread?.exitWindowStart,
@@ -290,5 +323,14 @@ const config: Config = {
 }
 
 export { yamlConfig }
+
+/** Get fee config for a specific exchange and market type. Throws if not configured. */
+export function getFees(exchangeName: string, marketType: MarketType): FeeConfig {
+  const exCfg = config.exchanges[exchangeName as keyof typeof config.exchanges]
+  if (!exCfg) throw new Error(`getFees: unknown exchange: ${exchangeName}`)
+  const perType = exCfg.feesPerMarketType[marketType as keyof PerMarketTypeFees]
+  if (!perType) throw new Error(`getFees: no fee config for ${exchangeName}/${marketType}`)
+  return perType
+}
 
 export default config

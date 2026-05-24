@@ -12,6 +12,18 @@ const EXCHANGE_NAME = 'bybit'
 
 const logger = new Logger(`ws-private-${EXCHANGE_NAME}`)
 
+function categoryToMarketType(category: string): MarketType {
+  if (category === 'spot') return MarketType.SPOT
+  if (category === 'inverse') return MarketType.INVERSE_PERP
+  if (category === 'linear') return MarketType.LINEAR_PERP
+  throw new Error(`unknown bybit category: ${category}`)
+}
+
+function categoryToQuote(category: string): string | undefined {
+  if (category === 'inverse') return 'USD'
+  return undefined
+}
+
 export class BybitPrivateWebSocketClient extends BasePrivateWebSocketClient {
   protected readonly exchangeName = EXCHANGE_NAME
   protected readonly messageParser: BybitPrivateMessageParser
@@ -104,7 +116,10 @@ export class BybitPrivateWebSocketClient extends BasePrivateWebSocketClient {
   }
 
   protected async subscribeToAccountStreams(): Promise<void> {
-    this.client.subscribeV5(['order', 'position', 'wallet'], 'linear')
+    this.client.subscribeV5(['order', 'position'], 'linear')
+    this.client.subscribeV5(['order', 'position'], 'inverse')
+    this.client.subscribeV5(['order', 'position'], 'spot')
+    this.client.subscribeV5(['wallet'], 'linear')
     logger.info({
       msg: 'Subscribed to account WebSocket streams',
       function: 'BybitPrivateWebSocketClient.subscribeToAccountStreams',
@@ -130,12 +145,30 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
     return balances
   }
 
-  parsePositionUpdate(data: any): PositionInfo[] {
+  parsePositionUpdate(data: any, restClient: RestClientInterface): PositionInfo[] {
     const positions: PositionInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
+      if (!data.category) throw new Error(`bybit private position update missing data.category: ${JSON.stringify(data)}`)
+      const marketType = categoryToMarketType(data.category)
       for (const position of data.data) {
-        const symbol = convertExchangeSymbolToUnifiedSymbol(position.symbol, MarketType.FUTURES, 'USDT')
+        const meta = restClient.getMarketMetadataService().getMetadataByNativeId(position.symbol, marketType)
+        let symbol: string
+        if (meta) {
+          symbol = meta.symbol
+        } else {
+          const quote = categoryToQuote(data.category)
+          if (!quote) {
+            logger.warn({
+              msg: 'Bybit WS: cannot resolve position symbol, no metadata and quote unknown from category',
+              function: 'BybitPrivateMessageParser.parsePositionUpdate',
+              nativeSymbol: position.symbol,
+              category: data.category,
+            })
+            continue
+          }
+          symbol = convertExchangeSymbolToUnifiedSymbol(position.symbol, marketType, quote)
+        }
         const side = position.side === 'Buy' ? 'LONG' : 'SHORT'
         positions.push({
           id: positionId(symbol, side),
@@ -147,6 +180,7 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
           unrealizedPnL: parseFloat(position.unrealisedPnl) || 0,
           timestamp: Number(position.createdTime) || 0,
           date: new Date(Number(position.createdTime)),
+          marketType,
         })
       }
     }
@@ -154,15 +188,34 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
     return positions
   }
 
-  parseOrderUpdate(data: any): OrderInfo[] {
+  parseOrderUpdate(data: any, restClient: RestClientInterface): OrderInfo[] {
     const orders: OrderInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
+      if (!data.category) throw new Error(`bybit private order update missing data.category: ${JSON.stringify(data)}`)
+      const marketType = categoryToMarketType(data.category)
       for (const order of data.data) {
+        const orderMeta = restClient.getMarketMetadataService().getMetadataByNativeId(order.symbol, marketType)
+        let orderSymbol: string
+        if (orderMeta) {
+          orderSymbol = orderMeta.symbol
+        } else {
+          const quote = categoryToQuote(data.category)
+          if (!quote) {
+            logger.warn({
+              msg: 'Bybit WS: cannot resolve order symbol, no metadata and quote unknown from category',
+              function: 'BybitPrivateMessageParser.parseOrderUpdate',
+              nativeSymbol: order.symbol,
+              category: data.category,
+            })
+            continue
+          }
+          orderSymbol = convertExchangeSymbolToUnifiedSymbol(order.symbol, marketType, quote)
+        }
         orders.push({
           id: order.orderId,
           clientOrderId: order.orderLinkId,
-          symbol: convertExchangeSymbolToUnifiedSymbol(order.symbol, MarketType.FUTURES, 'USDT'),
+          symbol: orderSymbol,
           exchange: EXCHANGE_NAME,
           orderSide: order.side.toUpperCase() as OrderSide,
           positionSide: getPositionSide(order.side!.toUpperCase() as OrderSide, order.reduceOnly!),
@@ -173,6 +226,7 @@ class BybitPrivateMessageParser implements PrivateWebSocketMessageParser {
           status: this.normalizeOrderStatus(order.orderStatus),
           timestamp: parseInt(order.createdTime),
           date: new Date(parseInt(order.createdTime)),
+          marketType,
         })
       }
     }

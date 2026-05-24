@@ -13,6 +13,7 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
   protected abstract readonly messageParser: PrivateWebSocketMessageParser
   protected client: any
   protected isConnected = false
+  private isReconnecting = false
 
   constructor(
     protected readonly config: WebSocketConfig,
@@ -31,8 +32,24 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
     await this.createPrivateWebSocketConnection()
   }
 
+  private cleanupCurrentClient(): void {
+    const old = this.client
+    if (!old) return
+    this.client = null
+    this.isConnected = false
+    try {
+      old.removeAllListeners()
+      old.on('error', () => {})
+      if (typeof old.closeAll === 'function') old.closeAll()
+      else if (typeof old.close === 'function') old.close()
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+
   protected async createPrivateWebSocketConnection(): Promise<void> {
     try {
+      this.cleanupCurrentClient()
       this.client = this.createClient()
       this.setupEventHandlers()
       await this.subscribeToAccountStreams()
@@ -48,6 +65,9 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
   }
 
   protected async handleConnectionError(): Promise<void> {
+    if (this.isReconnecting) return
+    this.isReconnecting = true
+
     logger.warn({
       msg: 'Handling connection error. Reconnecting Private WebSocket',
       function: 'BasePrivateWebSocketClient.handleConnectionError',
@@ -58,6 +78,7 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
     try {
       await wait(this.config.reconnectInterval)
       await this.createPrivateWebSocketConnection()
+      this.isReconnecting = false
     } catch (error) {
       logger.error({
         msg: 'Failed to reconnect private WebSocket, will retry',
@@ -66,6 +87,7 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
         reconnectInterval: this.config.reconnectInterval,
         error,
       })
+      this.isReconnecting = false
       await this.handleConnectionError()
     }
   }
@@ -124,15 +146,12 @@ export abstract class BasePrivateWebSocketClient extends EventEmitter implements
 
   public close(): void {
     try {
-      if (this.client) {
-        this.client.closeAll()
-        this.isConnected = false
-        logger.debug({
-          msg: 'Closed private WebSocket connection',
-          function: 'BasePrivateWebSocketClient.close',
-          exchange: this.exchangeName,
-        })
-      }
+      this.cleanupCurrentClient()
+      logger.debug({
+        msg: 'Closed private WebSocket connection',
+        function: 'BasePrivateWebSocketClient.close',
+        exchange: this.exchangeName,
+      })
     } catch (error) {
       logger.error({
         msg: 'Error closing private WebSocket connection',

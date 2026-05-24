@@ -1,6 +1,7 @@
 import { Dictionary, Market } from 'ccxt'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
+import { MarketType } from '../../types/exchange'
 import { RestClientInterface } from '../rest/types'
 
 export interface WebSocketConfig {
@@ -11,12 +12,14 @@ export interface WebSocketConfig {
   maxStreamsPerConnection: number
   reconnectInterval: number
   options?: Record<string, any>
+  marketType?: MarketType  // absent = handle all market types
 }
 
 export interface StreamBatch {
   id: number
   client: any
   symbols: string[]
+  marketType: MarketType
   isConnected: boolean
 }
 
@@ -36,8 +39,8 @@ export interface PrivateWebSocketClientInterface {
 }
 
 export interface PublicWebSocketMessageParser {
-  parseOrderBookUpdate(data: any): OrderBookUpdate
-  isOrderBookMessage(data: any): boolean
+  parseOrderBookUpdate(data: any, marketType: MarketType): OrderBookUpdate
+  isOrderBookMessage(data: any, marketType?: MarketType): boolean
 }
 
 export interface PrivateWebSocketMessageParser {

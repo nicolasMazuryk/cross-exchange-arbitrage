@@ -82,7 +82,7 @@ const markets = await exchange.loadMarkets()
 ```
 
 #### `getTradingMarkets()`
-Returns filtered USDT perpetual futures markets available for trading.
+Returns filtered markets available for trading across enabled market types (spot, linear, inverse).
 
 **Request:**
 - Method: Local filtering
@@ -90,13 +90,12 @@ Returns filtered USDT perpetual futures markets available for trading.
 
 **Response:**
 - Type: `Dictionary<Market>`
-- Description: Filtered markets (USDT perpetual futures, excluding ignored markets)
+- Description: Filtered markets (per `enabledMarketTypes` config, excluding ignored markets)
 
 **Filters Applied:**
-- Quote currency: USDT
-- Market type: Perpetual swap
+- Quote currency: per `enabledQuoteCurrencies` config (all if unset)
+- Market type: per `enabledMarketTypes` config (spot / linear / inverse)
 - Active status: true
-- Excludes inverse markets
 - Excludes markets in `ignoredMarkets` config
 
 ### Trading Endpoints

@@ -3,8 +3,11 @@ import { TrackedTrade, FundingFeeCollectedEvent } from '../trading/tradeMonitor'
 import { RestClientInterface } from '../../adapters/rest/types'
 import { State } from '../state/stateService'
 import { FundingService } from './fundingService'
+import { OrderbookManager } from '../orderbook/orderbookManager'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
+import { MarketType } from '../../types/exchange'
+import { getMarketTypeFromUnifiedSymbol } from '../../utils/utils'
 
 const logger = new Logger('funding-fee-collector')
 
@@ -41,6 +44,7 @@ export class FundingFeeCollector {
   private readonly state: State
   private readonly fundingService: FundingService
   private readonly cronPattern: string
+  private readonly orderbookManager?: OrderbookManager
   private cronJob?: CronJob
   private isRunning: boolean = false
 
@@ -48,12 +52,14 @@ export class FundingFeeCollector {
     restClients: Map<string, RestClientInterface>,
     state: State,
     fundingService: FundingService,
-    cronPattern: string
+    cronPattern: string,
+    orderbookManager?: OrderbookManager
   ) {
     this.restClients = restClients
     this.state = state
     this.fundingService = fundingService
     this.cronPattern = cronPattern
+    this.orderbookManager = orderbookManager
   }
 
   /**
@@ -195,6 +201,8 @@ export class FundingFeeCollector {
    */
   private filterTradesWithoutFundingFee(trades: TrackedTrade[], now: number): TrackedTrade[] {
     return trades.filter(trade => {
+      if (trade.opportunity.isSpotSpot) return false
+
       const isBuyExchangeFundingDataNeeded = this.isExchangeFundingDataNeeded(
         trade.status,
         trade.buyExchangeNextFundingTimestamp,
@@ -241,6 +249,8 @@ export class FundingFeeCollector {
    * Process funding data for a single trade
    */
   private async collectFundingFeesForTrade(trade: TrackedTrade, now: number): Promise<void> {
+    if (trade.opportunity.isSpotSpot) return
+
     const isBuyExchangeFundingDataNeeded = this.isExchangeFundingDataNeeded(
       trade.status,
       trade.buyExchangeNextFundingTimestamp,
@@ -525,10 +535,28 @@ export class FundingFeeCollector {
     const combinedMap = new Map<number, FundingRateAndFeeHistory>()
 
     // Add fee data
+    const isInverse = getMarketTypeFromUnifiedSymbol(symbol) === MarketType.INVERSE_PERP
     for (const fee of feeHistory) {
+      let fundingFeeUsd = fee.amount
+      // Inverse perp fees are denominated in base asset; convert to USD via current mid-price
+      if (isInverse) {
+        const topOfBook = this.orderbookManager?.getTopOfBook(exchange, symbol)
+        if (topOfBook) {
+          const midPrice = (topOfBook.bestBid.price + topOfBook.bestAsk.price) / 2
+          fundingFeeUsd = fee.amount * midPrice
+        } else {
+          logger.warn({
+            msg: 'No orderbook data for inverse perp fee USD conversion; storing base-asset amount',
+            function: 'FundingFeeCollector.combineFundingRateAndFeeHistoryByTimestamp',
+            exchange,
+            symbol,
+            baseAmount: fee.amount,
+          })
+        }
+      }
       combinedMap.set(fee.timestamp, {
         fundingRatePercent: 0,
-        fundingFeeUsd: fee.amount,
+        fundingFeeUsd,
         actualTimestamp: fee.actualTimestamp,
         timestamp: fee.timestamp,
         date: fee.datetime,

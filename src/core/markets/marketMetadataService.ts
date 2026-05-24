@@ -1,11 +1,14 @@
 import * as ccxt from 'ccxt'
+import { MarketType } from '../../types/exchange'
+import { marketTypeFromCcxtMarket } from '../../utils/utils'
 import { Logger } from '../../utils/logger'
 
 const logger = new Logger('market-metadata-service')
 
 export interface MarketMetadata {
-  symbol: string // Exchange-specific symbol (e.g., 1000PEPEUSDT)
+  symbol: string // Unified CCXT symbol (e.g., BTC/USDT:USDT)
   normalizedSymbol: string // Cross-exchange normalized symbol (e.g., PEPEUSDT)
+  marketType: MarketType
   contractSize: number
   pricePrecision: number
   amountPrecision: number
@@ -14,41 +17,53 @@ export interface MarketMetadata {
   minAmount?: number
   maxAmount?: number
   minCost?: number
+  base: string   // Base asset (e.g., BTC)
+  quote: string  // Quote asset (e.g., USDT, USDC)
+  settle: string // Settle asset (e.g., USDT for linear, BTC for inverse)
+  nativeId: string // Exchange-native symbol id (= ccxt market.id, e.g., BTCUSDT, BTC-USDT-SWAP)
 }
 
 export class MarketMetadataService {
   private exchangeId: string
   private markets: Map<string, MarketMetadata> = new Map()
   private symbolMappings: Map<string, string> = new Map()
+  private baseQuoteMarkets: Map<string, Array<{ marketType: MarketType; symbol: string }>> = new Map()
+  // Keys: `${marketType}:${market.id}` — always qualified to avoid spot/perp collision
+  private nativeIdToUnified: Map<string, string> = new Map()
   private ignoredMarkets: string[]
+  private enabledMarketTypes?: string[]
+  private enabledQuoteCurrencies?: string[]
 
-  constructor(exchangeId: string, markets: ccxt.Market[], ignoredMarkets: string[] = []) {
+  constructor(
+    exchangeId: string,
+    markets: ccxt.Market[],
+    ignoredMarkets: string[] = [],
+    enabledMarketTypes?: string[],
+    enabledQuoteCurrencies?: string[]
+  ) {
     this.exchangeId = exchangeId
     this.ignoredMarkets = ignoredMarkets
+    this.enabledMarketTypes = enabledMarketTypes
+    this.enabledQuoteCurrencies = enabledQuoteCurrencies
     this.initializeMarkets(markets)
   }
 
-  /**
-   * Initialize markets metadata from ccxt markets data
-   */
   private initializeMarkets(markets: ccxt.Market[]): void {
     for (const market of markets) {
       if (!market) continue
+      if (!this.isTradableMarket(market)) continue
+      if (this.ignoredMarkets.includes(market.symbol)) continue
 
-      // Only process USDT perpetual futures
-      if (!this.isValidFuturesMarket(market)) {
-        continue
-      }
+      const mt = marketTypeFromCcxtMarket(market)
 
-      // Check if this market is in the ignored list
-      if (this.ignoredMarkets.includes(market.symbol)) {
-        continue
-      }
+      if (this.enabledMarketTypes?.length && !this.enabledMarketTypes.includes(mt)) continue
+      if (this.enabledQuoteCurrencies?.length && !this.enabledQuoteCurrencies.includes(market.quote)) continue
 
       const normalizedSymbol = this.normalizeSymbol(market.symbol)
       const metadata: MarketMetadata = {
         symbol: market.symbol,
         normalizedSymbol,
+        marketType: mt,
         contractSize: market.contractSize || 1,
         pricePrecision: market.precision?.price || 8,
         amountPrecision: market.precision?.amount || 8,
@@ -57,31 +72,34 @@ export class MarketMetadataService {
         minAmount: market.limits?.amount?.min,
         maxAmount: market.limits?.amount?.max,
         minCost: market.limits?.cost?.min,
+        base: market.base || '',
+        quote: market.quote || '',
+        settle: market.settle || market.quote || '',
+        nativeId: market.id || '',
       }
 
       this.markets.set(market.symbol, metadata)
-
       this.symbolMappings.set(normalizedSymbol, market.symbol)
+
+      // Build native-id reverse lookup
+      if (market.id) {
+        this.nativeIdToUnified.set(`${mt}:${market.id}`, market.symbol)
+      }
+
+      const bq = this.normalizeBaseQuote(market.symbol)
+      if (!this.baseQuoteMarkets.has(bq)) this.baseQuoteMarkets.set(bq, [])
+      this.baseQuoteMarkets.get(bq)!.push({ marketType: mt, symbol: market.symbol })
     }
   }
 
-  /**
-   * Check if market is a valid USDT perpetual futures market
-   */
-  private isValidFuturesMarket(market: ccxt.Market): boolean {
+  private isTradableMarket(market: ccxt.Market): boolean {
     if (!market) return false
-
-    const isActiveCondition = ['bitget'].includes(this.exchangeId) ? true : market.active
-
-    return Boolean(
-      isActiveCondition &&
-        market.contract &&
-        market.swap &&
-        market.linear &&
-        !market.future &&
-        !market.inverse &&
-        market.quote === 'USDT'
-    )
+    if (market.option) return false
+    if (market.future && !market.swap) return false
+    if (!market.active) return false
+    if (market.spot) return true
+    if (market.swap && (market.linear || market.inverse)) return true
+    return false
   }
 
   /**
@@ -93,6 +111,22 @@ export class MarketMetadataService {
 
   getSymbolMappings(): Map<string, string> {
     return this.symbolMappings
+  }
+
+  /**
+   * Look up metadata by native exchange id (= ccxt market.id, e.g., BTCUSDT, BTC-USDT-SWAP).
+   * Pass marketType to disambiguate exchanges that reuse the same id across spot and perps.
+   */
+  getMetadataByNativeId(nativeId: string, marketType: MarketType): MarketMetadata | undefined {
+    const unified = this.nativeIdToUnified.get(`${marketType}:${nativeId}`)
+    return unified ? this.markets.get(unified) : undefined
+  }
+
+  /**
+   * Return the quote currency for a unified symbol (e.g., 'USDT' for 'BTC/USDT:USDT').
+   */
+  getQuoteFor(symbol: string): string | undefined {
+    return this.markets.get(symbol)?.quote
   }
 
   /**
@@ -118,6 +152,23 @@ export class MarketMetadataService {
    */
   denormalizeSymbol(normalizedSymbol: string): string | undefined {
     return this.symbolMappings.get(normalizedSymbol)
+  }
+
+  /**
+   * Strip settle suffix and 1000-prefix to get a cross-market-type base/quote key.
+   * BTC/USDT:USDT → BTC/USDT, 1000PEPE/USDT:USDT → PEPE/USDT, BTC/USD:BTC → BTC/USD
+   */
+  normalizeBaseQuote(symbol: string): string {
+    const colonIdx = symbol.indexOf(':')
+    const baseQuotePart = colonIdx >= 0 ? symbol.slice(0, colonIdx) : symbol
+    return this.normalizeSymbol(baseQuotePart)
+  }
+
+  /**
+   * Return all (marketType, symbol) pairs registered for a given base/quote key.
+   */
+  getMarketsForBaseQuote(baseQuote: string): Array<{ marketType: MarketType; symbol: string }> {
+    return this.baseQuoteMarkets.get(baseQuote) || []
   }
 
   /**
@@ -156,7 +207,7 @@ export class MarketMetadataService {
    * Normalize contract amount to base units considering contract size and precision
    * Converts exchange-specific contract amounts to normalized base asset amounts
    */
-  normalizeAmount(contractAmount: number, symbol: string): number {
+  normalizeAmount(contractAmount: number, symbol: string, markPrice?: number): number {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
       const error = new Error(`No metadata found for symbol: ${symbol}`)
@@ -171,21 +222,23 @@ export class MarketMetadataService {
       throw error
     }
 
-    // Convert contracts to base asset units
-    const baseAssetAmount = contractAmount * metadata.contractSize
-
-    // Apply price scale normalization
     const priceScale = this.getPriceScale(symbol)
-    const normalizedAmount = baseAssetAmount * priceScale
 
-    return normalizedAmount
+    // Inverse perp: contractSize is in USD; base units = (contracts * contractSize) / markPrice
+    if (metadata.marketType === MarketType.INVERSE_PERP && markPrice !== undefined && markPrice > 0) {
+      return (contractAmount * metadata.contractSize / markPrice) * priceScale
+    }
+
+    // Linear / spot: base units = contracts * contractSize
+    const baseAssetAmount = contractAmount * metadata.contractSize
+    return baseAssetAmount * priceScale
   }
 
   /**
    * Denormalize base asset amount to exchange-specific contract amount
    * Converts normalized base asset amounts to exchange-specific contract amounts
    */
-  denormalizeAmount(normalizedAmount: number, symbol: string): number {
+  denormalizeAmount(normalizedAmount: number, symbol: string, markPrice?: number): number {
     const metadata = this.getMetadata(symbol)
     if (!metadata) {
       const error = new Error(`No metadata found for symbol: ${symbol}`)
@@ -200,14 +253,18 @@ export class MarketMetadataService {
       throw error
     }
 
-    // Apply price scale denormalization
     const priceScale = this.getPriceScale(symbol)
+
+    // Inverse perp: contractSize is in USD; contracts = (base * markPrice) / contractSize
+    if (metadata.marketType === MarketType.INVERSE_PERP && markPrice !== undefined && markPrice > 0) {
+      const scaledBase = normalizedAmount / priceScale
+      const contractAmount = (scaledBase * markPrice) / metadata.contractSize
+      return this.roundAmount(contractAmount, symbol)
+    }
+
+    // Linear / spot: contracts = base / contractSize
     const scaledAmount = normalizedAmount / priceScale
-
-    // Convert base asset units to contracts
     const contractAmount = scaledAmount / metadata.contractSize
-
-    // Round to exchange precision
     return this.roundAmount(contractAmount, symbol)
   }
 
@@ -260,4 +317,31 @@ export class MarketMetadataService {
       price: this.denormalizePrice(normalizedPrice, symbol),
     }
   }
+}
+
+/**
+ * Resolve a native exchange symbol id to a unified CCXT symbol.
+ * Tries metadata lookup first; if no match, attempts suffix-based construction
+ * using enabledQuotes sorted longest-first to avoid ambiguous short-quote matches.
+ * Returns undefined when neither approach succeeds.
+ */
+export function parseNativeSymbolToUnified(
+  nativeId: string,
+  marketType: MarketType,
+  metadata: MarketMetadataService,
+  enabledQuotes: string[]
+): string | undefined {
+  const meta = metadata.getMetadataByNativeId(nativeId, marketType)
+  if (meta) return meta.symbol
+  const sortedQuotes = [...enabledQuotes].sort((a, b) => b.length - a.length)
+  for (const quote of sortedQuotes) {
+    if (nativeId.endsWith(quote)) {
+      const base = nativeId.slice(0, -quote.length)
+      if (!base) continue
+      if (marketType === MarketType.SPOT) return `${base}/${quote}`
+      if (marketType === MarketType.INVERSE_PERP) return `${base}/${quote}:${base}`
+      return `${base}/${quote}:${quote}`
+    }
+  }
+  return undefined
 }

@@ -20,6 +20,7 @@ interface ExchangeAccountConfig {
   exchangeId: string
   wsConfig: WebSocketConfig
   restConfig: ExchangeConfig
+  existingRestClient?: RestClientInterface  // reuse an already-loaded REST client; skips creation + loadMarkets
 }
 
 export class AccountSyncService extends EventEmitter {
@@ -84,6 +85,17 @@ export class AccountSyncService extends EventEmitter {
   }
 
   private async initializeRestClient(config: ExchangeAccountConfig): Promise<void> {
+    // Reuse an already-loaded REST client from the orchestrator if provided
+    if (config.existingRestClient) {
+      this.restClients.set(config.exchangeId, config.existingRestClient)
+      logger.debug({
+        msg: 'Reusing existing REST client for exchange',
+        function: 'AccountSyncService.initializeRestClient',
+        exchange: config.exchangeId,
+      })
+      return
+    }
+
     try {
       let restClient: any
 
@@ -124,6 +136,15 @@ export class AccountSyncService extends EventEmitter {
   }
 
   private async initializePrivateWebSocketClient(config: ExchangeAccountConfig): Promise<void> {
+    if (!config.wsConfig.apiKey || !config.wsConfig.apiSecret) {
+      logger.error({
+        msg: 'Skipping private WebSocket — no API credentials configured',
+        function: 'AccountSyncService.initializePrivateWebSocketClient',
+        exchange: config.exchangeId,
+      })
+      return
+    }
+
     try {
       let wsClient: PrivateWebSocketClientInterface
 

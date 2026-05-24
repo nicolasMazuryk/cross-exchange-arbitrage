@@ -1,11 +1,11 @@
 import { BaseExchange } from './base'
 import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
-import { OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { MarketType, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getOrderSide, positionId } from '../../utils/utils'
+import { getOrderSide, positionId, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'bitget'
 const CCXT_EXCHANGE_NAME = 'bitget'
@@ -13,9 +13,28 @@ const FUNDING_ENDPOINT = 'https://www.bitget.com/v1/mcp/contract/symbols?busines
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
+export const BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE: Record<string, string> = {
+  USDT: 'USDT-FUTURES',
+  USDC: 'SUSDC-FUTURES',
+}
+
 export class BitgetExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
     super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
+  }
+
+  paramsForMarket(marketType: MarketType, ctx?: { symbol?: string; quote?: string }): Record<string, any> {
+    if (marketType === MarketType.SPOT) return { productType: 'SPOT' }
+    if (marketType === MarketType.INVERSE_PERP) return { productType: 'COIN-FUTURES', hedged: true }
+    if (marketType === MarketType.LINEAR_PERP) {
+      let quote = ctx?.quote
+      if (!quote && ctx?.symbol) {
+        try { quote = this.getMarketMetadataService().getQuoteFor(ctx.symbol) } catch (_) { /* metadata not yet initialised */ }
+      }
+      const productType = (quote && BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE[quote]) ?? 'USDT-FUTURES'
+      return { productType, hedged: true }
+    }
+    throw new Error(`unsupported market type: ${marketType}`)
   }
 
   protected getExchangeOrderParams(
@@ -32,8 +51,9 @@ export class BitgetExchange extends BaseExchange {
     }
   }
 
-  protected getExchangeFundingFeeHistoryParams(): any {
-    return { subType: 'linear' }
+  protected getExchangeFundingFeeHistoryParams(symbol: string): any {
+    const mt = getMarketTypeFromUnifiedSymbol(symbol)
+    return { subType: mt === MarketType.INVERSE_PERP ? 'inverse' : 'linear' }
   }
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
@@ -41,11 +61,22 @@ export class BitgetExchange extends BaseExchange {
       const balances = await this.exchange.fetchBalance()
       const balanceInfos: BalanceInfo[] = []
 
-      balanceInfos.push({
-        asset: 'USDT',
-        total: balances['USDT'].total || 0,
-        available: balances['USDT'].free || 0,
-      })
+      const skipKeys = new Set(['info', 'free', 'used', 'total', 'datetime', 'timestamp'])
+      for (const [asset, entry] of Object.entries(balances)) {
+        if (skipKeys.has(asset)) continue
+        const b = entry as any
+        const total = b?.total ?? 0
+        if (total > 0) balanceInfos.push({ asset, total, available: b?.free ?? 0 })
+      }
+
+      if (balanceInfos.length === 0) {
+        logger.warn({
+          msg: 'No balance entries returned by exchange',
+          function: 'BitgetExchange.fetchBalancesSnapshot',
+          exchange: EXCHANGE_NAME,
+          exchangeId: this.exchangeId,
+        })
+      }
 
       logger.debug({
         msg: 'Fetched balance snapshot',
@@ -85,8 +116,7 @@ export class BitgetExchange extends BaseExchange {
           unrealizedPnL: unrealizedPnl!,
           timestamp: timestamp!,
           date: new Date(timestamp!),
-          // liquidationPrice: liquidationPrice,
-          // notional: notional,
+          marketType: getMarketTypeFromUnifiedSymbol(symbol),
         })
       }
 
@@ -187,9 +217,14 @@ export class BitgetExchange extends BaseExchange {
         return new Map()
       }
 
-      const [rawJson, ccxtFundingRates] = await Promise.all([
+      const quotes = quoteCurrenciesFor(EXCHANGE_NAME)
+
+      const [rawJson, inverseFundingRates, ...ccxtFundingRatesList] = await Promise.all([
         fetchJsonFromUrl(FUNDING_ENDPOINT),
-        this.exchange.fetchFundingRates(undefined, { subType: 'linear', productType: 'USDT-FUTURES' }),
+        this.exchange.fetchFundingRates(undefined, { subType: 'inverse', productType: 'COIN-FUTURES' }),
+        ...quotes
+          .filter(q => BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE[q])
+          .map(q => this.exchange.fetchFundingRates(undefined, { subType: 'linear', productType: BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE[q] })),
       ])
 
       if (
@@ -209,25 +244,45 @@ export class BitgetExchange extends BaseExchange {
         return new Map()
       }
 
-      // Extract and filter USDT symbols
+      const ccxtFundingRates = Object.assign({}, ...ccxtFundingRatesList)
+      const ccxtFundingRatesValues = Object.values(ccxtFundingRates)
+
+      const quotesSet = new Set(quotes)
+      const metadata = this.getMarketMetadataService()
+
+      // Extract and filter symbols for all enabled quote currencies
       const usdtSymbolsFundingData = rawJson.data.listDTOS[0].symbolDTOList
         .filter(
-          (item: any) => item.symbolDisplayName && item.symbolDisplayName.endsWith('USDT') && item.lsfRc !== undefined
+          (item: any) =>
+            item.symbolDisplayName &&
+            quotesSet.has(item.pricedSymbol?.toUpperCase()) &&
+            item.lsfRc !== undefined
         )
-        .map((item: any) => ({
-          ...item,
-          symbol: `${item.baseSymbol}/USDT:USDT`,
-        }))
-
-      const ccxtFundingRatesValues = Object.values(ccxtFundingRates)
+        .flatMap((item: any) => {
+          const q = item.pricedSymbol?.toUpperCase()
+          if (!q) {
+            logger.warn({
+              msg: 'Funding symbol missing pricedSymbol, skipping',
+              function: 'BitgetExchange.fetchFundingData',
+              exchange: EXCHANGE_NAME,
+              symbolDisplayName: item.symbolDisplayName,
+            })
+            return []
+          }
+          const meta = metadata.getMetadataByNativeId(item.symbolDisplayName, MarketType.LINEAR_PERP)
+          return [{
+            ...item,
+            symbol: meta?.symbol ?? `${item.baseSymbol}/${q}:${q}`,
+          }]
+        })
 
       const fundingData = new Map<string, ParsedFunding>()
 
       for (const item of usdtSymbolsFundingData) {
         // Find the ccxt funding data for the item. CCXT return inconsistent symbol format, so we need to find based on "info" property.
         const ccxtFundingData = ccxtFundingRatesValues.find(
-          ccxtFundingData => ccxtFundingData.info.symbol === `${item.baseSymbol}${item.pricedSymbol}`
-        )
+          (ccxtFundingData: any) => ccxtFundingData.info.symbol === `${item.baseSymbol}${item.pricedSymbol}`
+        ) as any
         // Calculate next funding time (Bitget doesn't provide this directly)
         const fundingInterval = parseInt(item.lsfRc)
         const intervalMs = fundingInterval * 60 * 60 * 1000
@@ -265,6 +320,24 @@ export class BitgetExchange extends BaseExchange {
         }
 
         fundingData.set(item.symbol, parsedFunding)
+      }
+
+      // Add inverse (COIN-FUTURES) funding rates fetched via CCXT
+      const inverseIntervalHours = 8
+      const inverseIntervalMs = inverseIntervalHours * 60 * 60 * 1000
+      for (const [unifiedSymbol, rateData] of Object.entries(inverseFundingRates)) {
+        if (!rateData || typeof (rateData as any).fundingRate !== 'number' || isNaN((rateData as any).fundingRate)) continue
+        const rate = rateData as any
+        const nextFundingTimestamp = Math.ceil(Date.now() / inverseIntervalMs) * inverseIntervalMs
+        fundingData.set(unifiedSymbol, {
+          exchange: EXCHANGE_NAME,
+          symbol: unifiedSymbol,
+          fundingRate: rate.fundingRate,
+          fundingRatePercent: rate.fundingRate * 100,
+          fundingInterval: inverseIntervalHours,
+          nextFundingTimestamp,
+          nextFundingDatetime: new Date(nextFundingTimestamp),
+        })
       }
 
       logger.debug({

@@ -7,13 +7,31 @@ import { OrderInfo } from '../../types/account'
 import { OrderbookManager } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import { Logger } from '../../utils/logger'
-import config from '../../utils/config'
+import config, { getFees } from '../../utils/config'
+import { MarketType } from '../../types/exchange'
+import { State } from '../state/stateService'
 
 const logger = new Logger('trade-executor')
 
 // Generate UUID for trade IDs
 function generateTradeId(): string {
   return `T${Date.now().toString().slice(-10)}${Math.random().toString(36).substr(2, 6)}`
+}
+
+function getRequiredBalanceCurrency(normalizedPair: string, marketType: MarketType, isBuyLeg: boolean): string {
+  const parts = normalizedPair.split(':')
+  const [base, quote] = parts[0].split('/')
+  const settle = parts[1] || quote
+  switch (marketType) {
+    case MarketType.SPOT:
+      return isBuyLeg ? quote : base
+    case MarketType.LINEAR_PERP:
+      return settle
+    case MarketType.INVERSE_PERP:
+      return base
+    default:
+      return settle
+  }
 }
 
 // Core interfaces
@@ -45,19 +63,22 @@ export class TradeExecutor extends EventEmitter {
   private readonly restClients: Map<string, RestClientInterface>
   private readonly orderbookManager: OrderbookManager
   private readonly marketMetadataServices: Map<string, MarketMetadataService>
-  private readonly processingPairs: Set<string> = new Set() // Track pairs being processed
+  private readonly stateService: State
+  private readonly processingPairs: Set<string> = new Set()
 
   constructor(
     accountStateManager: AccountStateManager,
     restClients: Map<string, RestClientInterface>,
     orderbookManager: OrderbookManager,
-    marketMetadataServices: Map<string, MarketMetadataService>
+    marketMetadataServices: Map<string, MarketMetadataService>,
+    stateService: State
   ) {
     super()
     this.accountStateManager = accountStateManager
     this.restClients = restClients
     this.orderbookManager = orderbookManager
     this.marketMetadataServices = marketMetadataServices
+    this.stateService = stateService
     logger.info({ msg: 'TradeExecutor initialized' })
   }
 
@@ -149,12 +170,12 @@ export class TradeExecutor extends EventEmitter {
     //   hasErrors = true
     // }
 
-    // Calculate required USDT balance using orderAmountUsd from opportunity
-    // For arbitrage, we need USDT to buy on one exchange and sell on another
     const requiredBalance = opportunity.orderAmountUsd * (1 + config.trading.minBalanceBufferPercent / 100)
 
-    const buyExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.buyExchange, 'USDT')
-    const sellExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.sellExchange, 'USDT')
+    const buyBalanceCurrency = getRequiredBalanceCurrency(opportunity.normalizedPair, opportunity.buyMarketType, true)
+    const sellBalanceCurrency = getRequiredBalanceCurrency(opportunity.normalizedPair, opportunity.sellMarketType, false)
+    const buyExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.buyExchange, buyBalanceCurrency)
+    const sellExchangeBalance = this.accountStateManager.getAvailableBalance(opportunity.sellExchange, sellBalanceCurrency)
 
     if (buyExchangeBalance < requiredBalance) {
       logger.warn({
@@ -213,105 +234,85 @@ export class TradeExecutor extends EventEmitter {
       hasErrors = true
     }
 
-    // Check for opposite-direction positions on the same exchange
-    // If buyExchange already has a SHORT position, we cannot open a LONG (BUY) position
-    const buyExchangeOppositePosition = this.accountStateManager.getPosition(
-      opportunity.buyExchange,
-      opportunity.buyExchangeSymbol,
-      'SHORT'
-    )
-    if (buyExchangeOppositePosition) {
+    // Check for opposite-direction positions — only applicable for perp legs (spot has no positions)
+    if (opportunity.buyMarketType !== MarketType.SPOT) {
+      const buyExchangeOppositePosition = this.accountStateManager.getPosition(
+        opportunity.buyExchange,
+        opportunity.buyExchangeSymbol,
+        'SHORT'
+      )
+      if (buyExchangeOppositePosition) {
+        logger.warn({
+          msg: 'Opposite direction position (SHORT) exists on BUY exchange - cannot open new (LONG) position',
+          function: 'TradeExecutor.validateTrade',
+          tradeId,
+          normalizedPair: opportunity.normalizedPair,
+          exchange: opportunity.buyExchange,
+          symbol: opportunity.buyExchangeSymbol,
+          existingPositionSide: 'SHORT',
+          newPositionSide: 'LONG',
+          existingPositionSize: buyExchangeOppositePosition.size,
+        })
+        hasErrors = true
+      }
+    }
+
+    if (opportunity.sellMarketType !== MarketType.SPOT) {
+      const sellExchangeOppositePosition = this.accountStateManager.getPosition(
+        opportunity.sellExchange,
+        opportunity.sellExchangeSymbol,
+        'LONG'
+      )
+      if (sellExchangeOppositePosition) {
+        logger.warn({
+          msg: 'Opposite direction position (LONG) exists on SELL exchange - cannot open new (SHORT) position',
+          function: 'TradeExecutor.validateTrade',
+          tradeId,
+          normalizedPair: opportunity.normalizedPair,
+          exchange: opportunity.sellExchange,
+          symbol: opportunity.sellExchangeSymbol,
+          existingPositionSide: 'LONG',
+          newPositionSide: 'SHORT',
+          existingPositionSize: sellExchangeOppositePosition.size,
+        })
+        hasErrors = true
+      }
+    }
+
+    // Max position size check — aggregate open trade exposure per (exchange, symbol) leg
+    const openTrades = await this.stateService.getAllTrackedTrades()
+    const openBuyUsd = openTrades
+      .filter(t => t.status === 'open' && t.opportunity.buyExchange === opportunity.buyExchange && t.opportunity.buyExchangeSymbol === opportunity.buyExchangeSymbol)
+      .reduce((sum, t) => sum + t.opportunity.orderAmountUsd, 0)
+    if (openBuyUsd + opportunity.orderAmountUsd > config.trading.maxPositionAmountUsd) {
       logger.warn({
-        msg: 'Opposite direction position (SHORT) exists on BUY exchange - cannot open new (LONG) position',
-        function: 'TradeExecutor.validateTrade',
-        tradeId,
-        normalizedPair: opportunity.normalizedPair,
-        exchange: opportunity.buyExchange,
-        symbol: opportunity.buyExchangeSymbol,
-        existingPositionSide: 'SHORT',
-        newPositionSide: 'LONG',
-        existingPositionSize: buyExchangeOppositePosition.size,
-      })
-      hasErrors = true
-    }
-
-    // If sellExchange already has a LONG position, we cannot open a SHORT (SELL) position
-    const sellExchangeOppositePosition = this.accountStateManager.getPosition(
-      opportunity.sellExchange,
-      opportunity.sellExchangeSymbol,
-      'LONG'
-    )
-    if (sellExchangeOppositePosition) {
-      logger.warn({
-        msg: 'Opposite direction position (LONG) exists on SELL exchange - cannot open new (SHORT) position',
-        function: 'TradeExecutor.validateTrade',
-        tradeId,
-        normalizedPair: opportunity.normalizedPair,
-        exchange: opportunity.sellExchange,
-        symbol: opportunity.sellExchangeSymbol,
-        existingPositionSide: 'LONG',
-        newPositionSide: 'SHORT',
-        existingPositionSize: sellExchangeOppositePosition.size,
-      })
-      hasErrors = true
-    }
-
-    // Calculate what the position would be AFTER executing this trade
-    const buyPosition = this.accountStateManager.getPosition(
-      opportunity.buyExchange,
-      opportunity.buyExchangeSymbol,
-      'LONG'
-    )
-    let buyPositionAfterTradeUsd: number
-    if (buyPosition) {
-      // Existing LONG position - add new trade volume
-      const existingPositionUsd = Math.abs(buyPosition.size) * buyPosition.entryPrice
-      buyPositionAfterTradeUsd = existingPositionUsd + opportunity.orderAmountUsd
-    } else {
-      // No existing position - this trade creates a new LONG position
-      buyPositionAfterTradeUsd = opportunity.orderAmountUsd
-    }
-
-    const sellPosition = this.accountStateManager.getPosition(
-      opportunity.sellExchange,
-      opportunity.sellExchangeSymbol,
-      'SHORT'
-    )
-    let sellPositionAfterTradeUsd: number
-    if (sellPosition) {
-      // Existing SHORT position - add new trade volume (size is absolute value)
-      const existingPositionUsd = Math.abs(sellPosition.size) * sellPosition.entryPrice
-      sellPositionAfterTradeUsd = existingPositionUsd + opportunity.orderAmountUsd
-    } else {
-      // No existing position - this trade creates a new SHORT position
-      sellPositionAfterTradeUsd = opportunity.orderAmountUsd
-    }
-
-    if (buyPositionAfterTradeUsd > config.trading.maxPositionAmountUsd) {
-      logger.debug({
         msg: 'Max position USD limit would be exceeded',
         function: 'TradeExecutor.validateTrade',
         tradeId,
         normalizedPair: opportunity.normalizedPair,
         exchange: opportunity.buyExchange,
         symbol: opportunity.buyExchangeSymbol,
-        positionAfterTradeUsd: buyPositionAfterTradeUsd,
-        maxPositionAmountUsd: config.trading.maxPositionAmountUsd,
+        existingExposureUsd: openBuyUsd,
         newTradeUsd: opportunity.orderAmountUsd,
+        maxPositionAmountUsd: config.trading.maxPositionAmountUsd,
       })
       hasErrors = true
     }
-    if (sellPositionAfterTradeUsd > config.trading.maxPositionAmountUsd) {
-      logger.debug({
+
+    const openSellUsd = openTrades
+      .filter(t => t.status === 'open' && t.opportunity.sellExchange === opportunity.sellExchange && t.opportunity.sellExchangeSymbol === opportunity.sellExchangeSymbol)
+      .reduce((sum, t) => sum + t.opportunity.orderAmountUsd, 0)
+    if (openSellUsd + opportunity.orderAmountUsd > config.trading.maxPositionAmountUsd) {
+      logger.warn({
         msg: 'Max position USD limit would be exceeded',
         function: 'TradeExecutor.validateTrade',
         tradeId,
         normalizedPair: opportunity.normalizedPair,
         exchange: opportunity.sellExchange,
         symbol: opportunity.sellExchangeSymbol,
-        positionAfterTradeUsd: sellPositionAfterTradeUsd,
-        maxPositionAmountUsd: config.trading.maxPositionAmountUsd,
+        existingExposureUsd: openSellUsd,
         newTradeUsd: opportunity.orderAmountUsd,
+        maxPositionAmountUsd: config.trading.maxPositionAmountUsd,
       })
       hasErrors = true
     }
@@ -437,8 +438,8 @@ export class TradeExecutor extends EventEmitter {
       ])
 
       // Calculate fees and slippage
-      const buyFeeRatePercent = this.getTradingFeeRatePercent(opportunity.buyExchange, 'taker')
-      const sellFeeRatePercent = this.getTradingFeeRatePercent(opportunity.sellExchange, 'taker')
+      const buyFeeRatePercent = this.getTradingFeeRatePercent(opportunity.buyExchange, 'taker', opportunity.buyMarketType)
+      const sellFeeRatePercent = this.getTradingFeeRatePercent(opportunity.sellExchange, 'taker', opportunity.sellMarketType)
 
       const buyFees = calculateFees(buyOrder, buyFeeRatePercent)
       const sellFees = calculateFees(sellOrder, sellFeeRatePercent)
@@ -537,7 +538,7 @@ export class TradeExecutor extends EventEmitter {
                 'SELL',
                 opportunity.buyExchangeVolume,
                 closeBuyPrice,
-                true,
+                opportunity.buyMarketType !== MarketType.SPOT,
                 `${buyOrder.clientOrderId}CLOSE`
               )
               .then(() => {
@@ -621,7 +622,7 @@ export class TradeExecutor extends EventEmitter {
                 'BUY',
                 opportunity.sellExchangeVolume,
                 closeSellPrice,
-                true,
+                opportunity.sellMarketType !== MarketType.SPOT,
                 `${sellOrder.clientOrderId}CLOSE`
               )
               .then(() => {
@@ -706,14 +707,8 @@ export class TradeExecutor extends EventEmitter {
     }
   }
 
-  /**
-   * Get trading fee percent for an exchange
-   */
-  private getTradingFeeRatePercent(exchangeId: string, feeType: 'maker' | 'taker'): number {
-    const exchangeConfig = config.exchanges[exchangeId as keyof typeof config.exchanges]
-    if (!exchangeConfig) return 0
-
-    return exchangeConfig.fees[feeType]
+  private getTradingFeeRatePercent(exchangeId: string, feeType: 'maker' | 'taker', marketType: MarketType): number {
+    return getFees(exchangeId, marketType)[feeType]
   }
 
   /**

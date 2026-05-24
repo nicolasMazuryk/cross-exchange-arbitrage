@@ -1,5 +1,4 @@
-import dns from 'node:dns'
-dns.setDefaultResultOrder('ipv4first')
+import './utils/network'
 
 import { createOrchestrator } from './core/orchestration'
 import config from './utils/config'
@@ -10,7 +9,7 @@ const logger = new Logger('main')
 
 async function main() {
   // Wrap entire application lifecycle in a trace context
-  TraceContext.runWithTrace('main', async traceId => {
+  TraceContext.runWithTrace('main', async () => {
     try {
       logger.info({
         msg: `Starting ${config.app.name}...`,
@@ -21,7 +20,7 @@ async function main() {
       })
 
       // Create and initialize the orchestrator with default configuration
-      const orchestrator = await createOrchestrator()
+      await createOrchestrator()
 
       // orchestrator.on('arbitrageOpportunities', (opportunities) => {
       // TODO: Handle arbitrage opportunities

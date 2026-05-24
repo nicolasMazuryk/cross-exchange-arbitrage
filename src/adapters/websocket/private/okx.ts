@@ -115,15 +115,15 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
     this.client.subscribe([
       {
         channel: 'account',
-        instType: 'SWAP',
+        instType: 'ANY',
       },
       {
         channel: 'positions',
-        instType: 'SWAP',
+        instType: 'ANY',
       },
       {
         channel: 'orders',
-        instType: 'SWAP',
+        instType: 'ANY',
       },
     ])
     logger.info({
@@ -132,6 +132,18 @@ export class OKXPrivateWebSocketClient extends BasePrivateWebSocketClient {
       exchange: this.exchangeName,
     })
   }
+}
+
+function marketTypeFromOkxInstId(instId: string): MarketType {
+  if (instId.includes('-SWAP')) {
+    return instId.includes('-USD-') ? MarketType.INVERSE_PERP : MarketType.LINEAR_PERP
+  }
+  return MarketType.SPOT
+}
+
+function quoteFromOkxInstId(instId: string): string | undefined {
+  const parts = instId.split('-')
+  return parts.length >= 2 ? parts[1] : undefined
 }
 
 class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
@@ -159,14 +171,22 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
     const positions: PositionInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
-      // Get trading markets to access contractSize
       const markets = restClient.getTradingMarkets()
 
       for (const position of data.data) {
-        const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, MarketType.FUTURES, 'USDT')
+        const marketType = marketTypeFromOkxInstId(position.instId)
+        const quote = quoteFromOkxInstId(position.instId)
+        if (!quote) {
+          logger.warn({
+            msg: 'OKX WS: cannot parse quote from instId, skipping position',
+            function: 'OKXPrivateMessageParser.parsePositionUpdate',
+            instId: position.instId,
+          })
+          continue
+        }
+        const symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, marketType, quote)
         const contracts = Math.abs(parseFloat(position.pos))
         const contractSize = markets[symbol]?.contractSize || 1
-        // Calculate real position size: contracts * contractSize
         const size = contracts * contractSize
 
         positions.push({
@@ -179,6 +199,7 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
           unrealizedPnL: parseFloat(position.upl) || 0,
           timestamp: Number(position.cTime) || 0,
           date: new Date(Number(position.cTime)),
+          marketType,
         })
       }
     }
@@ -191,10 +212,19 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
 
     if (data.data && Array.isArray(data.data)) {
       for (const order of data.data) {
-        const symbol = convertExchangeSymbolToUnifiedSymbol(order.instId, MarketType.FUTURES, 'USDT')
+        const marketType = marketTypeFromOkxInstId(order.instId)
+        const quote = quoteFromOkxInstId(order.instId)
+        if (!quote) {
+          logger.warn({
+            msg: 'OKX WS: cannot parse quote from instId, skipping order',
+            function: 'OKXPrivateMessageParser.parseOrderUpdate',
+            instId: order.instId,
+          })
+          continue
+        }
+        const symbol = convertExchangeSymbolToUnifiedSymbol(order.instId, marketType, quote)
         const contracts = Math.abs(parseFloat(order.sz))
         const contractSize = restClient.getTradingMarkets()[symbol]?.contractSize || 1
-        // Calculate real position size: contracts * contractSize
         const size = contracts * contractSize
 
         orders.push({
@@ -211,6 +241,7 @@ class OKXPrivateMessageParser implements PrivateWebSocketMessageParser {
           status: this.normalizeOrderStatus(order.state),
           timestamp: parseInt(order.cTime),
           date: new Date(parseInt(order.cTime)),
+          marketType,
         })
       }
     }

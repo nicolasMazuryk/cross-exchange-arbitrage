@@ -16,43 +16,93 @@ exchanges:
     - "bitget"
     - "gateio"
   binance:
-    maxStreamsPerConnection: 1000 # max 1024 streams per connection
+    maxStreamsPerConnection: 200 # Binance combined stream URL limit (~8KB) constrains to ~200 symbols per connection
     reconnectInterval: 5000
     fees:
-      maker: 0.02 # maker fee in percent (0.02%)
-      taker: 0.05 # taker fee in percent (0.05%)
+      spot:
+        maker: 0.10
+        taker: 0.10
+      linear:
+        maker: 0.02
+        taker: 0.05
+      inverse:
+        maker: 0.02
+        taker: 0.05
     ignoredMarkets: []
+    enabledMarketTypes: ["linear", "inverse", "spot"]
+    enabledQuoteCurrencies: []
+    disabledQuoteCurrencies: ["BRL"]
   bybit:
     maxStreamsPerConnection: 50 # max 60 streams per connection
     reconnectInterval: 5000
     fees:
-      maker: 0.036 # maker fee in percent (0.036%)
-      taker: 0.10 # taker fee in percent (0.10%)
+      spot:
+        maker: 0.10
+        taker: 0.10
+      linear:
+        maker: 0.036
+        taker: 0.10
+      inverse:
+        maker: 0.036
+        taker: 0.10
     ignoredMarkets:
       - "ETHBTC/USDT:USDT"
       - "USDC/USDT:USDT"
       - "SLF/USDT:USDT"
+    enabledMarketTypes: ["linear", "inverse", "spot"]
+    enabledQuoteCurrencies: []
+    disabledQuoteCurrencies: ["BRL"]
+    ignoredFundingSymbols:
+      - "USDC/USDT:USDT"
+      - "ETHBTC/USDT:USDT"
   okx:
     maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
     reconnectInterval: 5000
     fees:
-      maker: 0.02 # maker fee in percent (0.02%)
-      taker: 0.05 # taker fee in percent (0.05%)
+      spot:
+        maker: 0.10
+        taker: 0.10
+      linear:
+        maker: 0.02
+        taker: 0.05
+      inverse:
+        maker: 0.02
+        taker: 0.05
     ignoredMarkets: []
+    enabledMarketTypes: ["linear", "inverse", "spot"]
+    enabledQuoteCurrencies: []
+    disabledQuoteCurrencies: ["BRL"]
   bitget:
     maxStreamsPerConnection: 500 # max connections per IP - 100; max subscriptions per connection - 1000; max subscription messages per hour - 240 per connection; max messages per second per connection - 10 (includes PING, subs)
     reconnectInterval: 5000
     fees:
-      maker: 0.036 # maker fee in percent (0.036%)
-      taker: 0.10 # taker fee in percent (0.10%)
+      spot:
+        maker: 0.10
+        taker: 0.10
+      linear:
+        maker: 0.036
+        taker: 0.10
+      inverse:
+        maker: 0.036
+        taker: 0.10
     ignoredMarkets:
       - "DegenReborn/USDT:USDT"
+    enabledMarketTypes: ["linear", "inverse", "spot"]
+    enabledQuoteCurrencies: []
+    disabledQuoteCurrencies: ["BRL"]
   gateio:
     maxStreamsPerConnection: 100
     reconnectInterval: 5000
     fees:
-      maker: 0.02 # maker fee in percent (0.02%)
-      taker: 0.05 # taker fee in percent (0.05%)
+      spot:
+        maker: 0.10
+        taker: 0.10
+      linear:
+        maker: 0.02
+        taker: 0.05
+      inverse:
+        maker: 0.02
+        taker: 0.05
     ignoredMarkets: []
 
 trackedPairs:
@@ -80,7 +130,7 @@ arbitrage: # pairs require > $20 to enter minimum order size
   blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT', 'AAVE/USDT:USDT', 'H/USDT:USDT']  # pairs to exclude from arbitrage
   minConfidenceScore: 0.7  # minimum confidence score for opportunities (0-1 range)
   maxMarketSpreadPercent: 0.3  # maximum market spread width within an exchange in percent
-  maxAnomalySpreadThresholdPercent: 10.0  # maximum anomaly profit threshold in percent
+  maxAnomalySpreadThresholdPercent: 1000000000000000.0  # maximum anomaly profit threshold in percent
   maxOrderbookAge: 2000  # maximum orderbook age in milliseconds
   orderAmountToleranceMinPercent: 60  # minimum order amount tolerance in percent of order amount
   orderAmountToleranceMaxPercent: 140  # maximum order amount tolerance in percent of order amount
@@ -88,6 +138,7 @@ arbitrage: # pairs require > $20 to enter minimum order size
   minPersistenceMs: 1000  # minimum time window for opportunity persistence (500ms)
   minConsecutiveSnapshots: 3  # minimum consecutive snapshots showing the opportunity
   candidateCleanupMs: 5000  # cleanup stale candidates after 5 seconds
+  sellSpotBuyPerpEnabled: false  # Enable SELL spot + BUY perp direction. Requires holding spot inventory. Default false.
 
 accountSync:
   maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)
@@ -128,6 +179,7 @@ strategy:
   # Spread Arbitrage Strategy Configuration
   spread:
     enabled: true  # Enable/disable spread arbitrage strategy
+    fundingProfitEnabled: false  # Exclude projected funding from profit estimation (spread-only entry)
     entryWindowStart: 300  # Start entry execution window in seconds after previous funding event
     entryWindowEnd: 60  # End entry execution window in seconds before next funding event
     exitWindowStart: 300  # Start exit execution window in seconds after previous funding event

@@ -1,15 +1,29 @@
 import ccxt, { Exchange, Market, Order, Dictionary, FundingHistory } from 'ccxt'
 import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
+import { MarketType } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import appConfig from '../../utils/config'
 import { Logger } from '../../utils/logger'
-import { normalizeFundingTimestamp } from '../../utils/utils'
+import { normalizeFundingTimestamp, marketTypeFromCcxtMarket, getMarketTypeFromUnifiedSymbol } from '../../utils/utils'
 import { FundingFeeHistory, FundingRateHistory } from '../../core/funding/fundingFeeCollector'
+import { MarketMetadataService } from '../../core/markets/marketMetadataService'
 
 const logger = new Logger('rest-base')
 
 export abstract class BaseExchange implements RestClientInterface {
   protected exchange: Exchange
+  private _marketMetadataService?: MarketMetadataService
+
+  setMarketMetadataService(svc: MarketMetadataService): void {
+    this._marketMetadataService = svc
+  }
+
+  getMarketMetadataService(): MarketMetadataService {
+    if (!this._marketMetadataService) {
+      throw new Error(`MarketMetadataService not initialised for exchange ${this.exchangeName}. Call setMarketMetadataService() first.`)
+    }
+    return this._marketMetadataService
+  }
 
   constructor(
     protected readonly exchangeName: string,
@@ -20,13 +34,30 @@ export abstract class BaseExchange implements RestClientInterface {
       apiKey: config.apiKey,
       secret: config.apiSecret,
       password: config.apiPass,
+      agent: config.options?.agent,
       options: {
-        // Suppress warning about fetching open orders without symbol
-        // This is needed because we fetch all open orders during snapshots
         warnOnFetchOpenOrdersWithoutSymbol: false,
         ...config.options,
       },
     })
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected clientForSymbol(symbol?: string): Exchange {
+    return this.exchange
+  }
+
+  protected allClients(): Exchange[] {
+    return [this.exchange]
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected symbolMarketType(symbol: string): MarketType {
+    return getMarketTypeFromUnifiedSymbol(symbol)
+  }
+
+  getAllMarkets(): Dictionary<Market> {
+    return this.exchange.markets || {}
   }
 
   async loadMarkets(): Promise<Dictionary<Market>> {
@@ -46,61 +77,50 @@ export abstract class BaseExchange implements RestClientInterface {
 
   getTradingMarkets(): Dictionary<Market> {
     try {
-      // const markets = Object.values(this.exchange.markets)
+      const exchangeCfg = appConfig.exchanges[this.exchangeName as keyof typeof appConfig.exchanges]
+      const ignoredMarkets = exchangeCfg?.ignoredMarkets || []
+      const enabledMarketTypes = exchangeCfg?.enabledMarketTypes
+      const enabledQuoteCurrencies = exchangeCfg?.enabledQuoteCurrencies
 
-      // logger.info({ msg: `Found ${markets.length} markets` })
-
-      // const USDTmarkets = Object.values(this.exchange.markets)
-      // .filter(
-      //   market =>
-      //     market.quote === 'USDT'
-      // )
-
-      // logger.info({ msg: `Found ${USDTmarkets.length} markets` })
-
-      // const Swapmarkets = Object.values(this.exchange.markets)
-      // .filter(
-      //   market =>
-      //     market.quote === 'USDT' && market.swap
-      // )
-
-      // logger.info({ msg: `Found ${Swapmarkets.length} markets` })
-
-      // const notInverseMarkets = Object.values(this.exchange.markets)
-      // .filter(
-      //   market =>
-      //     market.quote === 'USDT' && market.swap && !market.inverse
-      // )
-
-      // logger.info({ msg: `Found ${notInverseMarkets.length} markets` })
-
-      // Get ignored markets for this exchange from config
-      const ignoredMarkets =
-        appConfig.exchanges[this.exchangeName as keyof typeof appConfig.exchanges].ignoredMarkets || []
-      const usdtPerpetualMarkets = Object.fromEntries(
-        Object.entries(this.exchange.markets)
-          // .filter(
-          //   ([, market]) =>
-          //     market.quote === 'USDT' && // TODO: add USDC
-          //     market.swap && // TODO: add SPOT markets
-          //     !market.inverse &&
-          //     market.active
-          // )
-          .filter(([, market]) => market.spot || market.margin || market.swap)
+      return Object.fromEntries(
+        Object.entries(this.getAllMarkets())
+          .filter(([, market]) => this.isTradableMarket(market!))
+          .filter(([, market]) => {
+            if (!enabledMarketTypes?.length) return true
+            return enabledMarketTypes.includes(marketTypeFromCcxtMarket(market!))
+          })
+          .filter(([, market]) => {
+            if (!enabledQuoteCurrencies?.length) return true
+            return enabledQuoteCurrencies.includes(market!.quote)
+          })
           .filter(([symbol]) => !ignoredMarkets.includes(symbol))
       )
-      return usdtPerpetualMarkets
     } catch (error) {
       logger.error({
         msg: 'Failed to filter trading markets',
         function: 'BaseExchange.getTradingMarkets',
         exchange: this.exchangeName,
         exchangeId: this.exchangeId,
-        totalMarkets: Object.keys(this.exchange.markets || {}).length,
+        totalMarkets: Object.keys(this.getAllMarkets()).length,
         error,
       })
       throw error
     }
+  }
+
+  private isTradableMarket(market: Market): boolean {
+    if (!market) return false
+    if (market.option) return false
+    if (market.future && !market.swap) return false
+    if (!market.active) return false
+    if (market.spot) return true
+    if (market.swap && (market.linear || market.inverse)) return true
+    return false
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  paramsForMarket(marketType: MarketType, ctx?: { symbol?: string; quote?: string }): Record<string, any> {
+    return {}
   }
 
   async createOrder(
@@ -123,7 +143,7 @@ export abstract class BaseExchange implements RestClientInterface {
       // Get exchange-specific parameters
       const exchangeParams = this.getExchangeOrderParams(symbol, type, side, amount, price, baseParams)
 
-      return (await this.exchange.createOrder(
+      return (await this.clientForSymbol(symbol).createOrder(
         symbol,
         type.toLowerCase(),
         side.toLowerCase(),
@@ -151,10 +171,11 @@ export abstract class BaseExchange implements RestClientInterface {
   }
 
   async setLeverage(symbol: string, leverage: number): Promise<void> {
+    if (this.symbolMarketType(symbol) === MarketType.SPOT) return
     if (this.exchangeName === 'bybit') return
 
     try {
-        await this.exchange.setLeverage(leverage, symbol)
+        await this.clientForSymbol(symbol).setLeverage(leverage, symbol)
     } catch (error) {
       logger.error({
         msg: 'Failed to set leverage on exchange',
@@ -184,17 +205,14 @@ export abstract class BaseExchange implements RestClientInterface {
     return baseParams
   }
 
-  /**
-   * Override this method in exchange-specific implementations to provide
-   * exchange-specific parameters for funding fee history requests
-   */
-  protected getExchangeFundingFeeHistoryParams(): any {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected getExchangeFundingFeeHistoryParams(symbol: string): any {
     return {}
   }
 
   async cancelOrder(id: string, symbol: string): Promise<Order> {
     try {
-      return (await this.exchange.cancelOrder(id, symbol)) as Order
+      return (await this.clientForSymbol(symbol).cancelOrder(id, symbol)) as Order
     } catch (error) {
       logger.error({
         msg: 'Failed to cancel order on exchange',
@@ -213,23 +231,18 @@ export abstract class BaseExchange implements RestClientInterface {
     return this.exchangeId
   }
 
-  /**
- * Override this method in exchange-specific implementations to provide
- * exchange-specific response body parsing for funding fee history
- */
   protected parseExchangeSpecificFundingFeeHistoryResponse(response: FundingHistory[]): FundingHistory[] {
     return response
   }
 
-  async fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number): Promise<FundingFeeHistory[]> {
+  async fetchFundingFeeHistory(symbol: string, since?: number, limit?: number): Promise<FundingFeeHistory[]> {
     try {
-      // Get exchange-specific parameters
-      const exchangeParams = this.getExchangeFundingFeeHistoryParams()
+      const exchangeParams = this.getExchangeFundingFeeHistoryParams(symbol)
 
-      const response = await this.exchange.fetchFundingHistory(symbol, since, limit, exchangeParams)
+      const response = await this.clientForSymbol(symbol).fetchFundingHistory(symbol, since, limit, exchangeParams)
 
       const parsedResponse = this.parseExchangeSpecificFundingFeeHistoryResponse(response)
-      
+
       return parsedResponse.map((entry: any) => {
         const { normalizedTimestamp, actualTimestamp } = normalizeFundingTimestamp(entry.timestamp)
         return {
@@ -256,7 +269,7 @@ export abstract class BaseExchange implements RestClientInterface {
 
   async fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<FundingRateHistory[]> {
     try {
-      const rawData = await this.exchange.fetchFundingRateHistory(symbol, since, limit, params)
+      const rawData = await this.clientForSymbol(symbol).fetchFundingRateHistory(symbol, since, limit, params)
 
       return rawData.map((entry: any) => {
         const { normalizedTimestamp, actualTimestamp } = normalizeFundingTimestamp(entry.timestamp)
@@ -283,9 +296,5 @@ export abstract class BaseExchange implements RestClientInterface {
     }
   }
 
-  /**
-   * Abstract method to fetch funding data from the exchange
-   * Must be implemented by each exchange with their specific logic
-   */
   abstract fetchFundingData(): Promise<Map<string, ParsedFunding>>
 }

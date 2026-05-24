@@ -1,9 +1,10 @@
-import { OrderSide, OrderType, OrderStatus, PositionSide } from './exchange'
+import { OrderSide, OrderType, OrderStatus, PositionSide, MarketType } from './exchange'
 
 export interface BalanceInfo {
   asset: string
   total: number
   available: number
+  marketType?: MarketType
 }
 
 export interface PositionInfo {
@@ -16,6 +17,7 @@ export interface PositionInfo {
   unrealizedPnL: number
   timestamp: number
   date: Date
+  marketType?: MarketType
 }
 
 export interface OrderInfo {
@@ -37,6 +39,7 @@ export interface OrderInfo {
   latencyMs?: number
   feesUsd?: number
   slippagePercent?: number
+  marketType?: MarketType
 }
 
 export interface AccountState {

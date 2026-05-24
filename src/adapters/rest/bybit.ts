@@ -1,16 +1,18 @@
 import { BaseExchange } from './base'
 import { ExchangeConfig } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
-import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { MarketType, OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getPositionSide, positionId } from '../../utils/utils'
+import { getPositionSide, positionId, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
+import appConfig from '../../utils/config'
 import { FundingHistory } from 'ccxt'
 
 const EXCHANGE_NAME = 'bybit'
 const CCXT_EXCHANGE_NAME = 'bybit'
 const FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual'
+const INVERSE_FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=InversePerpetual'
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
@@ -19,26 +21,34 @@ export class BybitExchange extends BaseExchange {
     super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
   }
 
-  // Note: Bybit doesn't require exchange-specific parameters for order creation
-  // The base implementation will be used
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  paramsForMarket(marketType: MarketType, _ctx?: { symbol?: string; quote?: string }): Record<string, any> {
+    if (marketType === MarketType.SPOT) return { category: 'spot' }
+    if (marketType === MarketType.INVERSE_PERP) return { category: 'inverse' }
+    if (marketType === MarketType.LINEAR_PERP) return { category: 'linear' }
+    throw new Error(`unsupported market type: ${marketType}`)
+  }
 
-  protected getExchangeFundingFeeHistoryParams(): any {
-    return { subType: 'linear' }
+  protected getExchangeFundingFeeHistoryParams(symbol: string): any {
+    const mt = getMarketTypeFromUnifiedSymbol(symbol)
+    return { subType: mt === MarketType.INVERSE_PERP ? 'inverse' : 'linear' }
   }
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
-    // TODO: review response structure and normalize it for all assets
     try {
       const balances = await this.exchange.fetchBalance()
       const balanceInfos: BalanceInfo[] = []
 
-      const { totalAvailableBalance, totalEquity } = balances.info.result.list[0]
+      const account = balances.info?.result?.list?.[0]
+      if (account) {
+        const coins: any[] = account.coin || []
+        for (const coinEntry of coins) {
+          const total = parseFloat(coinEntry.walletBalance || '0')
+          const available = parseFloat(coinEntry.availableToWithdraw || coinEntry.availableBalance || '0')
+          if (total > 0) balanceInfos.push({ asset: coinEntry.coin, total, available })
+        }
+      }
 
-      balanceInfos.push({
-        asset: 'USDT',
-        total: parseFloat(totalEquity),
-        available: parseFloat(totalAvailableBalance),
-      })
 
       logger.debug({
         msg: 'Fetched balance entries from exchange',
@@ -77,8 +87,7 @@ export class BybitExchange extends BaseExchange {
           unrealizedPnL: unrealizedPnl!,
           timestamp: timestamp!,
           date: new Date(timestamp!),
-          // liquidationPrice: liqPrice,
-          // notional: notional,
+          marketType: getMarketTypeFromUnifiedSymbol(symbol),
         })
       }
 
@@ -185,40 +194,51 @@ export class BybitExchange extends BaseExchange {
    */
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
-      if (!FUNDING_ENDPOINT) {
-        logger.error({
-          msg: 'No funding endpoint configured',
-          function: 'BybitExchange.fetchFundingData',
-          exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId,
+      const [linearJson, inverseJson] = await Promise.all([
+        fetchJsonFromUrl(FUNDING_ENDPOINT),
+        fetchJsonFromUrl(INVERSE_FUNDING_ENDPOINT),
+      ])
+
+      const enabledQuotes = quoteCurrenciesFor(EXCHANGE_NAME)
+      const metadata = this.getMarketMetadataService()
+
+      const ignoredFunding = appConfig.exchanges.bybit.ignoredFundingSymbols ?? []
+
+      const linearItems: any[] = (linearJson?.result?.list ?? [])
+        .filter((item: any) => item.symbolName && enabledQuotes.some((q: string) => item.symbolName.endsWith(q)))
+        .flatMap((item: any) => {
+          const meta = metadata.getMetadataByNativeId(item.symbolName, MarketType.LINEAR_PERP)
+          if (meta) return [{ ...item, symbol: meta.symbol }]
+          const quote = enabledQuotes.find((q: string) => item.symbolName.endsWith(q))
+          if (!quote) {
+            logger.warn({
+              msg: 'Unknown funding symbol, no enabled quote suffix match, skipping',
+              function: 'BybitExchange.fetchFundingData',
+              exchange: EXCHANGE_NAME,
+              symbolName: item.symbolName,
+              enabledQuotes,
+            })
+            return []
+          }
+          const base = item.symbolName.slice(0, -quote.length)
+          return [{ ...item, symbol: `${base}/${quote}:${quote}` }]
         })
-        return new Map()
-      }
+        .filter((item: any) => !ignoredFunding.includes(item.symbol))
 
-      const rawJson = await fetchJsonFromUrl(FUNDING_ENDPOINT)
-
-      if (!rawJson || !rawJson.result || !rawJson.result.list || !Array.isArray(rawJson.result.list)) {
-        logger.error({
-          msg: 'Invalid funding data structure received from exchange',
-          function: 'BybitExchange.fetchFundingData',
-          exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId,
+      const inverseItems: any[] = (inverseJson?.result?.list ?? [])
+        .map((item: any) => {
+          if (!item.symbolName) return null
+          const meta = metadata.getMetadataByNativeId(item.symbolName, MarketType.INVERSE_PERP)
+          if (!meta) return null
+          return { ...item, symbol: meta.symbol }
         })
-        return new Map()
-      }
+        .filter(Boolean)
 
-      // Filter symbols to only ones that end with 'USDT'
-      const usdtSymbolsFundingData = rawJson.result.list
-        .filter((item: any) => item.symbolName && item.symbolName.endsWith('USDT'))
-        .map((item: any) => ({
-          ...item,
-          symbol: item.symbolName.replace('USDT', '/USDT:USDT'),
-        }))
-        .filter((item: any) => !['USDCUSDT', 'ETHBTCUSDT'].includes(item.symbolName))
+      const symbolsFundingData = [...linearItems, ...inverseItems]
 
       const fundingData = new Map<string, ParsedFunding>()
 
-      for (const item of usdtSymbolsFundingData) {
+      for (const item of symbolsFundingData) {
         // Bybit provides nextFundingTimeE0 in seconds, convert to milliseconds
         const fundingRate = parseFloat(item.predictedFundingRate)
         const fundingInterval = parseInt(item.fundingRateInterval)

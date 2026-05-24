@@ -218,7 +218,7 @@ Gateio is listed in config but does not have adapter implementations.
 - **Temporal persistence validation:** Opportunities must persist for `minPersistenceMs` across `minConsecutiveSnapshots` before execution
 - **Confidence scoring:** Opportunities are scored 0-1 based on spread size, orderbook depth, persistence, and other factors
 - **Take-profit exits:** Positions can be closed when accumulated profit exceeds `takeProfitTargetPercent`
-- **USDT perpetual futures only:** All trading is on USDT-margined perpetual swap markets (no spot, no inverse)
+- **Multi-market trading:** Bot trades SPOT, USDT-M perpetual futures (linear), and COIN-M perpetual futures (inverse). Each exchange adapter must route per-symbol to the correct market endpoint.
 
 ## Testing
 

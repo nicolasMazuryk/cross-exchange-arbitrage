@@ -1,8 +1,9 @@
 import { EventEmitter } from 'events'
 import { Dictionary, Market } from 'ccxt'
 import { PublicWebSocketClientInterface, WebSocketConfig, StreamBatch, PublicWebSocketMessageParser } from './types'
+import { MarketType } from '../../types/exchange'
 import { Logger } from '../../utils/logger'
-import { wait } from '../../utils/utils'
+import { wait, marketTypeFromCcxtMarket } from '../../utils/utils'
 
 const logger = new Logger('ws-base')
 
@@ -11,6 +12,9 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   protected abstract readonly messageParser: PublicWebSocketMessageParser
   protected markets: Dictionary<Market> = {}
   protected streamBatches: StreamBatch[] = []
+  // Lookup: `${marketType}:${market.id}` → unified symbol (handles same-id collisions across types)
+  private marketIdAndTypeToUnified: Map<string, string> = new Map()
+  private reconnectingBatches: Set<number> = new Set()
 
   constructor(protected readonly config: WebSocketConfig) {
     super()
@@ -19,17 +23,41 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   public async initialize(markets: Dictionary<Market>): Promise<void> {
     try {
       this.markets = markets
-      const symbols = Object.values(this.markets).map(market => market!.id) as string[]
-      const batches = this.groupSymbolsIntoBatches(symbols)
-      for (let i = 0; i < batches.length; i++) {
-        await this.createPublicWebSocketConnection(batches[i], i)
+
+      // Build type-aware symbol lookup to handle exchanges where spot+linear share the same market.id
+      for (const market of Object.values(markets)) {
+        if (!market) continue
+        const mt = marketTypeFromCcxtMarket(market)
+        this.marketIdAndTypeToUnified.set(`${mt}:${market.id}`, market.symbol)
       }
+
+      // Group markets by type, create separate batches per type so subscriptions carry the right category
+      const marketGroups = new Map<MarketType, string[]>()
+      for (const market of Object.values(markets)) {
+        if (!market) continue
+        const mt = this.filterMarketType(marketTypeFromCcxtMarket(market))
+        if (!mt) continue
+        if (!market.id) continue
+        if (!marketGroups.has(mt)) marketGroups.set(mt, [])
+        marketGroups.get(mt)!.push(market.id)
+      }
+
+      let batchIndex = 0
+      for (const [marketType, symbols] of marketGroups) {
+        const batches = this.groupSymbolsIntoBatches(symbols)
+        for (const symbolBatch of batches) {
+          await this.createPublicWebSocketConnection(symbolBatch, batchIndex, false, marketType)
+          batchIndex++
+        }
+      }
+
       logger.info({
         msg: 'Initialized WebSocket client',
         function: 'BasePublicWebSocketClient.initialize',
         exchange: this.exchangeName,
-        symbolCount: symbols.length,
-        batchCount: batches.length,
+        marketCount: Object.keys(markets).length,
+        batchCount: batchIndex,
+        marketTypes: Array.from(marketGroups.keys()),
       })
     } catch (error) {
       logger.error({
@@ -43,6 +71,13 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
     }
   }
 
+  // Override in subclasses that are restricted to a single market type (e.g. Binance spot vs usdm vs coinm).
+  // Return null to skip that market type entirely when filtering.
+  protected filterMarketType(mt: MarketType): MarketType | null {
+    if (this.config.marketType && this.config.marketType !== mt) return null
+    return mt
+  }
+
   protected groupSymbolsIntoBatches(symbols: string[]): string[][] {
     const batches: string[][] = []
     for (let i = 0; i < symbols.length; i += this.config.maxStreamsPerConnection) {
@@ -54,7 +89,8 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   protected async createPublicWebSocketConnection(
     symbols: string[],
     batchIndex: number,
-    isReconnect: boolean = false
+    isReconnect: boolean = false,
+    marketType: MarketType
   ): Promise<void> {
     try {
       const client = this.createClient()
@@ -77,6 +113,7 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
           id: batchIndex,
           client,
           symbols,
+          marketType,
           isConnected: false,
         }
       }
@@ -90,6 +127,7 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
         function: 'BasePublicWebSocketClient.createPublicWebSocketConnection',
         exchange: this.exchangeName,
         batchIndex,
+        marketType,
         symbolCount: symbols.length,
         isReconnect,
       })
@@ -138,6 +176,9 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
   }
 
   protected async handleConnectionError(batch: StreamBatch): Promise<void> {
+    if (this.reconnectingBatches.has(batch.id)) return
+    this.reconnectingBatches.add(batch.id)
+
     logger.warn({
       msg: 'Handling connection error. Reconnecting WebSocket',
       function: 'BasePublicWebSocketClient.handleConnectionError',
@@ -148,7 +189,8 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
     })
     try {
       await wait(this.config.reconnectInterval)
-      await this.createPublicWebSocketConnection(batch.symbols, batch.id, true)
+      await this.createPublicWebSocketConnection(batch.symbols, batch.id, true, batch.marketType)
+      this.reconnectingBatches.delete(batch.id)
     } catch (error) {
       logger.error({
         msg: 'Failed to reconnect WebSocket, will retry',
@@ -159,6 +201,7 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
         reconnectInterval: this.config.reconnectInterval,
         error,
       })
+      this.reconnectingBatches.delete(batch.id)
       await this.handleConnectionError(batch)
     }
   }
@@ -208,9 +251,12 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
     }
   }
 
-  protected getUnifiedSymbol(marketId: string): string {
-    const market = Object.values(this.markets).find(market => market!.id === marketId)
-    return market!.symbol
+  protected getUnifiedSymbol(marketId: string, marketType: MarketType): string {
+    const unified = this.marketIdAndTypeToUnified.get(`${marketType}:${marketId}`)
+    if (unified) return unified
+    throw new Error(
+      `[${this.exchangeName}] Cannot resolve unified symbol for marketId=${marketId} marketType=${marketType}`,
+    )
   }
 
   // Abstract methods to be implemented by exchange-specific clients

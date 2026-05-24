@@ -19,8 +19,9 @@ export class Browser {
 
   private async getWorker(): Promise<Worker> {
     if (!this.worker) {
-      const workerPath = join(__dirname, 'browser.worker.js')
-      this.worker = new Worker(workerPath)
+      const isTsNode = __filename.endsWith('.ts')
+      const workerPath = join(__dirname, isTsNode ? 'browser.worker.ts' : 'browser.worker.js')
+      this.worker = new Worker(workerPath, isTsNode ? { execArgv: ['-r', 'ts-node/register'] } : undefined)
 
       this.worker.on('message', (response: WorkerResponse) => {
         const pending = this.pendingRequests.get(response.id)

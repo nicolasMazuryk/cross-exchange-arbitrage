@@ -1,6 +1,7 @@
 import { WebsocketClient } from 'okx-api'
 import { BasePublicWebSocketClient } from './base'
 import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './types'
+import { MarketType } from '../../types/exchange'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
@@ -8,19 +9,20 @@ import { TraceContext } from '../../utils/traceContext'
 const EXCHANGE_NAME = 'okx'
 
 class OkxMessageParser implements PublicWebSocketMessageParser {
-  constructor(private getUnifiedSymbol: (marketId: string) => string) {}
+  constructor(private getUnifiedSymbol: (marketId: string, marketType: MarketType) => string) {}
 
   isOrderBookMessage(data: any): boolean {
     return data.arg?.channel === 'books' // books5 - snapshot (5 levels), books - delta (400 levels)
   }
 
-  parseOrderBookUpdate(data: any): OrderBookUpdate {
+  parseOrderBookUpdate(data: any, marketType: MarketType): OrderBookUpdate {
     const type = data.action === 'update' ? 'delta' : 'snapshot'
 
     return {
       type: type,
       exchange: EXCHANGE_NAME,
-      symbol: this.getUnifiedSymbol(data.arg.instId),
+      symbol: this.getUnifiedSymbol(data.arg.instId, marketType),
+      marketType,
       timestamp: +data.data[0].ts,
       asks: data.data[0].asks.map(([price, quantity]: [string, string]) => ({
         price: parseFloat(price),
@@ -45,7 +47,7 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
 
   constructor(config: WebSocketConfig) {
     super(config)
-    this.messageParser = new OkxMessageParser(this.getUnifiedSymbol.bind(this))
+    this.messageParser = new OkxMessageParser((id, mt) => this.getUnifiedSymbol(id, mt))
   }
 
   protected createClient(): WebsocketClient {
@@ -117,6 +119,19 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('error', async (error: any) => {
+      const isPerSymbolError = error?.code === '60018' || error?.code === 60018
+
+      if (isPerSymbolError) {
+        logger.warn({
+          msg: 'WebSocket per-symbol subscription error (channel/instId does not exist)',
+          exchange: this.exchangeName,
+          batchId: batch.id,
+          instId: error?.msg?.match(/instId:([^,\s]+)/)?.[1],
+          code: error?.code,
+        })
+        return
+      }
+
       logger.error({
         msg: 'WebSocket error',
         exchange: this.exchangeName,
@@ -131,7 +146,7 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
       TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
         try {
           if (this.messageParser.isOrderBookMessage(data)) {
-            const update = this.messageParser.parseOrderBookUpdate(data)
+            const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
             update.traceId = traceId
             this.emit('orderbookUpdate', update)
           }
@@ -156,6 +171,8 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected async subscribeToSymbols(batch: StreamBatch): Promise<void> {
     for (const symbol of batch.symbols) {
+      // OKX instId is unique per market type (BTC-USDT spot, BTC-USDT-SWAP linear, BTC-USD-SWAP inverse)
+      // so no extra instType param needed for the books channel
       batch.client.subscribe({
         channel: 'books', // books5 - snapshot (5 levels), books - delta (400 levels)
         instId: symbol,
@@ -166,6 +183,7 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
       function: 'OkxPublicWebSocketClient.subscribeToSymbols',
       exchange: this.exchangeName,
       batchId: batch.id,
+      marketType: batch.marketType,
       symbolCount: batch.symbols.length,
     })
   }

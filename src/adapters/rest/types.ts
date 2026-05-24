@@ -2,6 +2,7 @@ import { Market, Order, Dictionary } from 'ccxt'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { ParsedFunding } from '../../core/funding/types'
 import { FundingRateHistory, FundingFeeHistory } from '../../core/funding/fundingFeeCollector'
+import { MarketMetadataService } from '../../core/markets/marketMetadataService'
 
 export interface ExchangeConfig {
   apiKey: string
@@ -19,6 +20,7 @@ export interface ExchangeOrderParams {
 export interface RestClientInterface {
   // Market data
   loadMarkets(): Promise<Dictionary<Market>>
+  getAllMarkets(): Dictionary<Market>
   getTradingMarkets(): Dictionary<Market>
 
   // Trading
@@ -41,8 +43,10 @@ export interface RestClientInterface {
   // Funding
   fetchFundingData?(): Promise<Map<string, ParsedFunding>>
   fetchFundingRateHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<FundingRateHistory[]>
-  fetchFundingFeeHistory(symbol?: string, since?: number, limit?: number, params?: any): Promise<FundingFeeHistory[]>
+  fetchFundingFeeHistory(symbol: string, since?: number, limit?: number, params?: any): Promise<FundingFeeHistory[]>
 
   // Utility
   getExchangeId(): string
+  getMarketMetadataService(): MarketMetadataService
+  setMarketMetadataService(svc: MarketMetadataService): void
 }

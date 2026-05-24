@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { Logger } from '../../utils/logger'
 import config from '../../utils/config'
+import { MarketType } from '../../types/exchange'
 
 const logger = new Logger('orderbook-manager')
 
@@ -14,6 +15,7 @@ export interface OrderBookUpdate {
   type: 'snapshot' | 'delta'
   exchange: string
   symbol: string
+  marketType: MarketType
   bids: OrderBookLevel[]
   asks: OrderBookLevel[]
   timestamp: number
@@ -34,6 +36,7 @@ export interface OrderBook {
 export interface TopOfBook {
   exchange: string
   symbol: string
+  marketType: MarketType
   bestBid: OrderBookLevel
   bestAsk: OrderBookLevel
   spreadPercent: number
@@ -93,6 +96,7 @@ export class OrderbookManager extends EventEmitter {
         const newTopOfBook: TopOfBook = {
           exchange,
           symbol,
+          marketType: update.marketType,
           bestBid,
           bestAsk,
           spreadPercent,

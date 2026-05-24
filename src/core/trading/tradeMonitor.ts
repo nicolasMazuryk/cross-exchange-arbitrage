@@ -7,7 +7,8 @@ import { OrderbookManager, TopOfBook, OrderBookLevel } from '../orderbook/orderb
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
-import config, { StrategyType, StrategyVariant } from '../../utils/config'
+import config, { StrategyType, StrategyVariant, getFees } from '../../utils/config'
+import { MarketType } from '../../types/exchange'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
 import { FundingService } from '../funding/fundingService'
 import { ParsedFunding } from '../funding/types'
@@ -259,8 +260,8 @@ export class TradeMonitor extends EventEmitter {
    */
   private updatePnLWithSimulatedExit(trade: TrackedTrade, exitSimulation: ExitSlippageSimulationResult): void {
     // Calculate exit fees for both legs
-    const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker')
-    const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker')
+    const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker', trade.opportunity.buyMarketType)
+    const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker', trade.opportunity.sellMarketType)
 
     const buyExitFeesUsd =
       exitSimulation.avgBuyNormalizedExecutionPrice * trade.opportunity.normalizedVolume * (buyFeeRatePercent / 100)
@@ -543,6 +544,8 @@ export class TradeMonitor extends EventEmitter {
 
         // Process each affected trade
         for (const trade of affectedTrades) {
+          if (trade.opportunity.isSpotSpot) continue
+
           // Skip if trade is already closed or in error state
           if (trade.status !== 'open') {
             logger.trace({
@@ -941,41 +944,53 @@ export class TradeMonitor extends EventEmitter {
         exitSimulation.avgBuyNormalizedExecutionPrice) *
       100
 
-    // Get current funding data for all strategies
-    const buyFundingData = this.fundingService.getSymbolFundingData(
-      trade.opportunity.buyExchange,
-      trade.opportunity.buyExchangeSymbol
-    )
-    const sellFundingData = this.fundingService.getSymbolFundingData(
-      trade.opportunity.sellExchange,
-      trade.opportunity.sellExchangeSymbol
-    )
+    // Fetch funding data for any perp leg (spot legs get undefined)
+    let buyFundingData, sellFundingData
+    let nextFundingTimestamp = 0, previousFundingTimestamp = 0
 
-    if (!buyFundingData || !sellFundingData) {
-      logger.warn({
-        msg: 'Cannot check exit: funding data unavailable',
-        function: 'TradeMonitor.processTradeExitConditions',
-        tradeId: trade.id,
-      })
-      return
+    if (!trade.opportunity.isSpotSpot) {
+      if (trade.opportunity.buyMarketType !== MarketType.SPOT) {
+        buyFundingData = this.fundingService.getSymbolFundingData(
+          trade.opportunity.buyExchange,
+          trade.opportunity.buyExchangeSymbol
+        )
+      }
+      if (trade.opportunity.sellMarketType !== MarketType.SPOT) {
+        sellFundingData = this.fundingService.getSymbolFundingData(
+          trade.opportunity.sellExchange,
+          trade.opportunity.sellExchangeSymbol
+        )
+      }
+
+      const definedFundingData = [buyFundingData, sellFundingData].filter(Boolean) as ParsedFunding[]
+      if (definedFundingData.length === 0) {
+        logger.warn({
+          msg: 'Cannot check exit: funding data unavailable for all perp legs',
+          function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+        })
+        return
+      }
+
+      if (definedFundingData.some(d => d.nextFundingTimestamp < now)) {
+        logger.warn({
+          msg: 'Outdated funding data, skipping exit check',
+          function: 'TradeMonitor.processTradeExitConditions',
+          tradeId: trade.id,
+        })
+        return
+      }
+
+      nextFundingTimestamp = Math.min(...definedFundingData.map(d => d.nextFundingTimestamp))
+      const nextFundingInterval = Math.min(...definedFundingData.map(d => d.fundingInterval))
+      const fundingIntervalMs = nextFundingInterval * 60 * 60 * 1000
+      previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
     }
-
-    // Validate funding data is not outdated
-    if (buyFundingData.nextFundingTimestamp < now || sellFundingData.nextFundingTimestamp < now) {
-      logger.warn({
-        msg: 'Outdated funding data, skipping exit check',
-        function: 'TradeMonitor.processTradeExitConditions',
-        tradeId: trade.id,
-      })
-      return
-    }
-
-    const nextFundingTimestamp = Math.min(buyFundingData.nextFundingTimestamp, sellFundingData.nextFundingTimestamp)
-    const nextFundingInterval = Math.min(buyFundingData.fundingInterval, sellFundingData.fundingInterval)
-    const fundingIntervalMs = nextFundingInterval * 60 * 60 * 1000
-    const previousFundingTimestamp = nextFundingTimestamp - fundingIntervalMs
 
     if (trade.strategy === 'funding' && this.fundingStrategyEnabled) {
+      if (trade.opportunity.isSpotSpot) return
+      const perpFunding = buyFundingData ?? sellFundingData
+      if (!perpFunding) return
       // --- Funding strategy: target funding, window checks, then gate by exit-type window ---
       if (now < trade.opportunity.targetFundingTimestamp) {
         logger.trace({
@@ -999,18 +1014,18 @@ export class TradeMonitor extends EventEmitter {
         return
       }
 
-      const isSynchronized = this.fundingService.isFundingSynchronizedExit(buyFundingData, sellFundingData)
+      const isSynchronized = this.fundingService.isFundingSynchronizedExit(buyFundingData!, sellFundingData!)
       const strategyExitResult = isSynchronized
         ? this.shouldExitFundingSyncTrade(
             trade,
-            buyFundingData,
-            sellFundingData,
+            buyFundingData!,
+            sellFundingData!,
             currentSpreadDifferencePercent
           )
         : this.shouldExitFundingAsyncTrade(
             trade,
-            buyFundingData,
-            sellFundingData,
+            buyFundingData!,
+            sellFundingData!,
             currentSpreadDifferencePercent
           )
 
@@ -1054,14 +1069,16 @@ export class TradeMonitor extends EventEmitter {
     }
 
     if (trade.strategy === 'spread' && this.spreadStrategyEnabled) {
-      // --- Spread strategy: window check, then execute if exit condition met ---
-      if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
-        logger.trace({
-          msg: 'Not within spread window, skipping exit check',
-          function: 'TradeMonitor.processTradeExitConditions',
-          tradeId: trade.id,
-        })
-        return
+      // --- Spread strategy: window check only applies to perp-perp trades ---
+      if (trade.opportunity.bothLegsArePerp && nextFundingTimestamp > 0) {
+        if (!this.isWithinSpreadWindowForExit(previousFundingTimestamp, nextFundingTimestamp)) {
+          logger.trace({
+            msg: 'Not within spread window, skipping exit check',
+            function: 'TradeMonitor.processTradeExitConditions',
+            tradeId: trade.id,
+          })
+          return
+        }
       }
 
       const strategyExitResult = this.shouldExitSpreadTrade(
@@ -1218,17 +1235,18 @@ export class TradeMonitor extends EventEmitter {
 
     const entryTimestamp = Math.min(tradeResult.buyOrder.timestamp, tradeResult.sellOrder.timestamp)
     const entryDate = new Date(entryTimestamp).toISOString()
+    const isSpotSpot = opportunity.isSpotSpot
 
     const trackedTrade: TrackedTrade = {
       id: tradeResult.id,
-      status: 'open',
+      status: isSpotSpot ? 'closed' : 'open',
       strategy: opportunity.strategy,
       strategyVariant: opportunity.strategyVariant,
       exitReason: undefined,
       entryDate,
-      exitDate: undefined,
+      exitDate: isSpotSpot ? entryDate : undefined,
       entryTimestamp,
-      exitTimestamp: undefined,
+      exitTimestamp: isSpotSpot ? entryTimestamp : undefined,
       opportunity: opportunity,
       entryTrade: tradeResult,
       exitTrade: undefined,
@@ -1289,7 +1307,7 @@ export class TradeMonitor extends EventEmitter {
     this.trackedTrades.set(tradeResult.id, trackedTrade)
 
     logger.info({
-      msg: 'Trade added to monitoring',
+      msg: isSpotSpot ? 'Spot-spot trade recorded as completed (no exit phase)' : 'Trade added to monitoring',
       function: 'TradeMonitor.addTrade',
       id: trackedTrade.id,
       entryTrade: trackedTrade.entryTrade,
@@ -1497,6 +1515,9 @@ export class TradeMonitor extends EventEmitter {
       // Get current orderbook prices for exit
       const currentPrices = this.getCurrentOrderbookPrices(trade.opportunity)
 
+      const buyIsPerp = trade.opportunity.buyMarketType !== MarketType.SPOT
+      const sellIsPerp = trade.opportunity.sellMarketType !== MarketType.SPOT
+
       // Place exit orders in parallel
       const [buyOrder, sellOrder] = await Promise.all([
         placeOrderAndMonitor(
@@ -1505,7 +1526,7 @@ export class TradeMonitor extends EventEmitter {
           'SELL',
           trade.opportunity.buyExchangeVolume,
           currentPrices.buyPrice,
-          true,
+          buyIsPerp,
           `${trade.id}EXITBUY`,
           trade.opportunity.buyExchange,
           this.accountStateManager,
@@ -1517,7 +1538,7 @@ export class TradeMonitor extends EventEmitter {
           'BUY',
           trade.opportunity.sellExchangeVolume,
           currentPrices.sellPrice,
-          true,
+          sellIsPerp,
           `${trade.id}EXITSELL`,
           trade.opportunity.sellExchange,
           this.accountStateManager,
@@ -1526,8 +1547,8 @@ export class TradeMonitor extends EventEmitter {
       ])
 
       // Calculate fees and slippage
-      const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker')
-      const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker')
+      const buyFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.buyExchange, 'taker', trade.opportunity.buyMarketType)
+      const sellFeeRatePercent = this.getTradingFeeRatePercent(trade.opportunity.sellExchange, 'taker', trade.opportunity.sellMarketType)
 
       const buyFees = calculateFees(buyOrder, buyFeeRatePercent)
       const sellFees = calculateFees(sellOrder, sellFeeRatePercent)
@@ -1681,14 +1702,8 @@ export class TradeMonitor extends EventEmitter {
     trade.pnlPercent = trade.deltaProfitPercent + trade.fundingProfitPercent - trade.feesPercent.total
   }
 
-  /**
-   * Get trading fee percent for an exchange
-   */
-  private getTradingFeeRatePercent(exchangeId: string, feeType: 'maker' | 'taker'): number {
-    const exchangeConfig = config.exchanges[exchangeId as keyof typeof config.exchanges]
-    if (!exchangeConfig) return 0
-
-    return exchangeConfig.fees[feeType]
+  private getTradingFeeRatePercent(exchangeId: string, feeType: 'maker' | 'taker', marketType: MarketType): number {
+    return getFees(exchangeId, marketType)[feeType]
   }
 
   /**

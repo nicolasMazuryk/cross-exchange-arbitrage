@@ -16,6 +16,9 @@ import { MarketMetadataService } from '../markets/marketMetadataService'
 import { FundingService } from '../funding/fundingService'
 import { FundingFeeCollector } from '../funding/fundingFeeCollector'
 
+// Utils
+import { startOpportunityTracker } from '../../utils/opportunityTracker'
+
 // REST adapters
 import { BinanceExchange, BybitExchange, OkxExchange, BitgetExchange } from '../../adapters/rest'
 
@@ -30,6 +33,7 @@ import {
 // Types
 import { WebSocketConfig } from '../../adapters/websocket/types'
 import { ExchangeConfig } from '../../adapters/rest/types'
+import { httpsAgentV4 } from '../../utils/network'
 
 interface ExchangeServices {
   rest: any
@@ -119,6 +123,7 @@ export class Orchestrator extends EventEmitter {
         client: new BinanceExchange({
           apiKey: config.exchanges.binance.apiKey,
           apiSecret: config.exchanges.binance.apiSecret,
+          options: { agent: httpsAgentV4 },
         }),
       },
       {
@@ -126,6 +131,7 @@ export class Orchestrator extends EventEmitter {
         client: new BybitExchange({
           apiKey: config.exchanges.bybit.apiKey,
           apiSecret: config.exchanges.bybit.apiSecret,
+          options: { agent: httpsAgentV4 },
         }),
       },
       {
@@ -134,6 +140,7 @@ export class Orchestrator extends EventEmitter {
           apiKey: config.exchanges.okx.apiKey,
           apiSecret: config.exchanges.okx.apiSecret,
           apiPass: config.exchanges.okx.apiPass,
+          options: { agent: httpsAgentV4 },
         }),
       },
       {
@@ -142,6 +149,7 @@ export class Orchestrator extends EventEmitter {
           apiKey: config.exchanges.bitget.apiKey,
           apiSecret: config.exchanges.bitget.apiSecret,
           apiPass: config.exchanges.bitget.apiPass,
+          options: { agent: httpsAgentV4 },
         }),
       },
     ]
@@ -153,9 +161,17 @@ export class Orchestrator extends EventEmitter {
           await client.loadMarkets()
 
           // Initialize market metadata service
-          const markets = Object.values((client as any).exchange.markets || {})
-          const ignoredMarkets = config.exchanges[id as keyof typeof config.exchanges]?.ignoredMarkets || []
-          const marketMetadataService = new MarketMetadataService(id, markets as any[], ignoredMarkets)
+          const markets = Object.values(client.getAllMarkets())
+          const exchangeCfg = config.exchanges[id as keyof typeof config.exchanges]
+          const marketMetadataService = new MarketMetadataService(
+            id,
+            markets as any[],
+            exchangeCfg?.ignoredMarkets || [],
+            exchangeCfg?.enabledMarketTypes,
+            exchangeCfg?.enabledQuoteCurrencies
+          )
+
+          client.setMarketMetadataService(marketMetadataService)
 
           this.exchangeServices.set(id, {
             rest: client,
@@ -197,38 +213,10 @@ export class Orchestrator extends EventEmitter {
 
       // Initialize Arbitrage Engine
       const exchangeConfigs = [
-        {
-          name: 'binance',
-          isHealthy: true,
-          feeModel: {
-            maker: config.exchanges.binance.fees.maker,
-            taker: config.exchanges.binance.fees.taker,
-          },
-        },
-        {
-          name: 'bybit',
-          isHealthy: true,
-          feeModel: {
-            maker: config.exchanges.bybit.fees.maker,
-            taker: config.exchanges.bybit.fees.taker,
-          },
-        },
-        {
-          name: 'okx',
-          isHealthy: true,
-          feeModel: {
-            maker: config.exchanges.okx.fees.maker,
-            taker: config.exchanges.okx.fees.taker,
-          },
-        },
-        {
-          name: 'bitget',
-          isHealthy: true,
-          feeModel: {
-            maker: config.exchanges.bitget.fees.maker,
-            taker: config.exchanges.bitget.fees.taker,
-          },
-        },
+        { name: 'binance', isHealthy: true },
+        { name: 'bybit', isHealthy: true },
+        { name: 'okx', isHealthy: true },
+        { name: 'bitget', isHealthy: true },
       ]
 
       // Create market metadata services map
@@ -248,13 +236,15 @@ export class Orchestrator extends EventEmitter {
         this.fundingService! // Pass funding service to arbitrage engine
       )
 
+      // startOpportunityTracker(this.arbitrageEngine) // local-dev opportunity tracker
+
       // Listen for arbitrage opportunities
       this.arbitrageEngine.on('opportunities', opportunities => {
         // this.emit('arbitrageOpportunities', opportunities)
         // Process opportunities with trading services
         TraceContext.runWithExistingTrace(opportunities[0].traceId, 'arbitrage-opportunities', () => {
           if (this.tradeExecutor) {
-            this.processArbitrageOpportunities(opportunities)
+            // this.processArbitrageOpportunities(opportunities)
           }
         })
       })
@@ -319,11 +309,16 @@ export class Orchestrator extends EventEmitter {
       }
 
       if (exchangeAdapters.size !== this.exchangeServices.size) {
+        const missing = Array.from(this.exchangeServices.keys()).filter(
+          id => !config.funding.supportedExchanges.includes(id)
+        )
         logger.error({
-          msg: '⚠️ Mismatch between exchanges and supported exchanges for funding rate fetching',
+          msg: 'Some exchanges not in supported list for funding rate fetching — they will be skipped',
           function: 'Orchestrator.initializeFundingService',
+          missingExchanges: missing,
+          configuredExchanges: Array.from(this.exchangeServices.keys()),
+          supportedExchanges: config.funding.supportedExchanges,
         })
-        throw new Error('Mismatch between exchanges and supported exchanges for funding rate fetching')
       }
 
       // Create market metadata services map
@@ -379,11 +374,15 @@ export class Orchestrator extends EventEmitter {
       }
 
       // Initialize Trade Executor
+      if (!this.state) {
+        throw new Error('State service must be initialized before trade executor')
+      }
       this.tradeExecutor = new TradeExecutor(
         this.accountSyncService.getAccountStateManager(),
         restClients,
         this.orderbookManager,
-        marketMetadataServices
+        marketMetadataServices,
+        this.state
       )
 
       // Initialize Trade Monitor
@@ -530,7 +529,9 @@ export class Orchestrator extends EventEmitter {
           restConfig: {
             apiKey: config.exchanges.binance.apiKey,
             apiSecret: config.exchanges.binance.apiSecret,
+            options: { agent: httpsAgentV4 },
           } as ExchangeConfig,
+          existingRestClient: this.exchangeServices.get('binance')?.rest,
         },
         {
           exchangeId: 'bybit',
@@ -544,11 +545,11 @@ export class Orchestrator extends EventEmitter {
             apiKey: config.exchanges.bybit.apiKey,
             apiSecret: config.exchanges.bybit.apiSecret,
             options: {
-              defaultType: 'swap', // Use USDT Futures
-              defaultSubType: 'linear', // USDT linear contracts
-              defaultSettleType: 'linear', // Linear settlement
+              agent: httpsAgentV4,
+              defaultType: 'swap',
             },
           } as ExchangeConfig,
+          existingRestClient: this.exchangeServices.get('bybit')?.rest,
         },
         {
           exchangeId: 'okx',
@@ -564,11 +565,11 @@ export class Orchestrator extends EventEmitter {
             apiSecret: config.exchanges.okx.apiSecret,
             apiPass: config.exchanges.okx.apiPass,
             options: {
-              defaultType: 'swap', // Use USDT Futures
-              defaultSubType: 'linear', // USDT linear contracts
-              defaultSettleType: 'linear', // Linear settlement
+              agent: httpsAgentV4,
+              defaultType: 'swap',
             },
           } as ExchangeConfig,
+          existingRestClient: this.exchangeServices.get('okx')?.rest,
         },
         {
           exchangeId: 'bitget',
@@ -584,11 +585,11 @@ export class Orchestrator extends EventEmitter {
             apiSecret: config.exchanges.bitget.apiSecret,
             apiPass: config.exchanges.bitget.apiPass,
             options: {
-              defaultType: 'swap', // Use USDT Futures
-              defaultSubType: 'linear', // USDT linear contracts
-              defaultSettleType: 'linear', // Linear settlement
+              agent: httpsAgentV4,
+              defaultType: 'swap',
             },
           } as ExchangeConfig,
+          existingRestClient: this.exchangeServices.get('bitget')?.rest,
         },
       ]
 
@@ -620,7 +621,7 @@ export class Orchestrator extends EventEmitter {
         const markets = services.rest.getTradingMarkets()
 
         logger.info({
-          msg: 'Found USDT perpetual futures markets',
+          msg: 'Found trading markets',
           function: 'Orchestrator.initializePublicWebSocketClients',
           exchange: exchangeId,
           marketCount: Object.keys(markets).length,
@@ -757,10 +758,11 @@ export class Orchestrator extends EventEmitter {
 
       // Initialize Funding Fee Collector
       this.fundingFeeCollector = new FundingFeeCollector(
-        restClients, 
+        restClients,
         this.state,
         this.fundingService,
-        config.fundingFeeCollector.cronPattern
+        config.fundingFeeCollector.cronPattern,
+        this.orderbookManager
       )
 
       // Start the collector

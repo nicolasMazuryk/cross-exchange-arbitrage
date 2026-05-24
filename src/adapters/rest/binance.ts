@@ -1,54 +1,139 @@
+import ccxt, { Exchange, Market, Dictionary } from 'ccxt'
 import { BaseExchange } from './base'
 import { ExchangeConfig } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
-import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { MarketType, OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getPositionSide, positionId } from '../../utils/utils'
+import { getPositionSide, positionId, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
+import appConfig from '../../utils/config'
 
 const EXCHANGE_NAME = 'binance'
-const CCXT_EXCHANGE_NAME = 'binanceusdm'
 const FUNDING_ENDPOINT = 'https://www.binance.com/bapi/futures/v1/public/future/common/get-funding-info'
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
 export class BinanceExchange extends BaseExchange {
+  // Binance routes across three CCXT instances — one per market type.
+  // this.exchange (from super) is the linear instance for methods that haven't been overridden.
+  private spotCcxt: Exchange
+  private linearCcxt: Exchange
+  private inverseCcxt: Exchange
+  private mergedMarkets: Dictionary<Market> = {}
+
   constructor(config: ExchangeConfig) {
-    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
+    super(EXCHANGE_NAME, 'binanceusdm', config)
+    this.linearCcxt = this.exchange
+    this.spotCcxt = this.makeCcxtInstance('binance', config)
+    this.inverseCcxt = this.makeCcxtInstance('binancecoinm', config)
   }
 
-  // Note: Binance doesn't require exchange-specific parameters for order creation
-  // The base implementation will be used
+  private makeCcxtInstance(ccxtId: string, config: ExchangeConfig): Exchange {
+    return new (ccxt as any)[ccxtId]({
+      apiKey: config.apiKey,
+      secret: config.apiSecret,
+      agent: config.options?.agent,
+      options: {
+        warnOnFetchOpenOrdersWithoutSymbol: false,
+        ...config.options,
+      },
+    })
+  }
 
-  protected getExchangeFundingFeeHistoryParams(): any {
-    return { subType: 'linear' }
+  protected ccxtForSymbol(symbol: string): Exchange {
+    const mt = getMarketTypeFromUnifiedSymbol(symbol)
+    if (mt === MarketType.SPOT) return this.spotCcxt
+    if (mt === MarketType.INVERSE_PERP) return this.inverseCcxt
+    if (mt === MarketType.LINEAR_PERP) return this.linearCcxt
+    throw new Error(`unsupported market type for symbol ${symbol}: ${mt}`)
+  }
+
+  protected clientForSymbol(symbol?: string): Exchange {
+    return symbol ? this.ccxtForSymbol(symbol) : this.linearCcxt
+  }
+
+  protected allClients(): Exchange[] {
+    return [this.spotCcxt, this.linearCcxt, this.inverseCcxt]
+  }
+
+  protected symbolMarketType(symbol: string): MarketType {
+    return getMarketTypeFromUnifiedSymbol(symbol)
+  }
+
+  async loadMarkets(): Promise<Dictionary<Market>> {
+    const [spot, linear, inverse] = await Promise.all([
+      this.spotCcxt.loadMarkets(),
+      this.linearCcxt.loadMarkets(),
+      this.inverseCcxt.loadMarkets(),
+    ])
+    this.mergedMarkets = { ...spot, ...linear, ...inverse }
+    logger.debug({
+      msg: 'Loaded markets from all Binance CCXT instances',
+      function: 'BinanceExchange.loadMarkets',
+      exchange: EXCHANGE_NAME,
+      spotCount: Object.keys(spot).length,
+      linearCount: Object.keys(linear).length,
+      inverseCount: Object.keys(inverse).length,
+      total: Object.keys(this.mergedMarkets).length,
+    })
+    return this.mergedMarkets
+  }
+
+  getAllMarkets(): Dictionary<Market> {
+    return this.mergedMarkets
+  }
+
+  protected getExchangeFundingFeeHistoryParams(symbol: string): any {
+    const mt = getMarketTypeFromUnifiedSymbol(symbol)
+    return { subType: mt === MarketType.INVERSE_PERP ? 'inverse' : 'linear' }
   }
 
   async fetchBalancesSnapshot(): Promise<BalanceInfo[]> {
     try {
-      const balances = await this.exchange.fetchBalance()
-      const balanceInfos: BalanceInfo[] = []
-      const { availableBalance, totalWalletBalance } = balances.info
-      balanceInfos.push({
-        asset: 'USDT',
-        total: parseFloat(totalWalletBalance),
-        available: parseFloat(availableBalance),
-      })
+      const enabledMarketTypes = appConfig.exchanges.binance.enabledMarketTypes!
+      const result: BalanceInfo[] = []
+
+      if (enabledMarketTypes.includes(MarketType.LINEAR_PERP)) {
+        const balances = await this.linearCcxt.fetchBalance()
+        const assets: any[] = balances.info?.assets || []
+        for (const asset of assets) {
+          const total = parseFloat(asset.walletBalance || '0')
+          const available = parseFloat(asset.availableBalance || '0')
+          if (total > 0) result.push({ asset: asset.asset, total, available })
+        }
+      }
+
+      if (enabledMarketTypes.includes(MarketType.INVERSE_PERP)) {
+        const balances = await this.inverseCcxt.fetchBalance()
+        const assets: any[] = balances.info?.assets || []
+        for (const asset of assets) {
+          const total = parseFloat(asset.walletBalance || '0')
+          const available = parseFloat(asset.availableBalance || '0')
+          if (total > 0) result.push({ asset: asset.asset, total, available })
+        }
+      }
+
+      if (enabledMarketTypes.includes(MarketType.SPOT)) {
+        const balances = await this.spotCcxt.fetchBalance()
+        for (const [asset, total] of Object.entries(balances.total || {})) {
+          const totalNum = typeof total === 'number' ? total : 0
+          if (totalNum > 0) result.push({ asset, total: totalNum, available: ((balances.free as any)[asset] as number) || 0 })
+        }
+      }
+
       logger.debug({
         msg: 'Fetched balance entries from exchange',
         function: 'BinanceExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
-        count: balanceInfos.length,
+        count: result.length,
       })
-      return balanceInfos
+      return result
     } catch (error) {
       logger.error({
         msg: 'Failed to fetch balance snapshot from exchange',
         function: 'BinanceExchange.fetchBalancesSnapshot',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         error,
       })
       throw error
@@ -56,31 +141,36 @@ export class BinanceExchange extends BaseExchange {
   }
 
   async fetchPositionsSnapshot(): Promise<PositionInfo[]> {
-    // TODO: review response structure and normalize it once NEW Binance account is created
     try {
-      const positions = await this.exchange.fetchPositions()
+      const [linearPositions, inversePositions] = await Promise.all([
+        this.linearCcxt.fetchPositions(),
+        this.inverseCcxt.fetchPositions(),
+      ])
       const positionInfos: PositionInfo[] = []
-      for (const position of positions) {
-        const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp } = position
-        positionInfos.push({
-          id: positionId(symbol, side!.toUpperCase() as PositionSide),
-          symbol: symbol,
-          side: side!.toUpperCase() as PositionSide,
-          size: Math.abs(position.contracts! * position.contractSize!),
-          entryPrice: entryPrice!,
-          leverage: Number(leverage) || 1,
-          unrealizedPnL: unrealizedPnl!,
-          timestamp: timestamp!,
-          date: new Date(timestamp!),
-          // liquidationPrice: liqPrice,
-          // notional: notional,
-        })
+      for (const [positions, marketType] of [
+        [linearPositions, MarketType.LINEAR_PERP],
+        [inversePositions, MarketType.INVERSE_PERP],
+      ] as [any[], MarketType][]) {
+        for (const position of positions) {
+          const { symbol, side, entryPrice, leverage, unrealizedPnl, timestamp } = position
+          positionInfos.push({
+            id: positionId(symbol, side!.toUpperCase() as PositionSide),
+            symbol,
+            side: side!.toUpperCase() as PositionSide,
+            size: Math.abs(position.contracts! * position.contractSize!),
+            entryPrice: entryPrice!,
+            leverage: Number(leverage) || 1,
+            unrealizedPnL: unrealizedPnl!,
+            timestamp: timestamp!,
+            date: new Date(timestamp!),
+            marketType,
+          })
+        }
       }
       logger.debug({
         msg: 'Fetched positions snapshot',
         function: 'BinanceExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         count: positionInfos.length,
       })
       return positionInfos
@@ -89,7 +179,6 @@ export class BinanceExchange extends BaseExchange {
         msg: 'Failed to fetch positions snapshot from exchange',
         function: 'BinanceExchange.fetchPositionsSnapshot',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         error,
       })
       throw error
@@ -97,9 +186,10 @@ export class BinanceExchange extends BaseExchange {
   }
 
   async fetchOrdersSnapshot(symbol?: string): Promise<OrderInfo[]> {
-    // TODO: review response structure and normalize it once NEW Binance account is created
     try {
-      const orders = await this.exchange.fetchOpenOrders(symbol)
+      const instances: Exchange[] = symbol ? [this.ccxtForSymbol(symbol)] : this.allClients()
+      const ordersPerInstance = await Promise.all(instances.map(inst => inst.fetchOpenOrders(symbol)))
+      const orders = ordersPerInstance.flat()
       const orderInfos: OrderInfo[] = []
       for (const order of orders) {
         orderInfos.push({
@@ -122,7 +212,6 @@ export class BinanceExchange extends BaseExchange {
         msg: 'Fetched order entries from exchange',
         function: 'BinanceExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         symbol: symbol || 'all',
         count: orderInfos.length,
       })
@@ -132,7 +221,6 @@ export class BinanceExchange extends BaseExchange {
         msg: 'Failed to fetch orders snapshot from exchange',
         function: 'BinanceExchange.fetchOrdersSnapshot',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         symbol: symbol || 'all',
         error,
       })
@@ -141,7 +229,6 @@ export class BinanceExchange extends BaseExchange {
   }
 
   private normalizeOrderStatus(binanceStatus: string): OrderStatus {
-    // TODO: review response structure and normalize it once NEW Binance account is created
     switch (binanceStatus.toUpperCase()) {
       case 'OPEN':
         return 'NEW'
@@ -160,9 +247,6 @@ export class BinanceExchange extends BaseExchange {
     }
   }
 
-  /**
-   * Fetch funding data from Binance by combining browser data (funding interval) with ccxt data (funding rate and datetime)
-   */
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       if (!FUNDING_ENDPOINT) {
@@ -170,14 +254,14 @@ export class BinanceExchange extends BaseExchange {
           msg: 'No funding endpoint configured',
           function: 'BinanceExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId,
         })
         return new Map()
       }
 
-      const [rawJson, ccxtFundingRates] = await Promise.all([
+      const [rawJson, linearFundingRates, inverseFundingRates] = await Promise.all([
         fetchJsonFromUrl(FUNDING_ENDPOINT),
-        this.exchange.fetchFundingRates(undefined, { subType: 'linear' }),
+        this.linearCcxt.fetchFundingRates(undefined, { subType: 'linear' }),
+        this.inverseCcxt.fetchFundingRates(undefined, { subType: 'inverse' }),
       ])
 
       if (!rawJson || !rawJson.data || !Array.isArray(rawJson.data)) {
@@ -185,22 +269,43 @@ export class BinanceExchange extends BaseExchange {
           msg: 'Invalid funding data structure received from exchange',
           function: 'BinanceExchange.fetchFundingData',
           exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId,
         })
         return new Map()
       }
 
-      // Filter symbols in rawJson.data to only ones that end with 'USDT'
-      const usdtSymbolsIntervalData = rawJson.data
-        .filter((item: any) => item.symbol && item.symbol.endsWith('USDT') && item.fundingIntervalHours !== undefined)
-        .map((item: any) => ({
-          ...item,
-          symbol: item.symbol.replace('USDT', '/USDT:USDT'),
-        }))
+      const ccxtFundingRates = { ...linearFundingRates, ...inverseFundingRates }
+      const enabledQuotes = quoteCurrenciesFor(EXCHANGE_NAME)
+      const metadata = this.getMarketMetadataService()
+      const symbolsIntervalData = rawJson.data
+        .filter((item: any) => {
+          if (!item.symbol || item.fundingIntervalHours === undefined) return false
+          if (enabledQuotes.some((q: string) => item.symbol.endsWith(q))) return true
+          if (metadata.getMetadataByNativeId(item.symbol, MarketType.INVERSE_PERP)) return true
+          return false
+        })
+        .flatMap((item: any) => {
+          const linearMeta = metadata.getMetadataByNativeId(item.symbol, MarketType.LINEAR_PERP)
+          if (linearMeta) return [{ ...item, symbol: linearMeta.symbol }]
+          const inverseMeta = metadata.getMetadataByNativeId(item.symbol, MarketType.INVERSE_PERP)
+          if (inverseMeta) return [{ ...item, symbol: inverseMeta.symbol }]
+          const quote = enabledQuotes.find((q: string) => item.symbol.endsWith(q))
+          if (!quote) {
+            logger.warn({
+              msg: 'Unknown funding symbol, no enabled quote suffix match, skipping',
+              function: 'BinanceExchange.fetchFundingData',
+              exchange: EXCHANGE_NAME,
+              nativeSymbol: item.symbol,
+              enabledQuotes,
+            })
+            return []
+          }
+          const base = item.symbol.slice(0, -quote.length)
+          return [{ ...item, symbol: `${base}/${quote}:${quote}` }]
+        })
 
       const fundingData = new Map<string, ParsedFunding>()
 
-      for (const item of usdtSymbolsIntervalData) {
+      for (const item of symbolsIntervalData) {
         const ccxtFundingData = ccxtFundingRates[item.symbol]
 
         if (
@@ -214,7 +319,6 @@ export class BinanceExchange extends BaseExchange {
             msg: 'Invalid funding data values for symbol',
             function: 'BinanceExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
-            exchangeId: this.exchangeId,
             symbol: item.symbol,
             hasCcxtData: !!ccxtFundingData,
             fundingRate: ccxtFundingData?.fundingRate,
@@ -240,7 +344,6 @@ export class BinanceExchange extends BaseExchange {
         msg: 'Parsed funding rates from exchange',
         function: 'BinanceExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         count: fundingData.size,
       })
       return fundingData
@@ -249,7 +352,6 @@ export class BinanceExchange extends BaseExchange {
         msg: 'Failed to fetch funding data from exchange',
         function: 'BinanceExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
-        exchangeId: this.exchangeId,
         endpoint: FUNDING_ENDPOINT,
         error,
       })

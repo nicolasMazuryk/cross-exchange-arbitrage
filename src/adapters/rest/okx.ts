@@ -1,21 +1,29 @@
 import { BaseExchange } from './base'
 import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
-import { OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
+import { MarketType, OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
 import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getPositionSide } from '../../utils/utils'
+import { getPositionSide, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'okx'
 const CCXT_EXCHANGE_NAME = 'okx'
-const FUNDING_ENDPOINT = 'https://www.okx.com/priapi/v5/public/funding-rate-all?ccyType=USDT'
+const FUNDING_BASE_URL = 'https://www.okx.com/priapi/v5/public/funding-rate-all'
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
 export class OkxExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
     super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  paramsForMarket(marketType: MarketType, _ctx?: { symbol?: string; quote?: string }): Record<string, any> {
+    if (marketType === MarketType.SPOT) return { instType: 'SPOT' }
+    if (marketType === MarketType.LINEAR_PERP) return { instType: 'SWAP' }
+    if (marketType === MarketType.INVERSE_PERP) return { instType: 'SWAP', instFamily: 'inverse' }
+    throw new Error(`OKX:paramsForMarket: Unsupported market type: ${marketType}`)
   }
 
   protected getExchangeOrderParams(
@@ -37,11 +45,22 @@ export class OkxExchange extends BaseExchange {
       const balances = await this.exchange.fetchBalance()
       const balanceInfos: BalanceInfo[] = []
 
-      balanceInfos.push({
-        asset: 'USDT',
-        total: balances['USDT'].total || 0,
-        available: balances['USDT'].free || 0,
-      })
+      const skipKeys = new Set(['info', 'free', 'used', 'total', 'datetime', 'timestamp'])
+      for (const [asset, entry] of Object.entries(balances)) {
+        if (skipKeys.has(asset)) continue
+        const b = entry as any
+        const total = b?.total ?? 0
+        if (total > 0) balanceInfos.push({ asset, total, available: b?.free ?? 0 })
+      }
+
+      if (balanceInfos.length === 0) {
+        logger.warn({
+          msg: 'No balance entries returned by exchange',
+          function: 'OkxExchange.fetchBalancesSnapshot',
+          exchange: EXCHANGE_NAME,
+          exchangeId: this.exchangeId,
+        })
+      }
 
       logger.debug({
         msg: 'Fetched balance snapshot',
@@ -79,6 +98,7 @@ export class OkxExchange extends BaseExchange {
           unrealizedPnL: position.unrealizedPnl || 0,
           timestamp: position.timestamp || 0,
           date: new Date(position.timestamp || 0),
+          marketType: getMarketTypeFromUnifiedSymbol(position.symbol),
         })
       }
 
@@ -172,58 +192,55 @@ export class OkxExchange extends BaseExchange {
    */
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
-      if (!FUNDING_ENDPOINT) {
-        logger.error({
-          msg: 'No funding endpoint configured',
-          function: 'OkxExchange.fetchFundingData',
-          exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId,
-        })
-        return new Map()
-      }
+      const quotes = quoteCurrenciesFor(EXCHANGE_NAME)
+      const metadata = this.getMarketMetadataService()
 
-      const rawJson = await fetchJsonFromUrl(FUNDING_ENDPOINT)
+      // Fetch linear quotes + 'USD' for inverse perps (OKX coin-margined SWAPs use ccyType=USD)
+      const ccyTypes = [...new Set([...quotes, 'USD'])]
+      const rawResults = await Promise.all(
+        ccyTypes.map(q => fetchJsonFromUrl(`${FUNDING_BASE_URL}?ccyType=${q}`))
+      )
 
-      if (
-        !rawJson ||
-        !rawJson.data ||
-        !Array.isArray(rawJson.data) ||
-        !rawJson.data[0].fundingList ||
-        !Array.isArray(rawJson.data[0].fundingList)
-      ) {
-        logger.error({
-          msg: 'Invalid funding data structure received from OKX',
-          function: 'OkxExchange.fetchFundingData',
-          exchange: EXCHANGE_NAME,
-          exchangeId: this.exchangeId,
-        })
-        return new Map()
-      }
-
-      // Extract and filter USDT symbols
-      const usdtSymbolsFundingData: any[] = []
-      for (const item of rawJson.data[0].fundingList) {
-        if (!item.instId || !item.instId.endsWith('-USDT-SWAP')) {
+      const allFundingItems: any[] = []
+      for (const rawJson of rawResults) {
+        if (
+          !rawJson ||
+          !rawJson.data ||
+          !Array.isArray(rawJson.data) ||
+          !rawJson.data[0]?.fundingList ||
+          !Array.isArray(rawJson.data[0].fundingList)
+        ) {
           logger.warn({
-            msg: 'Invalid funding data symbol format',
+            msg: 'Invalid or empty funding data structure from OKX endpoint',
             function: 'OkxExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
             exchangeId: this.exchangeId,
-            instId: item.instId,
           })
           continue
         }
-
-        // OKX symbols are already in format like "BTC-USDT-SWAP", convert to "BTC/USDT:USDT"
-        usdtSymbolsFundingData.push({
-          ...item,
-          symbol: item.instId.replace('-USDT-SWAP', '/USDT:USDT'),
-        })
+        for (const item of rawJson.data[0].fundingList) {
+          if (!item.instId || !item.instId.endsWith('-SWAP')) continue
+          // Try LINEAR_PERP first, then INVERSE_PERP
+          const meta =
+            metadata.getMetadataByNativeId(item.instId, MarketType.LINEAR_PERP) ??
+            metadata.getMetadataByNativeId(item.instId, MarketType.INVERSE_PERP)
+          allFundingItems.push({
+            ...item,
+            symbol: meta?.symbol ?? (() => {
+              const parts = item.instId.split('-')
+              const base = parts[0]
+              const quote = parts[1]
+              // OKX inverse: BTC-USD-SWAP → BTC/USD:BTC
+              const settle = quote === 'USD' ? base : quote
+              return `${base}/${quote}:${settle}`
+            })(),
+          })
+        }
       }
 
       const fundingData = new Map<string, ParsedFunding>()
 
-      for (const item of usdtSymbolsFundingData) {
+      for (const item of allFundingItems) {
         // OKX provides fundingTime in milliseconds
         const fundingRate = parseFloat(item.fundingRate)
         const fundingInterval = parseInt(item.frequency)
@@ -270,7 +287,7 @@ export class OkxExchange extends BaseExchange {
         function: 'OkxExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        endpoint: FUNDING_ENDPOINT,
+        endpoint: FUNDING_BASE_URL,
         error,
       })
       return new Map()
