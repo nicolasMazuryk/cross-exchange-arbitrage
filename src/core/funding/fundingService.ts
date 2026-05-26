@@ -1,7 +1,6 @@
 import { EventEmitter } from 'events'
 import { MarketMetadataService } from '../markets/marketMetadataService'
 import { ParsedFunding } from './types'
-import { closeBrowser } from '../../utils/browser'
 import { RestClientInterface } from '../../adapters/rest/types'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
@@ -105,15 +104,6 @@ export class FundingService extends EventEmitter {
         clearInterval(this.fetchInterval)
         this.fetchInterval = undefined
       }
-
-      // Close browser resources
-      closeBrowser().catch(error => {
-        logger.error({
-          msg: 'Error closing browser resources during FundingService stop',
-          function: 'FundingService.stop',
-          error,
-        })
-      })
 
       logger.info({
         msg: 'FundingService stopped successfully',

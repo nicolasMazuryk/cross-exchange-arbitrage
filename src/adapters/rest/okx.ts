@@ -3,13 +3,11 @@ import { ExchangeConfig, ExchangeOrderParams } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { MarketType, OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
-import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getPositionSide, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
+import { getPositionSide, getMarketTypeFromUnifiedSymbol } from '../../utils/utils'
 
 const EXCHANGE_NAME = 'okx'
 const CCXT_EXCHANGE_NAME = 'okx'
-const FUNDING_BASE_URL = 'https://www.okx.com/priapi/v5/public/funding-rate-all'
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
@@ -185,92 +183,55 @@ export class OkxExchange extends BaseExchange {
     }
   }
 
-  /**
-   * Fetch funding data from OKX
-   * URL: https://www.okx.com/priapi/v5/public/funding-rate-all?ccyType=USDT
-   * Response structure: {"code":"0","data":[{"fundingTime":1757548800000,"fundingList":[{"instId":"BTC-USDT-SWAP","fundingRate":"0.0001000000000000","fundingTime":"1757548800000","frequency":"8"}]}]}
-   */
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
-      const quotes = quoteCurrenciesFor(EXCHANGE_NAME)
-      const metadata = this.getMarketMetadataService()
-
-      // Fetch linear quotes + 'USD' for inverse perps (OKX coin-margined SWAPs use ccyType=USD)
-      const ccyTypes = [...new Set([...quotes, 'USD'])]
-      const rawResults = await Promise.all(
-        ccyTypes.map(q => fetchJsonFromUrl(`${FUNDING_BASE_URL}?ccyType=${q}`))
-      )
-
-      const allFundingItems: any[] = []
-      for (const rawJson of rawResults) {
-        if (
-          !rawJson ||
-          !rawJson.data ||
-          !Array.isArray(rawJson.data) ||
-          !rawJson.data[0]?.fundingList ||
-          !Array.isArray(rawJson.data[0].fundingList)
-        ) {
-          logger.warn({
-            msg: 'Invalid or empty funding data structure from OKX endpoint',
-            function: 'OkxExchange.fetchFundingData',
-            exchange: EXCHANGE_NAME,
-            exchangeId: this.exchangeId,
-          })
-          continue
-        }
-        for (const item of rawJson.data[0].fundingList) {
-          if (!item.instId || !item.instId.endsWith('-SWAP')) continue
-          // Try LINEAR_PERP first, then INVERSE_PERP
-          const meta =
-            metadata.getMetadataByNativeId(item.instId, MarketType.LINEAR_PERP) ??
-            metadata.getMetadataByNativeId(item.instId, MarketType.INVERSE_PERP)
-          allFundingItems.push({
-            ...item,
-            symbol: meta?.symbol ?? (() => {
-              const parts = item.instId.split('-')
-              const base = parts[0]
-              const quote = parts[1]
-              // OKX inverse: BTC-USD-SWAP → BTC/USD:BTC
-              const settle = quote === 'USD' ? base : quote
-              return `${base}/${quote}:${settle}`
-            })(),
-          })
-        }
-      }
-
+      const allRates = await this.exchange.fetchFundingRates(undefined)
       const fundingData = new Map<string, ParsedFunding>()
 
-      for (const item of allFundingItems) {
-        // OKX provides fundingTime in milliseconds
-        const fundingRate = parseFloat(item.fundingRate)
-        const fundingInterval = parseInt(item.frequency)
-        const nextFundingTimestamp = parseInt(item.fundingTime)
-
-        if (isNaN(fundingRate) || !fundingInterval || !nextFundingTimestamp) {
+      for (const [symbol, rate] of Object.entries(allRates)) {
+        const r = rate as any
+        if (typeof r.fundingRate !== 'number' || isNaN(r.fundingRate) || !r.nextFundingTimestamp) {
           logger.warn({
-            msg: 'Invalid funding data values for symbol',
+            msg: 'Invalid or empty funding data structure. Skipping symbol',
             function: 'OkxExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
-            exchangeId: this.exchangeId,
-            symbol: item.symbol,
-            fundingRate: item.fundingRate,
-            fundingInterval: item.frequency,
-            nextFundingTime: item.fundingTime,
+            symbol,
+            fundingRate: r.fundingRate,
+            nextFundingTimestamp: r.nextFundingTimestamp,
           })
           continue
         }
 
-        const parsedFunding: ParsedFunding = {
-          exchange: EXCHANGE_NAME,
-          symbol: item.symbol,
-          fundingRate,
-          fundingRatePercent: fundingRate * 100,
-          fundingInterval,
-          nextFundingTimestamp,
-          nextFundingDatetime: new Date(nextFundingTimestamp),
+        if (!r.interval) {
+          logger.warn({
+            msg: 'No interval data for symbol, skipping',
+            function: 'OkxExchange.fetchFundingData',
+            exchange: EXCHANGE_NAME,
+            symbol,
+          })
+          continue
+        }
+        const fundingInterval = parseInt(r.interval)
+        if (isNaN(fundingInterval)) {
+          logger.warn({
+            msg: 'Invalid funding interval for symbol, skipping',
+            function: 'OkxExchange.fetchFundingData',
+            exchange: EXCHANGE_NAME,
+            symbol,
+            interval: r.interval,
+          })
+          continue
         }
 
-        fundingData.set(item.symbol, parsedFunding)
+        fundingData.set(symbol, {
+          exchange: EXCHANGE_NAME,
+          symbol,
+          fundingRate: r.fundingRate,
+          fundingRatePercent: r.fundingRate * 100,
+          fundingInterval,
+          nextFundingTimestamp: r.nextFundingTimestamp,
+          nextFundingDatetime: new Date(r.nextFundingDatetime ?? r.nextFundingTimestamp),
+        })
       }
 
       logger.debug({
@@ -287,7 +248,6 @@ export class OkxExchange extends BaseExchange {
         function: 'OkxExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        endpoint: FUNDING_BASE_URL,
         error,
       })
       return new Map()

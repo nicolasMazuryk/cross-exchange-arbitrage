@@ -55,6 +55,7 @@ exchanges:
     ignoredFundingSymbols:
       - "USDC/USDT:USDT"
       - "ETHBTC/USDT:USDT"
+      - "ETH/TRY"
   okx:
     maxStreamsPerConnection: 100 # new connection requests - 3/sec; Subscribe/unsubscribe/login messages per connection - 480/hour
     reconnectInterval: 5000

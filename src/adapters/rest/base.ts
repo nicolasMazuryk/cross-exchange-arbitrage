@@ -1,3 +1,4 @@
+import https from 'https'
 import ccxt, { Exchange, Market, Order, Dictionary, FundingHistory } from 'ccxt'
 import { ExchangeConfig, RestClientInterface, ExchangeOrderParams } from './types'
 import { MarketType } from '../../types/exchange'
@@ -34,7 +35,7 @@ export abstract class BaseExchange implements RestClientInterface {
       apiKey: config.apiKey,
       secret: config.apiSecret,
       password: config.apiPass,
-      agent: config.options?.agent,
+      agent: config.options?.agent ?? new https.Agent({ family: 4 }),
       options: {
         warnOnFetchOpenOrdersWithoutSymbol: false,
         ...config.options,
@@ -81,6 +82,7 @@ export abstract class BaseExchange implements RestClientInterface {
       const ignoredMarkets = exchangeCfg?.ignoredMarkets || []
       const enabledMarketTypes = exchangeCfg?.enabledMarketTypes
       const enabledQuoteCurrencies = exchangeCfg?.enabledQuoteCurrencies
+      const disabledQuoteCurrencies = new Set((exchangeCfg?.disabledQuoteCurrencies || []).map(q => q.toUpperCase()))
 
       return Object.fromEntries(
         Object.entries(this.getAllMarkets())
@@ -93,6 +95,7 @@ export abstract class BaseExchange implements RestClientInterface {
             if (!enabledQuoteCurrencies?.length) return true
             return enabledQuoteCurrencies.includes(market!.quote)
           })
+          .filter(([, market]) => !disabledQuoteCurrencies.has(market!.quote?.toUpperCase()))
           .filter(([symbol]) => !ignoredMarkets.includes(symbol))
       )
     } catch (error) {

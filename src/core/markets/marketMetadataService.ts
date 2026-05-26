@@ -259,13 +259,32 @@ export class MarketMetadataService {
     if (metadata.marketType === MarketType.INVERSE_PERP && markPrice !== undefined && markPrice > 0) {
       const scaledBase = normalizedAmount / priceScale
       const contractAmount = (scaledBase * markPrice) / metadata.contractSize
-      return this.roundAmount(contractAmount, symbol)
+      return this.roundAmountDown(contractAmount, symbol)
     }
 
     // Linear / spot: contracts = base / contractSize
     const scaledAmount = normalizedAmount / priceScale
     const contractAmount = scaledAmount / metadata.contractSize
-    return this.roundAmount(contractAmount, symbol)
+    return this.roundAmountDown(contractAmount, symbol)
+  }
+
+  public getAmountPrecision(symbol: string): number {
+    const meta = this.getMetadata(symbol)
+    if (!meta) throw new Error(`No metadata for ${symbol}`)
+    return meta.amountPrecision
+  }
+
+  public getMinAmount(symbol: string): number | undefined {
+    return this.getMetadata(symbol)?.minAmount
+  }
+
+  public roundAmountDown(amount: number, symbol: string): number {
+    const meta = this.getMetadata(symbol)
+    if (!meta) throw new Error(`No metadata for ${symbol}`)
+    const p = meta.amountPrecision
+    const rounded = Math.floor(amount / p) * p
+    const decimals = p.toString().split('.')[1]?.length || 0
+    return Number(rounded.toFixed(decimals))
   }
 
   /**

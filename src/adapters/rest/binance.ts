@@ -4,13 +4,11 @@ import { ExchangeConfig } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { MarketType, OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
-import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getPositionSide, positionId, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
+import { getPositionSide, positionId, getMarketTypeFromUnifiedSymbol } from '../../utils/utils'
 import appConfig from '../../utils/config'
 
 const EXCHANGE_NAME = 'binance'
-const FUNDING_ENDPOINT = 'https://www.binance.com/bapi/futures/v1/public/future/common/get-funding-info'
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
@@ -249,95 +247,56 @@ export class BinanceExchange extends BaseExchange {
 
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
-      if (!FUNDING_ENDPOINT) {
-        logger.error({
-          msg: 'No funding endpoint configured',
-          function: 'BinanceExchange.fetchFundingData',
-          exchange: EXCHANGE_NAME,
-        })
-        return new Map()
-      }
-
-      const [rawJson, linearFundingRates, inverseFundingRates] = await Promise.all([
-        fetchJsonFromUrl(FUNDING_ENDPOINT),
+      const [linearRates, linearIntervals, inverseRates, inverseIntervals] = await Promise.all([
         this.linearCcxt.fetchFundingRates(undefined, { subType: 'linear' }),
+        this.linearCcxt.fetchFundingIntervals(undefined, { subType: 'linear' }),
         this.inverseCcxt.fetchFundingRates(undefined, { subType: 'inverse' }),
+        this.inverseCcxt.fetchFundingIntervals(undefined, { subType: 'inverse' }),
       ])
 
-      if (!rawJson || !rawJson.data || !Array.isArray(rawJson.data)) {
-        logger.error({
-          msg: 'Invalid funding data structure received from exchange',
-          function: 'BinanceExchange.fetchFundingData',
-          exchange: EXCHANGE_NAME,
-        })
-        return new Map()
+      const intervalMap = new Map<string, number>()
+      for (const [sym, data] of Object.entries({ ...linearIntervals, ...inverseIntervals })) {
+        const hours = (data as any)?.info?.fundingIntervalHours
+        if (typeof hours === 'number') intervalMap.set(sym, hours)
       }
 
-      const ccxtFundingRates = { ...linearFundingRates, ...inverseFundingRates }
-      const enabledQuotes = quoteCurrenciesFor(EXCHANGE_NAME)
-      const metadata = this.getMarketMetadataService()
-      const symbolsIntervalData = rawJson.data
-        .filter((item: any) => {
-          if (!item.symbol || item.fundingIntervalHours === undefined) return false
-          if (enabledQuotes.some((q: string) => item.symbol.endsWith(q))) return true
-          if (metadata.getMetadataByNativeId(item.symbol, MarketType.INVERSE_PERP)) return true
-          return false
-        })
-        .flatMap((item: any) => {
-          const linearMeta = metadata.getMetadataByNativeId(item.symbol, MarketType.LINEAR_PERP)
-          if (linearMeta) return [{ ...item, symbol: linearMeta.symbol }]
-          const inverseMeta = metadata.getMetadataByNativeId(item.symbol, MarketType.INVERSE_PERP)
-          if (inverseMeta) return [{ ...item, symbol: inverseMeta.symbol }]
-          const quote = enabledQuotes.find((q: string) => item.symbol.endsWith(q))
-          if (!quote) {
-            logger.warn({
-              msg: 'Unknown funding symbol, no enabled quote suffix match, skipping',
-              function: 'BinanceExchange.fetchFundingData',
-              exchange: EXCHANGE_NAME,
-              nativeSymbol: item.symbol,
-              enabledQuotes,
-            })
-            return []
-          }
-          const base = item.symbol.slice(0, -quote.length)
-          return [{ ...item, symbol: `${base}/${quote}:${quote}` }]
-        })
-
+      const allRates = { ...linearRates, ...inverseRates }
       const fundingData = new Map<string, ParsedFunding>()
 
-      for (const item of symbolsIntervalData) {
-        const ccxtFundingData = ccxtFundingRates[item.symbol]
-
-        if (
-          !ccxtFundingData ||
-          typeof ccxtFundingData.fundingRate !== 'number' ||
-          isNaN(ccxtFundingData.fundingRate) ||
-          !ccxtFundingData.fundingTimestamp ||
-          !ccxtFundingData.fundingDatetime
-        ) {
+      for (const [symbol, rate] of Object.entries(allRates)) {
+        const r = rate as any
+        if (typeof r.fundingRate !== 'number' || isNaN(r.fundingRate) || !r.fundingTimestamp) {
           logger.warn({
-            msg: 'Invalid funding data values for symbol',
+            msg: 'Skipping symbol with invalid funding data',
             function: 'BinanceExchange.fetchFundingData',
             exchange: EXCHANGE_NAME,
-            symbol: item.symbol,
-            hasCcxtData: !!ccxtFundingData,
-            fundingRate: ccxtFundingData?.fundingRate,
-            fundingTimestamp: ccxtFundingData?.fundingTimestamp,
+            symbol,
+            fundingRate: r.fundingRate,
+            fundingTimestamp: r.fundingTimestamp,
           })
           continue
         }
 
-        const parsedFunding: ParsedFunding = {
-          exchange: EXCHANGE_NAME,
-          symbol: item.symbol,
-          fundingRate: ccxtFundingData.fundingRate,
-          fundingRatePercent: ccxtFundingData.fundingRate * 100,
-          fundingInterval: item.fundingIntervalHours,
-          nextFundingTimestamp: ccxtFundingData.fundingTimestamp,
-          nextFundingDatetime: new Date(ccxtFundingData.fundingDatetime),
+        let fundingInterval = intervalMap.get(symbol)
+        if (fundingInterval === undefined) {
+          logger.warn({
+            msg: 'No interval data for symbol, defaulting to 8h',
+            function: 'BinanceExchange.fetchFundingData',
+            exchange: EXCHANGE_NAME,
+            symbol,
+          })
+          fundingInterval = 8
         }
 
-        fundingData.set(item.symbol, parsedFunding)
+        fundingData.set(symbol, {
+          exchange: EXCHANGE_NAME,
+          symbol,
+          fundingRate: r.fundingRate,
+          fundingRatePercent: r.fundingRate * 100,
+          fundingInterval,
+          nextFundingTimestamp: r.fundingTimestamp,
+          nextFundingDatetime: new Date(r.fundingDatetime ?? r.fundingTimestamp),
+        })
       }
 
       logger.debug({
@@ -352,7 +311,6 @@ export class BinanceExchange extends BaseExchange {
         msg: 'Failed to fetch funding data from exchange',
         function: 'BinanceExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
-        endpoint: FUNDING_ENDPOINT,
         error,
       })
       return new Map()

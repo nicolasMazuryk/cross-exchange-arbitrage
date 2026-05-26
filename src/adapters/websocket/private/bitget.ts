@@ -13,7 +13,7 @@ function bitgetInstTypeToMarketType(instType: string): MarketType {
   const upper = instType.toUpperCase()
   if (upper === 'SPOT') return MarketType.SPOT
   if (upper === 'COIN-FUTURES' || upper === 'DMCBL' || upper === 'COIN_FUTURES') return MarketType.INVERSE_PERP
-  if (upper === 'USDT-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES') return MarketType.LINEAR_PERP
+  if (upper === 'USDT-FUTURES' || upper === 'USDC-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES' || upper === 'USDC_FUTURES') return MarketType.LINEAR_PERP
   throw new Error(`unknown bitget instType: ${instType}`)
 }
 
@@ -21,7 +21,7 @@ function bitgetInstTypeToQuote(instType: string): string | undefined {
   const upper = instType.toUpperCase()
   if (upper === 'COIN-FUTURES' || upper === 'DMCBL' || upper === 'COIN_FUTURES') return 'USD'
   if (upper === 'USDT-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES') return 'USDT'
-  if (upper === 'SUSDC-FUTURES') return 'USDC'
+  if (upper === 'USDC-FUTURES' || upper === 'USDC_FUTURES') return 'USDC'
   return undefined
 }
 
@@ -133,23 +133,23 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
     this.client.subscribeTopic('SPOT' as any, 'account', 'default')
 
     // Derive perp instTypes from config: use BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE for linear, COIN-FUTURES for inverse
-    const enabledQuotes = quoteCurrenciesFor('bitget')
+    const enabledQuotes = new Set(quoteCurrenciesFor('bitget'))
     const enabledMarketTypes = appConfig.exchanges.bitget.enabledMarketTypes
     const perpInstTypes: string[] = []
-    for (const quote of enabledQuotes) {
-      const productType = BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE[quote]
-      if (productType && !perpInstTypes.includes(productType)) {
+    for (const [quote, productType] of Object.entries(BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE)) {
+      if (enabledQuotes.has(quote) && !perpInstTypes.includes(productType)) {
         perpInstTypes.push(productType)
-      } else if (!productType) {
-        logger.warn({
-          msg: 'No Bitget linear instType mapping for quote, skipping subscription',
-          function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
-          quote,
-        })
       }
     }
     if (!enabledMarketTypes || enabledMarketTypes.includes(MarketType.INVERSE_PERP)) {
       perpInstTypes.push('COIN-FUTURES')
+    } else {
+      logger.warn({
+        msg: 'Skipping COIN-FUTURES subscription: INVERSE_PERP not in enabledMarketTypes',
+        function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
+        exchange: this.exchangeName,
+        enabledMarketTypes,
+      })
     }
 
     for (const instType of perpInstTypes) {

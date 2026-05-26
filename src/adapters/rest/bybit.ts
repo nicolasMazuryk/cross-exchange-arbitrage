@@ -3,16 +3,13 @@ import { ExchangeConfig } from './types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../types/account'
 import { MarketType, OrderSide, OrderType, OrderStatus, PositionSide } from '../../types/exchange'
 import { ParsedFunding } from '../../core/funding/types'
-import { fetchJsonFromUrl } from '../../utils/browser'
 import { Logger } from '../../utils/logger'
-import { getPositionSide, positionId, getMarketTypeFromUnifiedSymbol, quoteCurrenciesFor } from '../../utils/utils'
+import { getPositionSide, positionId, getMarketTypeFromUnifiedSymbol } from '../../utils/utils'
 import appConfig from '../../utils/config'
 import { FundingHistory } from 'ccxt'
 
 const EXCHANGE_NAME = 'bybit'
 const CCXT_EXCHANGE_NAME = 'bybit'
-const FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual'
-const INVERSE_FUNDING_ENDPOINT = 'https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=InversePerpetual'
 
 const logger = new Logger(`rest-${EXCHANGE_NAME}`)
 
@@ -187,85 +184,75 @@ export class BybitExchange extends BaseExchange {
     }
   }
 
-  /**
-   * Fetch funding data from Bybit
-   * URL: https://www.bybit.com/x-api/contract/v5/public/support/trading-param?category=LinearPerpetual
-   * Response structure: {"ret_code":0,"ret_msg":"success","result":{"list":[{"symbol":2219,"contractType":"LinearPerpetual","symbolName":"XDCUSDT","fundingRateInterval":"4","nextFundingTimeE0":"1757534400","interestRate":"0.0003","predictedFundingRate":"0.005"}]}}
-   */
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
-      const [linearJson, inverseJson] = await Promise.all([
-        fetchJsonFromUrl(FUNDING_ENDPOINT),
-        fetchJsonFromUrl(INVERSE_FUNDING_ENDPOINT),
+      const ex = this.exchange as any
+
+      const fetchAllInstruments = async (category: string): Promise<any[]> => {
+        const items: any[] = []
+        let cursor = ''
+        do {
+          const resp = await ex.publicGetV5MarketInstrumentsInfo({ category, limit: 1000, ...(cursor ? { cursor } : {}) })
+          items.push(...(resp?.result?.list ?? []))
+          cursor = resp?.result?.nextPageCursor ?? ''
+        } while (cursor)
+        return items
+      }
+
+      const [linearRates, inverseRates, linearInstr, inverseInstr] = await Promise.all([
+        this.exchange.fetchFundingRates(undefined, { subType: 'linear' }),
+        this.exchange.fetchFundingRates(undefined, { subType: 'inverse' }),
+        fetchAllInstruments('linear'),
+        fetchAllInstruments('inverse'),
       ])
 
-      const enabledQuotes = quoteCurrenciesFor(EXCHANGE_NAME)
-      const metadata = this.getMarketMetadataService()
+      // Build live interval map: native symbol → hours. fundingInterval from API is in minutes.
+      const liveIntervals = new Map<string, number>()
+      for (const item of [...linearInstr, ...inverseInstr]) {
+        const mins = parseInt(item.fundingInterval)
+        if (item.symbol && !isNaN(mins) && mins > 0) liveIntervals.set(item.symbol, Math.round(mins / 60))
+      }
 
       const ignoredFunding = appConfig.exchanges.bybit.ignoredFundingSymbols ?? []
-
-      const linearItems: any[] = (linearJson?.result?.list ?? [])
-        .filter((item: any) => item.symbolName && enabledQuotes.some((q: string) => item.symbolName.endsWith(q)))
-        .flatMap((item: any) => {
-          const meta = metadata.getMetadataByNativeId(item.symbolName, MarketType.LINEAR_PERP)
-          if (meta) return [{ ...item, symbol: meta.symbol }]
-          const quote = enabledQuotes.find((q: string) => item.symbolName.endsWith(q))
-          if (!quote) {
-            logger.warn({
-              msg: 'Unknown funding symbol, no enabled quote suffix match, skipping',
-              function: 'BybitExchange.fetchFundingData',
-              exchange: EXCHANGE_NAME,
-              symbolName: item.symbolName,
-              enabledQuotes,
-            })
-            return []
-          }
-          const base = item.symbolName.slice(0, -quote.length)
-          return [{ ...item, symbol: `${base}/${quote}:${quote}` }]
-        })
-        .filter((item: any) => !ignoredFunding.includes(item.symbol))
-
-      const inverseItems: any[] = (inverseJson?.result?.list ?? [])
-        .map((item: any) => {
-          if (!item.symbolName) return null
-          const meta = metadata.getMetadataByNativeId(item.symbolName, MarketType.INVERSE_PERP)
-          if (!meta) return null
-          return { ...item, symbol: meta.symbol }
-        })
-        .filter(Boolean)
-
-      const symbolsFundingData = [...linearItems, ...inverseItems]
-
+      const allRates = { ...linearRates, ...inverseRates }
       const fundingData = new Map<string, ParsedFunding>()
 
-      for (const item of symbolsFundingData) {
-        // Bybit provides nextFundingTimeE0 in seconds, convert to milliseconds
-        const fundingRate = parseFloat(item.predictedFundingRate)
-        const fundingInterval = parseInt(item.fundingRateInterval)
-        const nextFundingTimestamp = parseInt(item.nextFundingTimeE0) * 1000
-
-        if (isNaN(fundingRate) || !fundingInterval || !nextFundingTimestamp) {
-          // logger.warn({ msg: 'Invalid funding data values for symbol', function: 'BybitExchange.fetchFundingData',
-          //   exchange: EXCHANGE_NAME,
-          //   exchangeId: this.exchangeId,
-          //   symbol: item.symbol,
-          //   fundingRate: item.predictedFundingRate,
-          //   fundingInterval: item.fundingRateInterval,
-          //   nextFundingTime: item.nextFundingTimeE0 })
+      for (const [symbol, rate] of Object.entries(allRates)) {
+        if (ignoredFunding.includes(symbol)) continue
+        const r = rate as any
+        if (typeof r.fundingRate !== 'number' || isNaN(r.fundingRate) || !r.fundingTimestamp) {
+          logger.warn({
+            msg: 'Skipping symbol with invalid funding data',
+            function: 'BybitExchange.fetchFundingData',
+            exchange: EXCHANGE_NAME,
+            symbol,
+            fundingRate: r.fundingRate,
+            fundingTimestamp: r.fundingTimestamp,
+          })
           continue
         }
 
-        const parsedFunding: ParsedFunding = {
-          exchange: EXCHANGE_NAME,
-          symbol: item.symbol,
-          fundingRate: fundingRate / 100,
-          fundingRatePercent: fundingRate,
-          fundingInterval,
-          nextFundingTimestamp,
-          nextFundingDatetime: new Date(nextFundingTimestamp),
+        const nativeSymbol: string = r.info?.symbol
+        const fundingInterval = nativeSymbol ? liveIntervals.get(nativeSymbol) : undefined
+        if (fundingInterval === undefined) {
+          logger.warn({
+            msg: 'No interval data for symbol, skipping',
+            function: 'BybitExchange.fetchFundingData',
+            exchange: EXCHANGE_NAME,
+            symbol,
+          })
+          continue
         }
 
-        fundingData.set(item.symbol, parsedFunding)
+        fundingData.set(symbol, {
+          exchange: EXCHANGE_NAME,
+          symbol,
+          fundingRate: r.fundingRate,
+          fundingRatePercent: r.fundingRate * 100,
+          fundingInterval,
+          nextFundingTimestamp: r.fundingTimestamp,
+          nextFundingDatetime: new Date(r.fundingDatetime ?? r.fundingTimestamp),
+        })
       }
 
       logger.debug({
@@ -282,7 +269,6 @@ export class BybitExchange extends BaseExchange {
         function: 'BybitExchange.fetchFundingData',
         exchange: EXCHANGE_NAME,
         exchangeId: this.exchangeId,
-        endpoint: FUNDING_ENDPOINT,
         error,
       })
       return new Map()

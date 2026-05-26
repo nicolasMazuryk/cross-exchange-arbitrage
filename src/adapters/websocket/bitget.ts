@@ -174,7 +174,7 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
       }
     } else if (batch.marketType === MarketType.LINEAR_PERP) {
       for (const symbol of batch.symbols) {
-        const instType = symbol.endsWith('USDC') ? 'SUSDC-FUTURES' : 'USDT-FUTURES'
+        const instType = symbol.endsWith('USDC') ? 'USDC-FUTURES' : 'USDT-FUTURES'
         batch.client.subscribeTopic(instType, 'books5', symbol)
       }
     } else {
