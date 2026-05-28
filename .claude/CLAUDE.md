@@ -115,29 +115,6 @@ npm run push:ecr          # Push Docker images to AWS ECR
 2. Exchange API keys in `.env` file (see environment variables below)
 3. `npm start` to run
 
-## Runtime Debugging (mcp-debugger MCP server)
-
-**When to use it.** Reach for `mcp__mcp-debugger__*` whenever the question is *"what is the runtime value of X?"* and reading the source can't answer it: in-memory orderbook snapshots, account-state Maps, closure variables in async chains, the actual error chain when a catch re-throws, any runtime state. The source tells you the shape; the debugger tells you the value.
-
-**Agent workflow:**
-
-1. Start `npm run debug` in the background (use your background-tool).
-2. Create a session and attach to the inspector:
-   ```
-   create_debug_session({ language: 'javascript' })
-   attach_to_process({ sessionId, host: '127.0.0.1', port: 9229 })
-   ```
-3. While paused at entry, set breakpoints against `.ts` source — sourcemaps translate them:
-   ```
-   set_breakpoint({ sessionId, file: '<repo>/src/core/.../foo.ts', line: 42 })
-   ```
-4. `continue_execution`. Poll `list_debug_sessions` until `state` flips `running` → `paused`. Orchestrator init takes ~15–25s, so non-init breakpoints don't fire instantly.
-5. Inspect: `get_stack_trace`, `get_local_variables`, `get_variables`, `evaluate_expression`. Use `evaluate_expression` to JSON-stringify nested Maps/Sets that `get_variables` truncates.
-6. `continue_execution`, `close_debug_session`, kill the background process.
-
-**Tool capabilities to explore** (call schemas via `ToolSearch` when needed): `set_breakpoint`, `list_threads`, `get_stack_trace`, `get_scopes`, `get_variables`, `get_local_variables`, `evaluate_expression`, `get_source_context`, `step_over`, `step_into`, `step_out`, `pause_execution`, `continue_execution`, `redefine_classes`.
-
-**If breakpoints stay unbound:** `dist/` is stale relative to `src/`. Re-run `npm run debug` after any `.ts` edit — line numbers in the sourcemap must match current source.
 
 ## Architecture Patterns
 
@@ -262,3 +239,66 @@ Jest is configured (`jest.config.js`) but no test files exist yet. When adding t
 5. Add exchange config to YAML files (`config/*.yaml`) and `Config` interface in `src/utils/config.ts`
 6. Register in orchestrator's initialization pipeline
 7. Export from barrel `index.ts` files
+
+
+## Runtime Verification Protocol
+
+A task is NOT complete when the code is written. It is complete when you have
+OBSERVED it behaving correctly at runtime. Follow this loop for every change:
+
+1. IDENTIFY the observable behavior. What should happen at runtime? What are the
+   inputs, outputs, side effects, and state transitions?
+
+2. ENUMERATE the input space before testing:
+   - Happy path values
+   - Boundary values (0, -1, empty, max, off-by-one neighbors)
+   - Null/undefined/NaN/empty-string
+   - Malformed or unexpected types
+   - Concurrent / out-of-order conditions where relevant
+   Write these down explicitly as a list before you run anything.
+
+3. INSTRUMENT. Add temporary logging that prints REAL values (not your guesses)
+   at every decision point and state mutation. Prefix temp logs with `// TEMP-VERIFY`
+   so they're easy to grep and remove. In addition, use
+   Runtime Debugging via the mcp-debugger MCP server (`mcp__mcp-debugger__*` —
+   see the **Runtime Debugging** section below) to set breakpoints, inspect live
+   variable values, and mutate state mid-execution without editing source.
+
+4. EXECUTE against every case from step 2. Capture real output.
+
+5. COMPARE observed vs. expected. If they differ, the code is wrong OR your
+   mental model is wrong — investigate which before changing anything.
+
+6. CLEAN UP all `// TEMP-VERIFY` instrumentation once verified, then state which
+   cases you actually ran and what you observed.
+
+Never write "this should work" — write "I ran X, observed Y, which matches Z".
+
+
+## Runtime Debugging (mcp-debugger MCP server)
+
+**When to use runtime debugging (mcp-debugger MCP server).** Reach for `mcp__mcp-debugger__*` whenever the question is *"what is the runtime value of X?"* and reading the source can't answer it: in-memory orderbook snapshots, account-state Maps, closure variables in async chains, the actual error chain when a catch re-throws, any runtime state. The source tells you the shape; the debugger tells you the value. Use it to verify the code works as expected at runtime:
+
+- see real variable values
+- identify all possible values and the edge cases that may derive from these values downstream
+- change variables' value and continue execution in order to emulate, simulate, and trigger specific downstream workflows — to verify specific cases and scenarios (status changes, failure paths, etc.)
+
+**Agent workflow:**
+
+1. Start `npm run debug` in the background (use your background-tool).
+2. Create a session and attach to the inspector:
+   ```
+   create_debug_session({ language: 'javascript' })
+   attach_to_process({ sessionId, host: '127.0.0.1', port: 9229 })
+   ```
+3. While paused at entry, set breakpoints against `.ts` source — sourcemaps translate them:
+   ```
+   set_breakpoint({ sessionId, file: '<repo>/src/core/.../foo.ts', line: 42 })
+   ```
+4. `continue_execution`. Poll `list_debug_sessions` until `state` flips `running` → `paused`. Orchestrator init takes ~15–25s, so non-init breakpoints don't fire instantly.
+5. Inspect: `get_stack_trace`, `get_local_variables`, `get_variables`, `evaluate_expression`. Use `evaluate_expression` to JSON-stringify nested Maps/Sets that `get_variables` truncates.
+6. `continue_execution`, `close_debug_session`, kill the background process.
+
+**Tool capabilities to explore** (call schemas via `ToolSearch` when needed): `set_breakpoint`, `list_threads`, `get_stack_trace`, `get_scopes`, `get_variables`, `get_local_variables`, `evaluate_expression`, `get_source_context`, `step_over`, `step_into`, `step_out`, `pause_execution`, `continue_execution`, `redefine_classes`.
+
+**If breakpoints stay unbound:** `dist/` is stale relative to `src/`. Re-run `npm run debug` after any `.ts` edit — line numbers in the sourcemap must match current source.
