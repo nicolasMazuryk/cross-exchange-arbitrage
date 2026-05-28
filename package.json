@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "ts-node src/main.ts",
+    "debug": "tsc && node --inspect-brk=127.0.0.1:9229 --enable-source-maps dist/main.js",
     "build": "tsc",
     "test": "jest",
     "lint": "eslint . --ext .ts",

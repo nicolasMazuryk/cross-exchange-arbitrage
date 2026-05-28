@@ -97,6 +97,7 @@ Strategy is selected via the `STRATEGY` environment variable and corresponding Y
 ```bash
 # Development
 npm start                 # Run app with ts-node (uses config/development.yaml)
+npm run debug             # Compile to dist/ and launch with Node Inspector paused at entry (port 9229)
 npm run build             # Compile TypeScript to dist/
 npm run lint              # ESLint check
 npm run format            # Prettier auto-format src/**/*.ts
@@ -113,6 +114,30 @@ npm run push:ecr          # Push Docker images to AWS ECR
 1. Redis running (`npm run docker:up`)
 2. Exchange API keys in `.env` file (see environment variables below)
 3. `npm start` to run
+
+## Runtime Debugging (mcp-debugger MCP server)
+
+**When to use it.** Reach for `mcp__mcp-debugger__*` whenever the question is *"what is the runtime value of X?"* and reading the source can't answer it: in-memory orderbook snapshots, account-state Maps, closure variables in async chains, the actual error chain when a catch re-throws, any runtime state. The source tells you the shape; the debugger tells you the value.
+
+**Agent workflow:**
+
+1. Start `npm run debug` in the background (use your background-tool).
+2. Create a session and attach to the inspector:
+   ```
+   create_debug_session({ language: 'javascript' })
+   attach_to_process({ sessionId, host: '127.0.0.1', port: 9229 })
+   ```
+3. While paused at entry, set breakpoints against `.ts` source — sourcemaps translate them:
+   ```
+   set_breakpoint({ sessionId, file: '<repo>/src/core/.../foo.ts', line: 42 })
+   ```
+4. `continue_execution`. Poll `list_debug_sessions` until `state` flips `running` → `paused`. Orchestrator init takes ~15–25s, so non-init breakpoints don't fire instantly.
+5. Inspect: `get_stack_trace`, `get_local_variables`, `get_variables`, `evaluate_expression`. Use `evaluate_expression` to JSON-stringify nested Maps/Sets that `get_variables` truncates.
+6. `continue_execution`, `close_debug_session`, kill the background process.
+
+**Tool capabilities to explore** (call schemas via `ToolSearch` when needed): `set_breakpoint`, `list_threads`, `get_stack_trace`, `get_scopes`, `get_variables`, `get_local_variables`, `evaluate_expression`, `get_source_context`, `step_over`, `step_into`, `step_out`, `pause_execution`, `continue_execution`, `redefine_classes`.
+
+**If breakpoints stay unbound:** `dist/` is stale relative to `src/`. Re-run `npm run debug` after any `.ts` edit — line numbers in the sourcemap must match current source.
 
 ## Architecture Patterns
 
