@@ -1,6 +1,6 @@
 # CLAUDE.md — ArbiNet Codebase Guide
 
-IMPORTANT: Always read: [Agent Workflow](./agent-workflow.md)
+IMPORTANT: Always read: [Agent Workflow](./.claude/agent-workflow.md)
 
 ## Project Overview
 
@@ -14,9 +14,10 @@ ArbiNet = automated crypto arbitrage system. Monitors real-time orderbooks acros
 ## Tech Stack
 
 - **Runtime:** Node.js v22.12, TypeScript 5.3 (strict, ES2020, CommonJS)
-- **Exchange API:** CCXT v4.4 (unified REST) + native SDKs (binance, bybit-api, okx-api, bitget-api)
+- **Exchange API:** CCXT v4.5 (unified REST) + native SDKs (binance, bybit-api, okx-api, bitget-api)
+- **Logging:** pino (`src/utils/logger.ts` wraps it; pino-pretty for dev)
 - **Config:** YAML + dotenv for env vars
-- **Infrastructure:** Docker, Terraform
+- **Infrastructure:** Docker. Orderbook and spread data pipeline: Redpanda (Kafka-compatible) + ClickHouse
 
 ## Commands
 
@@ -29,14 +30,14 @@ npm run lint              # ESLint check
 npm run format            # Prettier auto-format src/**/*.ts
 
 # Infrastructure
-npm run docker:up         # Start Redis container (docker-compose)
-npm run docker:down       # Stop containers
-npm run terraform         # Deploy AWS infrastructure
+npm run docker:dev:up     # Start dev data pipeline (Redpanda, ClickHouse, trader, query-api, arbinet)
+npm run docker:dev:down   # Stop dev stack
+npm run docker:dev:logs   # Tail trader + query-api logs
 npm run push:ecr          # Push Docker images to AWS ECR
 ```
 
 **Local dev needs:**
-1. Redis running (`npm run docker:up`)
+1. Redis running (used for state + distributed locks)
 2. Exchange API keys in `.env` (see env vars below)
 3. `npm start` to run
 
@@ -59,6 +60,13 @@ npm run push:ecr          # Push Docker images to AWS ECR
   - `production` → `config/${STRATEGY}.production.yaml`
 - Env vars override API keys (never in YAML)
 - Typed via `Config` interface in `src/utils/config.ts`
+
+### Orderbook & Spread Data Pipeline (dev stack: `docker-compose.dev.yml`)
+- **Redpanda** — Kafka-compatible stream for orderbook/event ingest
+- **ClickHouse** — analytics store (config in `infra/clickhouse/`)
+- **trader** — runs the arbitrage/execution app
+- **query-api** — serves queries over stored data
+- Single-process local dev still uses `npm start` + Redis.
 
 ## Code Conventions
 
@@ -137,21 +145,6 @@ Task NOT complete when code written. Do not claim something works until you have
 6. CLEAN UP all `// TEMP-VERIFY` instrumentation once verified, then state which cases ran and what observed.
 
 Never write "this should work" — write "I ran X, observed Y, matches Z".
-
-
-## Failure Path Testing
-
-Exercise the failure paths. This is where Node.js code breaks most, because the happy path always looks fine.
-
-Make dependencies misbehave: `vi.mock` stubs to throw or return partial data; `nock` and MSW to intercept HTTP and return 500s, malformed JSON, or hung sockets; `toxiproxy` (`toxiproxy-node-client`) for real latency, bandwidth limits, and dropped connections.
-
-Cases to force in this codebase:
-- Exchange REST: 5xx, 429 rate limit, malformed JSON body, socket hang up mid-response, request timeout.
-- WebSocket: disconnect mid-stream, out-of-order seq numbers, missing snapshot before delta, duplicate messages, ping/pong stall.
-- Orderbook: empty bids/asks side, crossed book, zero-size level, NaN price from upstream.
-- Trade exec: partial fill, immediate cancel, leg-1 fills + leg-2 rejected (hedge break).
-
-Verify the catch path, not just that catch exists: log fields populated, state rolled back, no orphan resources, retries bounded.
 
 
 ## Runtime Debugging (mcp-debugger MCP server)

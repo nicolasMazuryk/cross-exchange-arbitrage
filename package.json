@@ -10,12 +10,13 @@
     "start": "ts-node src/main.ts",
     "debug": "tsc && node --inspect-brk=127.0.0.1:9229 --enable-source-maps dist/main.js",
     "build": "tsc",
-    "test": "jest",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "terraform": "cd terraform && terraform apply",
+    "docker:dev:up": "docker compose -f docker-compose.dev.yml up -d",
+    "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
+    "docker:dev:logs": "docker compose -f docker-compose.dev.yml logs -f trader query-api",
     "push:ecr": "bash docker/push-to-ecr.sh"
   },
   "dependencies": {
@@ -36,14 +37,11 @@
   },
   "devDependencies": {
     "@types/cron": "^2.0.1",
-    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.24",
     "@typescript-eslint/eslint-plugin": "^7.1.0",
     "@typescript-eslint/parser": "^7.1.0",
     "eslint": "^8.57.0",
-    "jest": "^29.7.0",
     "prettier": "^3.2.5",
-    "ts-jest": "^29.1.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }

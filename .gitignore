@@ -35,3 +35,5 @@ coverage/
 redis-data/ 
 redis-dump/
 redis-dump-archive/
+# Local dev datapipeline
+.dev-data/
