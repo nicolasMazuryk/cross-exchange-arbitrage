@@ -1,0 +1,131 @@
+---
+# role_obs — observability backend stack config (task 07). Source of truth for
+# image pins, ports, retention, mem caps and data-dir UIDs; per-backend role
+# defaults mirror these and are overridden here. Backends bind the PRIVATE IP
+# only ({{ hcloud_private_ipv4 }} == 10.0.1.30) and sit behind fw-obs (no public
+# ports). Scrape configs / datasources / alert rules / dashboards = task 14.
+
+# --- Stack layout ----------------------------------------------------------
+obs_data_root: /mnt/obs-data        # mount target for the attached 40 GB HC Volume
+obs_stack_dir: /opt/obs-stack       # root compose project ({services,config}/)
+obs_network_name: obs               # shared compose bridge network
+
+# Convenience alias — the private-net listener address every backend publishes on.
+obs_bind_ip: "{{ hcloud_private_ipv4 }}"
+
+# --- Image pins (exact stable; resolved from registry at task-07 impl) -----
+# prometheus v3.12.0 | loki 3.7.2 | tempo 2.10.5 | pyroscope 2.0.2
+# alertmanager v0.32.1 | grafana 13.0.2 | glitchtip 6.1.6 | pg 16.14 | redis 7.4
+prometheus_image: prom/prometheus:v3.12.0
+loki_image: grafana/loki:3.7.2
+tempo_image: grafana/tempo:2.10.5
+pyroscope_image: grafana/pyroscope:2.0.2
+alertmanager_image: prom/alertmanager:v0.32.1
+grafana_image: grafana/grafana:13.0.2
+glitchtip_image: glitchtip/glitchtip:6.1.6
+glitchtip_postgres_image: postgres:16.14-alpine
+glitchtip_redis_image: redis:7.4-alpine
+
+# --- Ports (published on obs_bind_ip only) ---------------------------------
+prometheus_port: 9090
+loki_port: 3100
+tempo_otlp_grpc_port: 4317
+tempo_otlp_http_port: 4318
+pyroscope_port: 4040
+alertmanager_port: 9093
+grafana_port: 3000
+glitchtip_port: 8000
+
+# --- Retention (matches spec 05/06) ----------------------------------------
+prometheus_retention_time: 15d
+loki_retention_period: 168h         # 7d
+tempo_block_retention: 72h          # 3d
+pyroscope_retention_period: 168h    # 7d  (limits.compactor_blocks_retention_period)
+glitchtip_max_event_life_days: 30
+
+# --- Memory caps (matches sizing table 06; obs box = 16 GB) ----------------
+prometheus_mem_limit: 2g
+loki_mem_limit: 1536m
+tempo_mem_limit: 1g
+pyroscope_mem_limit: 1536m
+alertmanager_mem_limit: 256m
+grafana_mem_limit: 512m
+glitchtip_web_mem_limit: 1g
+glitchtip_worker_mem_limit: 512m
+glitchtip_postgres_mem_limit: 768m
+glitchtip_redis_mem_limit: 256m
+
+# --- Data-dir container UIDs (chown so non-root containers can write) -------
+prometheus_uid: 65534               # nobody
+loki_uid: 10001
+tempo_uid: 10001
+pyroscope_uid: 10001
+alertmanager_uid: 65534             # nobody
+grafana_uid: 472
+
+# --- GlitchTip internals ---------------------------------------------------
+glitchtip_postgres_db: glitchtip
+glitchtip_postgres_user: glitchtip
+glitchtip_domain: "http://{{ hcloud_private_ipv4 }}:8000"
+
+# --- obs self-observability (task 14) --------------------------------------
+# Containerized node-exporter for the obs box's own host metrics (no host Alloy,
+# no apt node_exporter on obs). Makes node×3 (hot/core/obs) real and feeds
+# obs_target_down{job="node",host="obs"}.
+obs_node_exporter_image: quay.io/prometheus/node-exporter:v1.8.2
+obs_node_exporter_mem_limit: 128m
+
+# --- Alertmanager routing (task 14, spec 05 §Alert rules) ------------------
+# Receivers = Slack + PagerDuty only (no SMTP/email — the spec's one email route
+# collapses to Slack). Secrets (slack webhook, PagerDuty v2 routing key) live in
+# vault.sops.yml and are looked up in the alertmanager role. PagerDuty uses the
+# Events API v2 routing_key (default URL https://events.pagerduty.com/v2/enqueue).
+alertmanager_slack_channel: "#alerts"
+alertmanager_resolve_timeout: 5m
+alertmanager_group_wait: 30s
+alertmanager_group_interval: 5m
+alertmanager_repeat_interval: 1h
+
+# --- Deferred business thresholds (spec 05 §open-questions) -----------------
+# drawdown_breach $ threshold — risk appetite, not derivable from code. Null =
+# the drawdown_breach page-now rule stays commented out (trader-page.rules.yml.j2
+# gates on it). Set to a positive USD number to emit the rule. exposure_breach
+# needs no $ input (keys off exposure_limit_utilization_ratio > 1) → already live.
+trader_drawdown_breach_usd: null
+
+# --- Drift detection (task 15, spec 07 §Nightly drift detection) ------------
+# Nightly `ansible-playbook site.yml --check --diff` on the obs box → textfile
+# metric → drift_detected/drift_check_stale Prometheus rules → Slack. Config for
+# the drift_detection role lives here (group_vars, not role defaults — the role
+# only runs on obs and this keeps ansible-lint's role-prefix rule happy).
+# The textfile dir is shared with obs_node_exporter (it reads what drift writes).
+obs_node_exporter_textfile_dir: /var/lib/node_exporter/textfile
+
+# On-box layout
+drift_install_root: /opt/arbinet
+drift_ansible_dir: "{{ drift_install_root }}/ansible"      # pushed copy of infra/ansible/
+drift_secrets_dir: "{{ drift_install_root }}/secrets"      # age + drift SSH keys (0600)
+drift_age_key_path: "{{ drift_secrets_dir }}/age-key.txt"
+drift_ssh_key_path: "{{ drift_secrets_dir }}/drift_ed25519"
+drift_wrapper_path: "{{ drift_install_root }}/drift-check.sh"
+drift_log_path: /var/log/arbinet-drift.log
+# Controller-side source for the age key delivered to the box (residual secret
+# exposure, documented in host-rebuild.md). Honours the env var kamal/ansible
+# already use; falls back to the standard path.
+drift_age_key_src: "{{ lookup('env', 'SOPS_AGE_KEY_FILE') | default('~/.config/sops/age/keys.txt', true) }}"
+
+# Textfile metric (read by the obs containerized node-exporter under /host)
+drift_textfile_dir: "{{ obs_node_exporter_textfile_dir }}"
+drift_metric_file: "{{ drift_textfile_dir }}/arbinet_drift.prom"
+
+# Pinned dockerized ansible runner (built on-box from files/Dockerfile.drift)
+drift_runner_image: arbinet-drift-runner:ansible-2.17
+
+# Schedule (nightly, jittered; Persistent catches a missed boot)
+drift_oncalendar: "*-*-* 03:00:00"        # nightly, UTC (box runs UTC)
+drift_randomized_delay_sec: 900           # 15m jitter
+drift_run_timeout_sec: 1800               # 30m hard cap per run
+
+# What the --check runs against
+drift_inventory: inventories/production/hcloud.yml
+drift_playbook: playbooks/site.yml

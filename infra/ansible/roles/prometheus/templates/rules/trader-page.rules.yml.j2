@@ -1,0 +1,88 @@
+# {{ ansible_managed }}
+# Trader page-now alerts (task 14, spec 05 §Trader page-now). Capital at risk /
+# blind / stuck — these wake on-call: severity=crit, routes=pagerduty,slack.
+# Dormant until the trader app emits these names (datapipeline contract); rules
+# are valid and load now, they simply have no series yet.
+groups:
+  - name: trader_page_now
+    rules:
+      - alert: ws_stale_blind
+        expr: ws_staleness_seconds > 2 and ws_health == 1
+        for: 30s
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "WS book stale > 2s while health==1 on {% raw %}{{ $labels.exchange }}{% endraw %}"
+          action: "Feed is fiction — halt strategy on that venue."
+
+      - alert: account_state_stale
+        expr: max(account_state_age_seconds) > 60
+        for: 1m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "account state age > 60s"
+          action: "Trading on stale account state — stop trading; resync account state from venue."
+
+      - alert: eventloop_lag_high
+        expr: histogram_quantile(0.99, sum(rate(nodejs_eventloop_lag_seconds_bucket[5m])) by (le)) > 0.1
+        for: 2m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "event-loop lag p99 > 100ms"
+          action: "Loop blocked — ticks silently dropping. Investigate sync work / GC."
+
+      - alert: stuck_position
+        expr: increase(trade_rollback_total{reason="leg_unwind_failed"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "one-legged position — leg unwind failed"
+          action: "Stuck position — manually flatten the open leg."
+
+      - alert: exposure_breach
+        expr: exposure_limit_utilization_ratio > 1
+        for: 0m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "exposure over limit (utilization ratio > 1)"
+          action: "Over the position limit — trip the kill-switch."
+
+      - alert: kill_switch_on
+        expr: kill_switch_active == 1
+        for: 1m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "kill switch active"
+          action: "Trading halted — confirm the halt is intended."
+{% if (trader_drawdown_breach_usd | default(none)) is not none %}
+
+      # drawdown_breach — emitted because trader_drawdown_breach_usd is set
+      # ({{ trader_drawdown_breach_usd }} USD). Threshold is business input.
+      - alert: drawdown_breach
+        expr: portfolio_drawdown_usd < -{{ trader_drawdown_breach_usd }}
+        for: 0m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "portfolio drawdown beyond -{{ trader_drawdown_breach_usd }} USD"
+          action: "Stop-loss trip — halt trading."
+{% else %}
+      # drawdown_breach DEFERRED — trader_drawdown_breach_usd is null (business
+      # input, spec 05 §open-questions). Set the var (group_vars/role_obs.yml or
+      # prometheus defaults) to a positive USD number to emit this rule:
+      #   - alert: drawdown_breach
+      #     expr: portfolio_drawdown_usd < -<X>
+      #     labels: { severity: crit, routes: "pagerduty,slack" }
+{% endif %}

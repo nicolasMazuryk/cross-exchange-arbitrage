@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import config from '../../utils/config'
+import config, { IngestWorkerSpec } from '../../utils/config'
 import { Logger } from '../../utils/logger'
 import { TraceContext } from '../../utils/traceContext'
 
@@ -7,17 +7,24 @@ const logger = new Logger('orchestrator')
 
 // Core services
 import { OrderbookManager } from '../orderbook/orderbookManager'
+import { BookMirror } from '../orderbook/bookMirror'
+import { IngestWorkerHost } from '../../ingest/ingestWorkerHost'
+import { MarketLite } from '../../ingest/protocol'
 import { ArbitrageEngine } from '../arbitrage/arbitrageEngine'
 import { AccountSyncService } from '../state/accountSyncService'
 import { State } from '../state/stateService'
 import { TradeExecutor } from '../trading/tradeExecutor'
 import { TradeMonitor } from '../trading/tradeMonitor'
+import { Dictionary, Market } from 'ccxt'
 import { MarketMetadataService } from '../markets/marketMetadataService'
+import { filterByPeerCount } from '../markets/peerFilter'
 import { FundingService } from '../funding/fundingService'
 import { FundingFeeCollector } from '../funding/fundingFeeCollector'
+import { PerformanceMonitor } from '../monitoring'
 
 // Utils
 import { startOpportunityTracker } from '../../utils/opportunityTracker'
+import { marketTypeFromCcxtMarket } from '../../utils/utils'
 
 // REST adapters
 import { BinanceExchange, BybitExchange, OkxExchange, BitgetExchange } from '../../adapters/rest'
@@ -45,9 +52,16 @@ interface ExchangeServices {
 export class Orchestrator extends EventEmitter {
   private isInitialized = false
   private isShuttingDown = false
+  // Separate from isShuttingDown: the signal handler sets isShuttingDown before
+  // calling shutdown(), so shutdown() must gate re-entry on its own flag or it
+  // no-ops on the very call that's supposed to do the work.
+  private shutdownStarted = false
 
   // Core services
   private orderbookManager?: OrderbookManager
+  // Set only when config.ingest.enabled — same object as orderbookManager.
+  private bookMirror?: BookMirror
+  private ingestHosts: Map<string, IngestWorkerHost> = new Map()
   private arbitrageEngine?: ArbitrageEngine
   private accountSyncService?: AccountSyncService
   private state?: State
@@ -55,6 +69,7 @@ export class Orchestrator extends EventEmitter {
   private tradeMonitor?: TradeMonitor
   private fundingService?: FundingService
   private fundingFeeCollector?: FundingFeeCollector
+  private performanceMonitor?: PerformanceMonitor
 
   // Exchange services
   private exchangeServices: Map<string, ExchangeServices> = new Map()
@@ -98,6 +113,9 @@ export class Orchestrator extends EventEmitter {
 
       // Stage 8: Initialize funding fee collector
       await this.initializeFundingFeeCollector()
+
+      // Stage 8.5: Initialize performance monitor (cheap; covers later init cost too)
+      this.initializePerformanceMonitor()
 
       // Stage 9: Setup graceful shutdown
       this.setupGracefulShutdown()
@@ -207,9 +225,20 @@ export class Orchestrator extends EventEmitter {
     try {
       logger.info({ msg: '⚙️ Initializing core services...', function: 'Orchestrator.initializeCoreServices' })
 
-      // Initialize Orderbook Manager
-      this.orderbookManager = new OrderbookManager()
-      logger.info({ msg: '✅ Orderbook Manager initialized', function: 'Orchestrator.initializeCoreServices' })
+      // Initialize Orderbook Manager. With ingest workers enabled the main
+      // thread holds a read mirror instead — same public surface, so every
+      // consumer (engine, executor, monitor, collector) is unchanged.
+      if (config.ingest.enabled) {
+        this.bookMirror = new BookMirror()
+        this.orderbookManager = this.bookMirror
+      } else {
+        this.orderbookManager = new OrderbookManager()
+      }
+      logger.info({
+        msg: '✅ Orderbook Manager initialized',
+        function: 'Orchestrator.initializeCoreServices',
+        ingestWorkers: config.ingest.enabled,
+      })
 
       // Initialize Arbitrage Engine
       const exchangeConfigs = [
@@ -639,6 +668,32 @@ export class Orchestrator extends EventEmitter {
     })
     const marketsMap = new Map(exchangeMarkets.map(({ exchangeId, markets }) => [exchangeId, markets]))
 
+    // Prune markets without enough arbitrage peers before subscribing (perf: fewer WS streams).
+    const peerMetadataServices = new Map<string, MarketMetadataService>()
+    for (const [exchangeId, services] of this.exchangeServices.entries()) {
+      if (services.marketMetadata) {
+        peerMetadataServices.set(exchangeId, services.marketMetadata)
+      }
+    }
+    const { pruned: subscriptionMarkets, stats: peerStats } = filterByPeerCount(
+      marketsMap,
+      peerMetadataServices,
+      config.minMarketPeers ?? 0
+    )
+    logger.info({
+      msg: peerStats.enabled ? '🔎 Peer filter applied' : 'Peer filter disabled (minMarketPeers=0)',
+      function: 'Orchestrator.initializePublicWebSocketClients',
+      ...peerStats,
+    })
+
+    // Phase 2 ingest path: per-exchange worker threads own the WS connections;
+    // main thread only mirrors books. Legacy in-process path below stays as
+    // the rollback lever (ingest.enabled: false).
+    if (config.ingest.enabled) {
+      await this.initializeIngestWorkers(subscriptionMarkets)
+      return
+    }
+
     // Initialize WebSocket clients
     const wsClients = [
       {
@@ -685,7 +740,7 @@ export class Orchestrator extends EventEmitter {
     await Promise.all(
       wsClients.map(async ({ id, client }) => {
         try {
-          const markets = marketsMap.get(id) || []
+          const markets = subscriptionMarkets.get(id) || ({} as Dictionary<Market>)
           await client.initialize(markets)
 
           const services = this.exchangeServices.get(id)!
@@ -712,10 +767,8 @@ export class Orchestrator extends EventEmitter {
     if (this.orderbookManager) {
       for (const [exchangeId, services] of this.exchangeServices.entries()) {
         if (services.ws) {
-          services.ws.on('orderbookUpdate', async (update: any) => {
-            TraceContext.runWithExistingTrace(update.traceId, 'orderbook-update', () => {
-              this.orderbookManager!.updateOrderbook(update)
-            })
+          services.ws.on('orderbookUpdate', (update: any) => {
+            this.orderbookManager!.updateOrderbook(update)
           })
           logger.info({
             msg: 'WebSocket connected to Orderbook Manager',
@@ -730,6 +783,135 @@ export class Orchestrator extends EventEmitter {
       msg: '✅ All WebSocket clients initialized and connected',
       function: 'Orchestrator.initializePublicWebSocketClients',
       clientCount: wsClients.length,
+    })
+  }
+
+  private async initializeIngestWorkers(subscriptionMarkets: Map<string, Dictionary<Market>>): Promise<void> {
+    if (!this.bookMirror) {
+      throw new Error('BookMirror must be initialized before ingest workers')
+    }
+    const mirror = this.bookMirror
+
+    // Resolve topology: explicit ingest.workers specs, one implicit all-types
+    // worker for every exchange not listed (config.ts validated the specs).
+    const specsByExchange = new Map<string, IngestWorkerSpec[]>()
+    for (const spec of config.ingest.workers ?? []) {
+      const specs = specsByExchange.get(spec.exchange) ?? []
+      specs.push(spec)
+      specsByExchange.set(spec.exchange, specs)
+    }
+    const workerSpecs: IngestWorkerSpec[] = []
+    for (const exchangeId of this.exchangeServices.keys()) {
+      workerSpecs.push(...(specsByExchange.get(exchangeId) ?? [{ exchange: exchangeId }]))
+    }
+
+    await Promise.all(
+      workerSpecs.map(async spec => {
+        const exchangeId = spec.exchange
+        const workerLabel = spec.marketType ? `${exchangeId}:${spec.marketType}` : exchangeId
+        try {
+          const markets = subscriptionMarkets.get(exchangeId) || ({} as Dictionary<Market>)
+          const marketsLite: MarketLite[] = []
+          let skippedByType = 0
+          for (const m of Object.values(markets)) {
+            if (!m || !m.id || !m.symbol) continue
+            // Ship only the split worker's market type — the worker's WS client
+            // filters again (base.ts filterMarketType), this just trims the payload.
+            if (spec.marketType) {
+              try {
+                if (marketTypeFromCcxtMarket(m) !== spec.marketType) {
+                  skippedByType++
+                  continue
+                }
+              } catch {
+                skippedByType++
+                continue
+              }
+            }
+            marketsLite.push({
+              id: m.id,
+              symbol: m.symbol,
+              base: m.base ?? '',
+              quote: m.quote ?? '',
+              type: (m.type as string) ?? '',
+              spot: m.spot,
+              swap: m.swap,
+              linear: m.linear ?? undefined,
+              inverse: m.inverse ?? undefined,
+              contract: m.contract ?? undefined,
+            })
+          }
+
+          const exchangeCfg = config.exchanges[exchangeId as keyof typeof config.exchanges]
+          const host = new IngestWorkerHost(
+            exchangeId,
+            {
+              apiKey: exchangeCfg.apiKey,
+              apiSecret: exchangeCfg.apiSecret,
+              apiPass: exchangeCfg.apiPass,
+              maxStreamsPerConnection: exchangeCfg.maxStreamsPerConnection,
+              reconnectInterval: exchangeCfg.reconnectInterval,
+              marketType: spec.marketType,
+            } as WebSocketConfig,
+            marketsLite,
+            { depth: config.ingest.depth },
+            mirror
+          )
+
+          await host.start()
+          this.ingestHosts.set(workerLabel, host)
+
+          logger.info({
+            msg: 'Ingest worker started',
+            function: 'Orchestrator.initializeIngestWorkers',
+            worker: workerLabel,
+            marketCount: marketsLite.length,
+            ...(spec.marketType && { skippedByType }),
+            depth: config.ingest.depth,
+          })
+        } catch (error) {
+          logger.error({
+            msg: 'Failed to start ingest worker',
+            function: 'Orchestrator.initializeIngestWorkers',
+            worker: workerLabel,
+            error,
+          })
+          throw error
+        }
+      })
+    )
+
+    // A split exchange only subscribes the market types listed for it — warn
+    // about tracked markets no worker covers.
+    for (const [exchangeId, specs] of specsByExchange.entries()) {
+      const covered = new Set(specs.map(s => s.marketType))
+      if (covered.has(undefined)) continue
+      const markets = subscriptionMarkets.get(exchangeId)
+      if (!markets) continue
+      const uncovered: string[] = []
+      for (const m of Object.values(markets)) {
+        try {
+          if (m && !covered.has(marketTypeFromCcxtMarket(m))) uncovered.push(m.symbol)
+        } catch {
+          if (m?.symbol) uncovered.push(m.symbol)
+        }
+      }
+      if (uncovered.length > 0) {
+        logger.warn({
+          msg: 'Ingest topology leaves markets unsubscribed (no worker covers their market type)',
+          function: 'Orchestrator.initializeIngestWorkers',
+          exchange: exchangeId,
+          uncoveredCount: uncovered.length,
+          sample: uncovered.slice(0, 10),
+        })
+      }
+    }
+
+    logger.info({
+      msg: '✅ All ingest workers started',
+      function: 'Orchestrator.initializeIngestWorkers',
+      workerCount: this.ingestHosts.size,
+      workers: Array.from(this.ingestHosts.keys()),
     })
   }
 
@@ -776,6 +958,38 @@ export class Orchestrator extends EventEmitter {
       logger.error({
         msg: 'Failed to initialize Funding Fee Collector',
         function: 'Orchestrator.initializeFundingFeeCollector',
+        error,
+      })
+      throw error
+    }
+  }
+
+  private initializePerformanceMonitor(): void {
+    try {
+      if (!config.performanceMonitor.enabled) {
+        logger.info({
+          msg: '⏭️ Performance Monitor disabled by config, skipping',
+          function: 'Orchestrator.initializePerformanceMonitor',
+        })
+        return
+      }
+
+      logger.info({
+        msg: '📈 Initializing Performance Monitor...',
+        function: 'Orchestrator.initializePerformanceMonitor',
+      })
+
+      this.performanceMonitor = new PerformanceMonitor(config.performanceMonitor.intervalMs)
+      this.performanceMonitor.start()
+
+      logger.info({
+        msg: '✅ Performance Monitor initialized and started',
+        function: 'Orchestrator.initializePerformanceMonitor',
+      })
+    } catch (error) {
+      logger.error({
+        msg: 'Failed to initialize Performance Monitor',
+        function: 'Orchestrator.initializePerformanceMonitor',
         error,
       })
       throw error
@@ -830,14 +1044,24 @@ export class Orchestrator extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
-    if (!this.isInitialized || this.isShuttingDown) {
+    if (this.shutdownStarted) {
       return
     }
+    this.shutdownStarted = true
 
     logger.info({ msg: '🔄 Shutting down ArbiNet Orchestrator...', function: 'Orchestrator.shutdown' })
 
     // Shutdown in reverse order of initialization
     const shutdownTasks: Array<() => Promise<void>> = []
+
+    // 0. Shutdown performance monitor
+    if (this.performanceMonitor) {
+      shutdownTasks.push(async () => {
+        logger.info({ msg: '🔄 Shutting down Performance Monitor...', function: 'Orchestrator.shutdown' })
+        this.performanceMonitor!.stop()
+        logger.info({ msg: '✅ Performance Monitor shutdown complete', function: 'Orchestrator.shutdown' })
+      })
+    }
 
     // 1. Shutdown funding fee collector
     if (this.fundingFeeCollector) {
@@ -872,6 +1096,19 @@ export class Orchestrator extends EventEmitter {
         logger.info({ msg: '🔄 Shutting down Account Sync Service...', function: 'Orchestrator.shutdown' })
         await this.accountSyncService!.shutdown()
         logger.info({ msg: '✅ Account Sync Service shutdown complete', function: 'Orchestrator.shutdown' })
+      })
+    }
+
+    // 5a. Shutdown ingest workers (Phase 2 path)
+    for (const [workerLabel, host] of this.ingestHosts.entries()) {
+      shutdownTasks.push(async () => {
+        logger.info({ msg: 'Shutting down ingest worker', function: 'Orchestrator.shutdown', worker: workerLabel })
+        await host.close()
+        logger.info({
+          msg: 'Ingest worker shutdown complete',
+          function: 'Orchestrator.shutdown',
+          worker: workerLabel,
+        })
       })
     }
 

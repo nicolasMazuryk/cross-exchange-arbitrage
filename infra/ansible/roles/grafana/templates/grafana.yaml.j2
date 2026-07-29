@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+services:
+  grafana:
+    image: {{ grafana_image }}
+    container_name: grafana
+    restart: unless-stopped
+    env_file:
+      - {{ obs_stack_dir }}/config/grafana/grafana.env
+    volumes:
+      - {{ obs_data_root }}/grafana:/var/lib/grafana
+      - {{ obs_stack_dir }}/config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - {{ obs_stack_dir }}/config/grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "{{ obs_bind_ip }}:{{ grafana_port }}:3000"
+    mem_limit: {{ grafana_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

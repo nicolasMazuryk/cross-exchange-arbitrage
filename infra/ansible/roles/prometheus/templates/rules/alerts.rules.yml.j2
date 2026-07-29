@@ -1,0 +1,130 @@
+# {{ ansible_managed }}
+# Infra alert set (task 14, spec 05 §Alert rules). Each alert carries severity +
+# routes labels that drive Alertmanager routing, and an action annotation from
+# spec 06 §scaling-triggers / 07 runbooks. severity=crit → PagerDuty + Slack;
+# warn/info → Slack.
+groups:
+  - name: infra_alerts
+    rules:
+      - alert: trader_down
+        expr: absent(up{job="trader"}) or up{job="trader"} == 0
+        for: 30s
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "Trader hot-box metrics absent for 30s"
+          action: "Trader is down or hot-box scrape broke. Check Kamal trader container + Alloy on hot."
+
+      - alert: ws_down
+        expr: ws_health == 0
+        for: 1m
+        labels:
+          severity: crit
+          routes: pagerduty,slack
+        annotations:
+          summary: "WS feed down on {% raw %}{{ $labels.exchange }}{% endraw %}"
+          action: "Venue websocket is down. Strategy on that venue is blind — verify reconnect."
+
+      - alert: ob_ticks_drops
+        expr: |
+          increase(ob_ticks_produce_dropped_total[5m])
+          /
+          clamp_min(increase(ob_ticks_produce_seconds_count[5m]), 1) > 0.001
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "ob.ticks produce drop rate > 0.1%"
+          action: "Hot→core produce exceeding the 5ms drop budget. Check event-loop lag + Redpanda producer queue."
+
+      - alert: ob_ticks_lag
+        expr: redpanda_kafka_consumer_group_lag{group="ch_orderbooks"} > 1
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "ch_orderbooks consumer lag > 1s"
+          action: "CH Kafka engine falling behind ob.ticks. Check ClickHouse insert throughput."
+
+      - alert: ingest_lag
+        expr: redpanda_kafka_consumer_group_lag{group=~"ch_.*"} > 5
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "ingest consumer lag > 5s ({% raw %}{{ $labels.group }}{% endraw %})"
+          action: "Consumer group falling behind. Check CH parts/inserts + core CPU."
+
+      - alert: mv_stale
+        expr: mv_freshness_seconds{view="spreads_15s"} > 45
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "spreads_15s MV stale > 45s"
+          action: "Materialized view not refreshing (>3x bucket). Check CH MV + upstream consumer lag."
+
+      - alert: ch_query_slow
+        expr: histogram_quantile(0.95, sum(rate(clickhouse_query_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 5m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "ClickHouse p95 query latency > 5s"
+          action: "Query latency SLO breach. Check CH parts_active, memory, query patterns."
+
+      - alert: disk_low
+        expr: node_filesystem_avail_bytes{mountpoint="/mnt/ch-volume"} < 40 * 1024 * 1024 * 1024
+        for: 0m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "core Volume free < 40GB"
+          action: "Volume-expand trigger (spec 06 §scaling-triggers, runbook 07 §volume-expand). Collapsed from Slack+email to Slack only (no SMTP)."
+
+      - alert: hot_mem_high
+        expr: node_memory_MemAvailable_bytes{host="hot"} < 1 * 1024 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "hot-box available RAM < 1GB"
+          action: "CCX13 RAM tightness — CCX23 upgrade trigger (spec 06 §scaling-triggers)."
+
+      - alert: hot_cpu_steal
+        expr: rate(node_cpu_seconds_total{mode="steal",host="hot"}[5m]) > 0.02
+        for: 5m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "hot-box CPU steal > 2%"
+          action: "Dedicated-core isolation regression — steal should be ~0. Open a Hetzner ticket."
+
+      - alert: clock_skew
+        expr: histogram_quantile(0.95, sum(rate(exchange_clock_skew_seconds_bucket[5m])) by (le)) > 0.2
+        for: 5m
+        labels:
+          severity: info
+          routes: slack
+        annotations:
+          summary: "exchange clock skew p95 > 200ms"
+          action: "Local↔exchange clock drift. Check chrony tracking on hot/core."
+
+      - alert: obs_target_down
+        expr: up{job=~"trader|query-api|spread-computer|node|clickhouse|redpanda"} == 0
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "scrape target down: job={% raw %}{{ $labels.job }}{% endraw %} host={% raw %}{{ $labels.host }}{% endraw %}"
+          action: "A scrape target is down (covers both Alloy agents + obs node-exporter). Check the service + its Alloy/scrape path."

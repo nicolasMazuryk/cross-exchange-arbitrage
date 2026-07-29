@@ -1,0 +1,22 @@
+---
+# Canonical dynamic inventory — ansible_host = PRIVATE ip (10.0.1.x).
+# Controller reaches hosts over the private net via the WireGuard overlay
+# (post-bootstrap). For the one-time WG install run use bootstrap.hcloud.yml.
+# (The hcloud inventory plugin only loads files ending in `hcloud.yml`.)
+plugin: hetzner.hcloud.hcloud
+api_token: "{{ (lookup('community.sops.sops', 'inventories/production/secrets/hcloud_token.sops.yml') | from_yaml).hcloud_token }}"
+locations:
+  - nbg1
+status:
+  - running
+network: prod-vpc
+hostvars_prefix: hcloud_
+# NOTE: hostvars_prefix is applied BEFORE construct runs, so keyed_groups/
+# compose must reference the prefixed var names (hcloud_labels, not labels).
+keyed_groups:
+  - key: hcloud_labels.role
+    prefix: role
+  - key: hcloud_labels.env
+    prefix: env
+compose:
+  ansible_host: hcloud_private_ipv4

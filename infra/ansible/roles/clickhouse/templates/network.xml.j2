@@ -1,0 +1,10 @@
+<!-- {{ ansible_managed }} -->
+<!-- Global listen_host (spec 03 §clickhouse-role): bind loopback + private IP so
+     the hot-box trader reaches HTTP :8123 over the private net. Native :9000 is
+     reachable on the private NIC as a side-effect; fw-core (10.0.1.0/24 allow)
+     is the access-control plane, same posture as Redpanda's :9092. -->
+<clickhouse>
+{% for host in clickhouse_listen_hosts %}
+  <listen_host>{{ host }}</listen_host>
+{% endfor %}
+</clickhouse>

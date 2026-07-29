@@ -1,0 +1,21 @@
+# {{ ansible_managed }}
+services:
+  loki:
+    image: {{ loki_image }}
+    container_name: loki
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/loki.yml
+    volumes:
+      - {{ obs_stack_dir }}/config/loki/loki.yml:/etc/loki/loki.yml:ro
+      - {{ obs_data_root }}/loki:/loki
+    ports:
+      - "{{ obs_bind_ip }}:{{ loki_port }}:3100"
+    mem_limit: {{ loki_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

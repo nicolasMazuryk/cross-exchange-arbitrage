@@ -4,7 +4,7 @@ import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './ty
 import { MarketType } from '../../types/exchange'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
-import { TraceContext } from '../../utils/traceContext'
+import { parseLevels } from './parseLevels'
 
 const EXCHANGE_NAME = 'okx'
 
@@ -24,19 +24,10 @@ class OkxMessageParser implements PublicWebSocketMessageParser {
       symbol: this.getUnifiedSymbol(data.arg.instId, marketType),
       marketType,
       timestamp: +data.data[0].ts,
-      asks: data.data[0].asks.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
-      bids: data.data[0].bids.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
+      asks: parseLevels(data.data[0].asks),
+      bids: parseLevels(data.data[0].bids),
       finalUpdateId: data.data[0].seqId,
       sequence: data.data[0].seqId,
-      traceId: '', // Will be set by the message handler
     }
   }
 }
@@ -143,29 +134,19 @@ export class OkxPublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('update', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
-        try {
-          if (this.messageParser.isOrderBookMessage(data)) {
-            const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
-            update.traceId = traceId
-            this.emit('orderbookUpdate', update)
-          }
-        } catch (error) {
-          logger.error({
-            msg: 'Error parsing WebSocket message',
-            exchange: this.exchangeName,
-            batchId: batch.id,
-            error,
-          })
+      try {
+        if (this.messageParser.isOrderBookMessage(data)) {
+          const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
+          this.emit('orderbookUpdate', update)
         }
-      }).catch(error => {
+      } catch (error) {
         logger.error({
-          msg: 'Error in trace context for WebSocket message',
-          function: 'OKXPublicWebSocketClient.setupEventHandlers.update',
+          msg: 'Error parsing WebSocket message',
           exchange: this.exchangeName,
+          batchId: batch.id,
           error,
         })
-      })
+      }
     })
   }
 

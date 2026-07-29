@@ -1,0 +1,22 @@
+---
+# Bootstrap dynamic inventory — ansible_host = PUBLIC ipv4.
+# Used ONLY for the first run that installs WireGuard, reached over public SSH
+# from the operator IP (already allowed on port 22 by the Hetzner firewall).
+# Identical to hcloud.yml EXCEPT the ansible_host compose. After WG is up,
+# all subsequent runs use the canonical (private) hcloud.yml.
+plugin: hetzner.hcloud.hcloud
+api_token: "{{ (lookup('community.sops.sops', 'inventories/production/secrets/hcloud_token.sops.yml') | from_yaml).hcloud_token }}"
+locations:
+  - nbg1
+status:
+  - running
+network: prod-vpc
+hostvars_prefix: hcloud_
+# hostvars_prefix is applied BEFORE construct → reference prefixed var names.
+keyed_groups:
+  - key: hcloud_labels.role
+    prefix: role
+  - key: hcloud_labels.env
+    prefix: env
+compose:
+  ansible_host: hcloud_ipv4

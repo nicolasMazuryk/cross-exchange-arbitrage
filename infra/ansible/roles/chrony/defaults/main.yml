@@ -1,0 +1,10 @@
+---
+# chrony — clock sync for the core box (spec 03 §chrony-role). Overridden by
+# group_vars/role_core.yml.
+chrony_pools:
+  - 0.europe.pool.ntp.org
+  - time.cloudflare.com
+chrony_minpoll: 4
+chrony_maxpoll: 8
+chrony_makestep: "0.1 3"
+chrony_logdir: /var/log/chrony

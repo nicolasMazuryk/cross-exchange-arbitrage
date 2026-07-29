@@ -4,7 +4,7 @@ import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './ty
 import { MarketType } from '../../types/exchange'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
-import { TraceContext } from '../../utils/traceContext'
+import { parseLevels } from './parseLevels'
 
 const EXCHANGE_NAME = 'bitget'
 
@@ -25,18 +25,9 @@ class BitgetMessageParser implements PublicWebSocketMessageParser {
       symbol,
       marketType,
       timestamp: +orderbookData.ts,
-      asks: orderbookData.asks.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
-      bids: orderbookData.bids.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
+      asks: parseLevels(orderbookData.asks),
+      bids: parseLevels(orderbookData.bids),
       finalUpdateId: orderbookData.seq,
-      traceId: '', // Will be set by the message handler
     }
   }
 }
@@ -137,29 +128,19 @@ export class BitgetPublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('update', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
-        try {
-          if (this.messageParser.isOrderBookMessage(data)) {
-            const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
-            update.traceId = traceId
-            this.emit('orderbookUpdate', update)
-          }
-        } catch (error) {
-          logger.error({
-            msg: 'Error parsing WebSocket message',
-            exchange: this.exchangeName,
-            batchId: batch.id,
-            error,
-          })
+      try {
+        if (this.messageParser.isOrderBookMessage(data)) {
+          const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
+          this.emit('orderbookUpdate', update)
         }
-      }).catch(error => {
+      } catch (error) {
         logger.error({
-          msg: 'Error in trace context for WebSocket message',
-          function: 'BitgetPublicWebSocketClient.setupEventHandlers.update',
+          msg: 'Error parsing WebSocket message',
           exchange: this.exchangeName,
+          batchId: batch.id,
           error,
         })
-      })
+      }
     })
   }
 

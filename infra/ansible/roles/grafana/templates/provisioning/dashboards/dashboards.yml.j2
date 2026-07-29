@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# Grafana dashboard file-provider (task 14, spec 05 §Dashboards). Loads every
+# JSON under /etc/grafana/dashboards (mounted read-only from the obs-stack
+# config dir). foldersFromFilesStructure off — flat "ArbiNet" folder.
+apiVersion: 1
+
+providers:
+  - name: arbinet
+    orgId: 1
+    folder: ArbiNet
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

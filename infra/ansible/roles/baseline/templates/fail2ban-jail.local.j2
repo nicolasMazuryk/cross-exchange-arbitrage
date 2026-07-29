@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+[DEFAULT]
+backend = systemd
+# Never ban the operator source IPs or the trusted overlays.
+ignoreip = 127.0.0.1/8 ::1 {{ private_subnet_cidr }} {{ wireguard.overlay_cidr }}
+
+[sshd]
+enabled = true
+port = 22
+maxretry = {{ baseline_ssh_max_auth_tries }}
+bantime = 3600
+findtime = 600

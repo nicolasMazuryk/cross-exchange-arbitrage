@@ -179,6 +179,10 @@ export abstract class BasePublicWebSocketClient extends EventEmitter implements 
     if (this.reconnectingBatches.has(batch.id)) return
     this.reconnectingBatches.add(batch.id)
 
+    // Books built from this batch may be stale until fresh snapshots arrive —
+    // ingest workers listen for this to clear local books and notify main.
+    this.emit('connectionReset', { batchId: batch.id, marketType: batch.marketType })
+
     logger.warn({
       msg: 'Handling connection error. Reconnecting WebSocket',
       function: 'BasePublicWebSocketClient.handleConnectionError',

@@ -1,0 +1,7 @@
+---
+profile: production
+
+# SOPS-encrypted stores are not hand-authored YAML — never lint them.
+exclude_paths:
+  - inventories/production/group_vars/all/vault.sops.yml
+  - inventories/production/secrets/

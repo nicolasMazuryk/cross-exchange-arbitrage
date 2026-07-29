@@ -1,0 +1,83 @@
+---
+# Install Docker CE + compose-plugin from the official Docker apt repo.
+# Idempotent: keyring + deb822 repo are declarative, apt installs are guarded.
+# Reusable by the Kamal hosts later. Tag: docker.
+
+- name: Install apt prerequisites for the Docker repo
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - python3-debian        # required by ansible.builtin.deb822_repository
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: docker_prereq_apt
+  until: docker_prereq_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Ensure the apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the Docker apt GPG key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_gpg_url }}"
+    dest: "{{ docker_apt_keyring }}"
+    # Pin the key hash: supply-chain pin AND check-mode idempotency. Without it
+    # get_url can't verify the existing file under --check (it would re-fetch to
+    # compare) and reports a permanent false "changed" — which made the nightly
+    # drift check fire forever. With the checksum, --check hashes the on-disk
+    # file and reports truthfully, no re-fetch. If Docker rotates the key this
+    # fails loudly (correct — you want to know). Recompute:
+    #   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sha256sum
+    checksum: "{{ docker_apt_gpg_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: docker_gpg
+  until: docker_gpg is succeeded
+  retries: 6
+  delay: 20
+
+- name: Configure the Docker apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "https://download.docker.com/linux/ubuntu"
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
+    components: [stable]
+    architectures: ["{{ docker_apt_arch }}"]
+    signed_by: "{{ docker_apt_keyring }}"
+    state: present
+    enabled: true
+  register: docker_repo
+
+- name: Install Docker CE and the compose plugin
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: true
+  register: docker_install_apt
+  until: docker_install_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Enable and start the Docker service
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add the deploy user to the docker group
+  ansible.builtin.user:
+    name: "{{ docker_deploy_user }}"
+    groups: docker
+    append: true
+  # Lets Kamal run docker over SSH without sudo (root SSH disabled). Kamal opens
+  # fresh SSH sessions, so the new group membership applies on the next deploy.

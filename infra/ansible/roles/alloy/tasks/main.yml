@@ -1,0 +1,109 @@
+---
+# alloy role (task 09) — install Grafana Alloy from the official apt repo, lay
+# config.alloy + /etc/default/alloy, add the alloy user to the docker group for
+# the log-tail socket, enable+start. Requires Docker already present (the docker
+# role runs before alloy in core.yml). Tag: alloy.
+
+# Fail fast at apply time if scrape_timeout > scrape_interval — Alloy refuses to
+# build the scrape config and the systemd unit dies on (re)start (silent metric
+# blackout). This assert turns that runtime crash into a clear pre-flight error.
+# Assumes "<N>s" second-suffixed durations (the only form used across boxes).
+- name: Assert scrape_timeout <= scrape_interval (Alloy refuses otherwise)
+  ansible.builtin.assert:
+    that:
+      - (alloy_scrape_timeout | regex_replace('[^0-9]', '') | int)
+        <= (alloy_scrape_interval | regex_replace('[^0-9]', '') | int)
+    fail_msg: >-
+      alloy_scrape_timeout ({{ alloy_scrape_timeout }}) exceeds
+      alloy_scrape_interval ({{ alloy_scrape_interval }}) on {{ inventory_hostname }};
+      Alloy will refuse to start. Lower the timeout to <= the interval.
+    success_msg: "scrape_timeout {{ alloy_scrape_timeout }} <= interval {{ alloy_scrape_interval }}"
+    quiet: true
+
+- name: Install apt prerequisites for the Grafana repo
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - python3-debian        # required by ansible.builtin.deb822_repository
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: alloy_prereq_apt
+  until: alloy_prereq_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Ensure the apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the Grafana apt GPG key
+  ansible.builtin.get_url:
+    url: "{{ alloy_apt_gpg_url }}"
+    dest: "{{ alloy_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: alloy_gpg
+  until: alloy_gpg is succeeded
+  retries: 6
+  delay: 20
+
+- name: Configure the Grafana apt repository
+  ansible.builtin.deb822_repository:
+    name: grafana
+    types: [deb]
+    uris: https://apt.grafana.com
+    suites: [stable]
+    components: [main]
+    architectures: ["{{ alloy_apt_arch }}"]
+    signed_by: "{{ alloy_apt_keyring }}"
+    state: present
+    enabled: true
+  register: alloy_repo
+
+- name: Install Alloy
+  ansible.builtin.apt:
+    name: "{{ alloy_package }}"
+    state: present
+    update_cache: true
+  register: alloy_install_apt
+  until: alloy_install_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Add the alloy user to the docker group (log-tail socket access)
+  ansible.builtin.user:
+    name: "{{ alloy_user }}"
+    groups: docker
+    append: true
+  notify: Restart alloy
+
+- name: Template the Alloy environment file
+  ansible.builtin.template:
+    src: alloy.default.j2
+    dest: "{{ alloy_default_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart alloy
+
+- name: Template the Alloy config
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: "{{ alloy_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart alloy
+
+- name: Enable and start Alloy
+  ansible.builtin.service:
+    name: "{{ alloy_service }}"
+    enabled: true
+    state: started

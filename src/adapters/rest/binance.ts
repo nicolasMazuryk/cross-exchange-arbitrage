@@ -256,14 +256,16 @@ export class BinanceExchange extends BaseExchange {
 
       const intervalMap = new Map<string, number>()
       for (const [sym, data] of Object.entries({ ...linearIntervals, ...inverseIntervals })) {
-        const hours = (data as any)?.info?.fundingIntervalHours
-        if (typeof hours === 'number') intervalMap.set(sym, hours)
+        const hours = Number((data as any)?.info?.fundingIntervalHours)
+        if (Number.isFinite(hours) && hours > 0) intervalMap.set(sym, hours)
       }
 
+      const tradable = new Set(Object.keys(this.getTradingMarkets()))
       const allRates = { ...linearRates, ...inverseRates }
       const fundingData = new Map<string, ParsedFunding>()
 
       for (const [symbol, rate] of Object.entries(allRates)) {
+        if (!tradable.has(symbol)) continue
         const r = rate as any
         if (typeof r.fundingRate !== 'number' || isNaN(r.fundingRate) || !r.fundingTimestamp) {
           logger.warn({
@@ -279,12 +281,16 @@ export class BinanceExchange extends BaseExchange {
 
         let fundingInterval = intervalMap.get(symbol)
         if (fundingInterval === undefined) {
-          logger.warn({
-            msg: 'No interval data for symbol, defaulting to 8h',
-            function: 'BinanceExchange.fetchFundingData',
-            exchange: EXCHANGE_NAME,
-            symbol,
-          })
+          // Binance inverse perps don't expose fundingIntervalHours; they're fixed at 8h.
+          // Default silently to avoid log noise, warn only for unexpected (linear) gaps.
+          if (getMarketTypeFromUnifiedSymbol(symbol) !== MarketType.INVERSE_PERP) {
+            logger.warn({
+              msg: 'No interval data for symbol, defaulting to 8h',
+              function: 'BinanceExchange.fetchFundingData',
+              exchange: EXCHANGE_NAME,
+              symbol,
+            })
+          }
           fundingInterval = 8
         }
 

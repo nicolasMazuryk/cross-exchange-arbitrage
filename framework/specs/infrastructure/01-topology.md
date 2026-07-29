@@ -136,7 +136,7 @@ Grafana and GlitchTip carry operational data and must not be public. Operators r
 Exactly one public ingress, one TLS termination — terminated in **kamal-proxy on the core box** (gap **G5** reversed: the Hetzner LB is dropped because query-api is off the hot path, so host-side cert management is no longer a hot-path concern):
 
 ```
-Internet ──443/TLS──▶ core box :443 kamal-proxy (Let's Encrypt managed cert, host-side)
+Internet ──443/TLS──▶ api.arbinet.xyz ──▶ core box :443 kamal-proxy (Let's Encrypt managed cert, host-side)
                          │ host-side routing + /up health-gate
                          ▼
                       query-api  127.0.0.1:8080

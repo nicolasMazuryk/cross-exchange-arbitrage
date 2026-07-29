@@ -1,0 +1,7 @@
+---
+# alertmanager — minimal route → null receiver (real routing = task 14).
+# Overridden by group_vars/role_obs.yml.
+alertmanager_image: prom/alertmanager:v0.32.1
+alertmanager_port: 9093
+alertmanager_mem_limit: 256m
+alertmanager_uid: 65534

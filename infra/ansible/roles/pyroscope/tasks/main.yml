@@ -1,0 +1,34 @@
+---
+# pyroscope role — config + data dir + compose fragment. Tag: pyroscope.
+
+- name: Create the pyroscope config directory
+  ansible.builtin.file:
+    path: "{{ obs_stack_dir }}/config/pyroscope"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the pyroscope config
+  ansible.builtin.template:
+    src: pyroscope.yml.j2
+    dest: "{{ obs_stack_dir }}/config/pyroscope/pyroscope.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the pyroscope data directory (container UID)
+  ansible.builtin.file:
+    path: "{{ obs_data_root }}/pyroscope"
+    state: directory
+    owner: "{{ pyroscope_uid }}"
+    group: "{{ pyroscope_uid }}"
+    mode: "0755"
+
+- name: Template the pyroscope compose fragment
+  ansible.builtin.template:
+    src: pyroscope.yaml.j2
+    dest: "{{ obs_stack_dir }}/services/pyroscope.yaml"
+    owner: root
+    group: root
+    mode: "0644"

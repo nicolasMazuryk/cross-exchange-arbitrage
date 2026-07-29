@@ -238,9 +238,11 @@ export class BitgetExchange extends BaseExchange {
         }
       }
 
+      const tradable = new Set(Object.keys(this.getTradingMarkets()))
       const fundingData = new Map<string, ParsedFunding>()
 
       for (const [symbol, data] of Object.entries(allIntervals)) {
+        if (!tradable.has(symbol)) continue
         const d = data as any
         const info = d.info ?? {}
 

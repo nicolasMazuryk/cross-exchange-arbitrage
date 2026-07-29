@@ -38,7 +38,6 @@ try {
   })
 
   console.log(yamlConfig)
-
 } catch (error) {
   console.error({ msg: 'Failed to load YAML configuration file', function: 'config.loadYamlConfig', error })
   throw error
@@ -69,10 +68,10 @@ interface ExchangeConfiguration {
   reconnectInterval: number
   feesPerMarketType: PerMarketTypeFees
   ignoredMarkets: string[]
-  enabledMarketTypes?: string[]      // e.g. ['linear', 'spot', 'inverse'] — absent = all tradable
-  enabledQuoteCurrencies?: string[]  // e.g. ['USDT', 'USDC'] — absent = all
+  enabledMarketTypes?: string[] // e.g. ['linear', 'spot', 'inverse'] — absent = all tradable
+  enabledQuoteCurrencies?: string[] // e.g. ['USDT', 'USDC'] — absent = all
   disabledQuoteCurrencies?: string[] // e.g. ['BRL'] — skip pairs quoted in these currencies
-  ignoredFundingSymbols?: string[]   // unified symbols to exclude from funding data (e.g. 'USDC/USDT:USDT')
+  ignoredFundingSymbols?: string[] // unified symbols to exclude from funding data (e.g. 'USDC/USDT:USDT')
 }
 
 interface ArbitrageConfig {
@@ -125,6 +124,34 @@ interface FundingFeeCollectorConfig {
   cronPattern: string
 }
 
+interface PerformanceMonitorConfig {
+  enabled: boolean
+  intervalMs: number
+}
+
+/**
+ * One ingest worker in an explicit topology. Splitting a heavy exchange by
+ * market type reuses WebSocketConfig.marketType filtering inside the worker.
+ */
+export interface IngestWorkerSpec {
+  exchange: string
+  /** Absent = the worker handles all of the exchange's market types. */
+  marketType?: MarketType
+}
+
+interface IngestConfig {
+  /** true = per-exchange ingest workers own the WS connections (Phase 2); false = legacy in-process path (rollback lever). */
+  enabled: boolean
+  /** Levels per side shipped from workers to main per book message. */
+  depth: number
+  /**
+   * Explicit worker topology (Phase 3). Exchanges without an entry get one
+   * worker covering all market types. Listing an exchange with marketTypes
+   * spawns one worker per entry — market types not listed are NOT subscribed.
+   */
+  workers?: IngestWorkerSpec[]
+}
+
 export type StrategyType = 'funding' | 'spread'
 export type StrategyVariant = 'sync' | 'async' | 'spread' | null
 
@@ -171,11 +198,14 @@ interface Config {
   }
   trackedPairs: string[]
   trackedPairsByQuote?: Record<string, string[]>
+  minMarketPeers?: number
   arbitrage: ArbitrageConfig
   trading: TradingConfig
   accountSync: AccountSyncConfig
   funding: FundingConfig
   fundingFeeCollector: FundingFeeCollectorConfig
+  performanceMonitor: PerformanceMonitorConfig
+  ingest: IngestConfig
   strategy: StrategyConfig
 }
 
@@ -184,8 +214,47 @@ function buildPerMarketTypeFees(rawFees: any, exchangeName: string): PerMarketTy
   const spot = rawFees.spot ? { maker: rawFees.spot.maker, taker: rawFees.spot.taker } : undefined
   const linear = rawFees.linear ? { maker: rawFees.linear.maker, taker: rawFees.linear.taker } : undefined
   const inverse = rawFees.inverse ? { maker: rawFees.inverse.maker, taker: rawFees.inverse.taker } : undefined
-  if (!spot && !linear && !inverse) throw new Error(`fees config for ${exchangeName} has no spot/linear/inverse entries`)
+  if (!spot && !linear && !inverse)
+    throw new Error(`fees config for ${exchangeName} has no spot/linear/inverse entries`)
   return { spot, linear, inverse }
+}
+
+const KNOWN_EXCHANGES = ['binance', 'bybit', 'okx', 'bitget']
+const MARKET_TYPE_VALUES = Object.values(MarketType) as string[]
+
+/** Validate ingest.workers topology — fail fast on typos or overlapping specs. */
+function parseIngestWorkers(raw: any): IngestWorkerSpec[] | undefined {
+  if (raw == null) return undefined
+  if (!Array.isArray(raw)) throw new Error('ingest.workers must be a list')
+
+  const specs: IngestWorkerSpec[] = []
+  const seen = new Set<string>()
+  const untyped = new Set<string>()
+  for (const entry of raw) {
+    const exchange = entry?.exchange
+    if (!KNOWN_EXCHANGES.includes(exchange)) {
+      throw new Error(`ingest.workers: unknown exchange '${exchange}' (expected one of ${KNOWN_EXCHANGES.join(', ')})`)
+    }
+    const marketType = entry.marketType
+    if (marketType !== undefined && !MARKET_TYPE_VALUES.includes(marketType)) {
+      throw new Error(
+        `ingest.workers: invalid marketType '${marketType}' for ${exchange} (expected one of ${MARKET_TYPE_VALUES.join(', ')})`
+      )
+    }
+    const key = `${exchange}:${marketType ?? 'all'}`
+    if (seen.has(key)) throw new Error(`ingest.workers: duplicate entry ${key}`)
+    seen.add(key)
+    if (marketType === undefined) untyped.add(exchange)
+    specs.push({ exchange, marketType: marketType as MarketType | undefined })
+  }
+  // An all-types worker plus a typed worker for the same exchange would
+  // double-subscribe that market type.
+  for (const spec of specs) {
+    if (spec.marketType !== undefined && untyped.has(spec.exchange)) {
+      throw new Error(`ingest.workers: ${spec.exchange} has both an all-types entry and a marketType entry (overlap)`)
+    }
+  }
+  return specs
 }
 
 const config: Config = {
@@ -250,11 +319,9 @@ const config: Config = {
       ignoredFundingSymbols: yamlConfig?.exchanges?.bitget?.ignoredFundingSymbols,
     },
   },
-  trackedPairs: [
-    ...(yamlConfig?.trackedPairs ?? []),
-    ...Object.values(yamlConfig?.trackedPairsByQuote ?? {}).flat(),
-  ],
+  trackedPairs: [...(yamlConfig?.trackedPairs ?? []), ...Object.values(yamlConfig?.trackedPairsByQuote ?? {}).flat()],
   trackedPairsByQuote: yamlConfig?.trackedPairsByQuote,
+  minMarketPeers: yamlConfig?.minMarketPeers ?? 0,
   arbitrage: {
     blacklistPairs: yamlConfig?.arbitrage?.blacklistPairs || [],
     minConfidenceScore: yamlConfig?.arbitrage?.minConfidenceScore,
@@ -288,6 +355,15 @@ const config: Config = {
   },
   fundingFeeCollector: {
     cronPattern: yamlConfig?.fundingFeeCollector?.cronPattern,
+  },
+  performanceMonitor: {
+    enabled: yamlConfig?.performanceMonitor?.enabled ?? false,
+    intervalMs: yamlConfig?.performanceMonitor?.intervalMs ?? 10000,
+  },
+  ingest: {
+    enabled: yamlConfig?.ingest?.enabled ?? false,
+    depth: yamlConfig?.ingest?.depth ?? 20,
+    workers: parseIngestWorkers(yamlConfig?.ingest?.workers),
   },
   strategy: {
     funding: {

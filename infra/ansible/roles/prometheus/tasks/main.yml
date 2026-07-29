@@ -1,0 +1,51 @@
+---
+# prometheus role — config + data dir + compose fragment. Tag: prometheus.
+
+- name: Create the prometheus config directory
+  ansible.builtin.file:
+    path: "{{ obs_stack_dir }}/config/prometheus"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the prometheus config
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ obs_stack_dir }}/config/prometheus/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the prometheus rules directory
+  ansible.builtin.file:
+    path: "{{ obs_stack_dir }}/config/prometheus/rules"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the prometheus recording + alert rule files
+  ansible.builtin.template:
+    src: "rules/{{ item }}.j2"
+    dest: "{{ obs_stack_dir }}/config/prometheus/rules/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ prometheus_rule_files }}"
+
+- name: Create the prometheus data directory (container UID)
+  ansible.builtin.file:
+    path: "{{ obs_data_root }}/prometheus"
+    state: directory
+    owner: "{{ prometheus_uid }}"
+    group: "{{ prometheus_uid }}"
+    mode: "0755"
+
+- name: Template the prometheus compose fragment
+  ansible.builtin.template:
+    src: prometheus.yaml.j2
+    dest: "{{ obs_stack_dir }}/services/prometheus.yaml"
+    owner: root
+    group: root
+    mode: "0644"

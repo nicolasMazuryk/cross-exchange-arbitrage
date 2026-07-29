@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+services:
+  prometheus:
+    image: {{ prometheus_image }}
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/config/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time={{ prometheus_retention_time }}
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+      - --web.listen-address=0.0.0.0:9090
+    volumes:
+      # Mount the config DIRECTORY (prometheus.yml + rules/), not single files:
+      # a single-file bind-mount pins the original inode, so an atomic template
+      # rewrite (temp+rename → new inode) is invisible to /-/reload. A dir mount
+      # makes renames visible → in-place reloads load fresh config + rules.
+      - {{ obs_stack_dir }}/config/prometheus:/etc/prometheus/config:ro
+      - {{ obs_data_root }}/prometheus:/prometheus
+    ports:
+      - "{{ obs_bind_ip }}:{{ prometheus_port }}:9090"
+    mem_limit: {{ prometheus_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

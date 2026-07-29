@@ -1,0 +1,106 @@
+---
+# obs.yml — observability backend stack on the obs box (task 07). Installs
+# Docker, mounts the 40 GB HC Volume at /mnt/obs-data, lays the obs-stack compose
+# project, templates the 7 backend fragments, then brings the merged project up
+# and waits on each backend's health endpoint. Backends bind the private IP only
+# (fw-obs is the second layer). Run after baseline/wireguard.
+- name: Stand up the observability backend stack (obs box)
+  hosts: role_obs
+  become: true
+  vars:
+    # On-box health probes — every backend binds the private IP; the uri tasks
+    # run on the obs host itself, proving the private-IP bind is reachable.
+    obs_health_checks:
+      - { name: prometheus, url: "http://{{ hcloud_private_ipv4 }}:{{ prometheus_port }}/-/ready", status: [200] }
+      - { name: loki, url: "http://{{ hcloud_private_ipv4 }}:{{ loki_port }}/ready", status: [200] }
+      - { name: tempo, url: "http://{{ hcloud_private_ipv4 }}:{{ tempo_otlp_http_port }}/", status: [200, 404, 405] }
+      - { name: pyroscope, url: "http://{{ hcloud_private_ipv4 }}:{{ pyroscope_port }}/ready", status: [200] }
+      - { name: alertmanager, url: "http://{{ hcloud_private_ipv4 }}:{{ alertmanager_port }}/-/ready", status: [200] }
+      - { name: grafana, url: "http://{{ hcloud_private_ipv4 }}:{{ grafana_port }}/api/health", status: [200] }
+      - { name: glitchtip, url: "http://{{ hcloud_private_ipv4 }}:{{ glitchtip_port }}/", status: [200, 302] }
+  roles:
+    - role: docker
+      tags: [obs, docker]
+    - role: volume_mount
+      vars:
+        volume_mount_path: "{{ obs_data_root }}"
+      tags: [obs, volume_mount]
+    - role: obs_stack
+      tags: [obs, obs_stack]
+    - role: prometheus
+      tags: [obs, prometheus]
+    - role: obs_node_exporter
+      tags: [obs, obs_node_exporter]
+    - role: drift_detection
+      tags: [obs, drift_detection]
+    - role: loki
+      tags: [obs, loki]
+    - role: tempo
+      tags: [obs, tempo]
+    - role: pyroscope
+      tags: [obs, pyroscope]
+    - role: alertmanager
+      tags: [obs, alertmanager]
+    - role: grafana
+      tags: [obs, grafana]
+    - role: glitchtip
+      tags: [obs, glitchtip]
+  post_tasks:
+    - name: Bring up the merged obs-stack compose project
+      community.docker.docker_compose_v2:
+        project_src: "{{ obs_stack_dir }}"
+        state: present
+      tags: [obs, compose_up]
+
+    # GlitchTip needs the stack up (one-off web container), so provision here as
+    # a post_task, not in the role's roles-phase tasks. tasks_from keeps the
+    # command + snippet inside the role (tasks/provision.yml, files/...).
+    - name: Provision GlitchTip superuser + organization
+      ansible.builtin.import_role:
+        name: glitchtip
+        tasks_from: provision
+      tags: [obs, glitchtip_provision]
+
+    - name: Wait for each backend health endpoint (on-box, private IP)
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        method: GET
+        status_code: "{{ item.status }}"
+        timeout: 5
+        validate_certs: false
+      register: obs_health
+      until: obs_health is succeeded
+      retries: 30
+      delay: 10
+      loop: "{{ obs_health_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [obs, health]
+
+    # Reload AFTER compose up so prometheus is already recreated with
+    # --web.enable-lifecycle and the new config+rules; alertmanager's compose
+    # fragment is unchanged so a bind-mount config edit needs this explicit
+    # reload. changed_when:false → idempotent (reload itself is side-effect-free).
+    - name: Reload Prometheus to load config + recording/alert rules
+      ansible.builtin.uri:
+        url: "http://{{ hcloud_private_ipv4 }}:{{ prometheus_port }}/-/reload"
+        method: POST
+        status_code: [200]
+      register: prometheus_reload
+      until: prometheus_reload is succeeded
+      retries: 12
+      delay: 5
+      changed_when: false
+      tags: [obs, reload]
+
+    - name: Reload Alertmanager to load the routing config
+      ansible.builtin.uri:
+        url: "http://{{ hcloud_private_ipv4 }}:{{ alertmanager_port }}/-/reload"
+        method: POST
+        status_code: [200]
+      register: alertmanager_reload
+      until: alertmanager_reload is succeeded
+      retries: 12
+      delay: 5
+      changed_when: false
+      tags: [obs, reload]

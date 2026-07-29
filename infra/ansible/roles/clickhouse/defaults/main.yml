@@ -1,0 +1,30 @@
+---
+# clickhouse — config-on-host (spec 03/06). No image pin (Kamal owns the
+# container, task 13). Overridden by group_vars/role_core.yml.
+clickhouse_config_dir: /etc/clickhouse-server
+clickhouse_data_dir: /mnt/ch-volume/clickhouse
+clickhouse_uid: 101                  # clickhouse container UID:GID
+
+# Tiered storage policy
+clickhouse_s3_endpoint: https://nbg1.your-objectstorage.com/arbinet-cold/
+clickhouse_hot_max_part_size: 10737418240   # 10 GiB
+clickhouse_move_factor: 0.2
+
+# Resource limits (sizing table 06: ~12 GB, max_threads 6)
+clickhouse_max_memory_usage: 12000000000
+clickhouse_max_bytes_external_group_by: 6000000000
+clickhouse_max_threads: 6
+clickhouse_async_insert: 1
+clickhouse_wait_for_async_insert: 0
+
+# Network — global listen_host bound to loopback + private IP
+clickhouse_listen_hosts:
+  - 127.0.0.1
+  - "{{ core_private_ip }}"
+
+# Native Prometheus endpoint port (task 09 telemetry). Scraped by Alloy on
+# loopback; job="clickhouse". CH default for this endpoint is 9363.
+clickhouse_prometheus_port: 9363
+
+# App user
+clickhouse_default_database: arbinet

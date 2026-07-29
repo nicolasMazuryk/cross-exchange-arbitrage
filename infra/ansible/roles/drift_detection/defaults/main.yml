@@ -1,0 +1,8 @@
+---
+# drift_detection — the role's tunables live in group_vars/role_obs.yml (the
+# role only ever runs on the obs host, and ansible-lint's var-naming rule keeps
+# role-`defaults` vars role-prefixed; the stack convention here is to put shared
+# config in group_vars instead). See:
+#   inventories/production/group_vars/role_obs.yml  (drift_* + textfile dir)
+#   inventories/production/group_vars/all/drift.yml (drift_ssh_public_key, shared)
+#   group_vars/all/vault.sops.yml                   (drift_ssh_private_key, secret)

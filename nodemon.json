@@ -1,0 +1,7 @@
+{
+  "watch": ["src"],
+  "ext": "ts,json",
+  "ignore": ["src/**/*.spec.ts", "dist", ".dev-data"],
+  "delay": "300",
+  "legacyWatch": true
+}

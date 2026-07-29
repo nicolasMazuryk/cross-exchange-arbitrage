@@ -1,0 +1,20 @@
+---
+# obs_node_exporter role — compose fragment only (no config dir, no data dir;
+# node-exporter is stateless). Templates services/node_exporter.yaml into the
+# obs-stack project. Tag: obs_node_exporter.
+
+- name: Ensure the textfile-collector host directory exists
+  ansible.builtin.file:
+    path: "{{ obs_node_exporter_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the obs node-exporter compose fragment
+  ansible.builtin.template:
+    src: node_exporter.yaml.j2
+    dest: "{{ obs_stack_dir }}/services/node_exporter.yaml"
+    owner: root
+    group: root
+    mode: "0644"

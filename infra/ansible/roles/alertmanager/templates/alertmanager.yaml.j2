@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+services:
+  alertmanager:
+    image: {{ alertmanager_image }}
+    container_name: alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/config/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=0.0.0.0:9093
+    volumes:
+      # Mount the config DIRECTORY, not the single file: ansible template writes
+      # atomically (temp+rename → new inode), and a single-file bind-mount keeps
+      # the container pinned to the original inode → /-/reload reads stale config.
+      # A directory mount makes the rename visible, so in-place reloads work.
+      - {{ obs_stack_dir }}/config/alertmanager:/etc/alertmanager/config:ro
+      - {{ obs_data_root }}/alertmanager:/alertmanager
+    ports:
+      - "{{ obs_bind_ip }}:{{ alertmanager_port }}:9093"
+    mem_limit: {{ alertmanager_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

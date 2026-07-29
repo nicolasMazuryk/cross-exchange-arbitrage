@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+services:
+  pyroscope:
+    image: {{ pyroscope_image }}
+    container_name: pyroscope
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/pyroscope/pyroscope.yml
+      - -target=all
+    volumes:
+      - {{ obs_stack_dir }}/config/pyroscope/pyroscope.yml:/etc/pyroscope/pyroscope.yml:ro
+      - {{ obs_data_root }}/pyroscope:/data
+    ports:
+      - "{{ obs_bind_ip }}:{{ pyroscope_port }}:4040"
+    mem_limit: {{ pyroscope_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

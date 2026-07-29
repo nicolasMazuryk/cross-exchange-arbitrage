@@ -1,0 +1,107 @@
+---
+# role_core — core-box data-middleware config (task 08). Source of truth for
+# chrony / clickhouse / redpanda; per-role defaults/ mirror these and are
+# overridden here. Config-on-host only (gap G6): Ansible writes config files +
+# volume dirs + sizing; Kamal (task 13) runs the pinned containers that mount
+# them. No schema DDL, no topic creation. Spread-computer/alloy/kamal-proxy land
+# in tasks 09-10.
+
+# Private-net IP of the core box. hcloud_private_ipv4 resolves from the dynamic
+# inventory; the literal default keeps static/check runs working.
+core_private_ip: "{{ hcloud_private_ipv4 | default('10.0.1.20') }}"
+
+# --- chrony (spec 03 §chrony-role) -----------------------------------------
+chrony_pools:
+  - 0.europe.pool.ntp.org
+  - time.cloudflare.com
+chrony_minpoll: 4
+chrony_maxpoll: 8
+chrony_makestep: "0.1 3"
+chrony_logdir: /var/log/chrony
+
+# --- clickhouse (spec 03 §clickhouse-role, sizing 06) ----------------------
+clickhouse_config_dir: /etc/clickhouse-server
+clickhouse_data_dir: /mnt/ch-volume/clickhouse
+clickhouse_uid: 101                                  # container UID:GID
+clickhouse_s3_endpoint: https://nbg1.your-objectstorage.com/arbinet-cold/
+clickhouse_hot_max_part_size: 10737418240            # 10 GiB
+clickhouse_move_factor: 0.2
+clickhouse_max_memory_usage: 12000000000             # ~12 GB
+clickhouse_max_bytes_external_group_by: 6000000000
+clickhouse_max_threads: 6
+clickhouse_async_insert: 1
+clickhouse_wait_for_async_insert: 0
+clickhouse_listen_hosts:
+  - 127.0.0.1
+  - "{{ core_private_ip }}"
+clickhouse_default_database: arbinet
+
+# --- redpanda (spec 03 §redpanda-role, sizing 06) --------------------------
+redpanda_uid: 101                                    # container UID:GID
+redpanda_data_dir: /mnt/ch-volume/redpanda           # host bind (Kamal mount)
+redpanda_container_data_dir: /var/lib/redpanda/data  # in-container path
+redpanda_node_id: 0
+redpanda_kafka_port: 9092
+redpanda_admin_host: 127.0.0.1
+redpanda_admin_port: 9644
+redpanda_smp: 2
+redpanda_memory: 5G
+redpanda_reserve_memory: 0M
+# Cluster fail-safe retention (~20 GiB). Per-topic caps DOCUMENTED ONLY — the
+# app (task 12) creates topics; this layer never does.
+redpanda_cluster_retention_bytes: 21474836480
+redpanda_topics:
+  - { name: ob.ticks, retention_bytes: 21474836480, delete_retention_ms: 86400000 }
+  - { name: spreads.live, retention_bytes: 21474836480 }
+
+# --- telemetry: app-support + Alloy collector (task 09, spec 03/05) ----------
+# obs box private IP — every core-box signal forwards here. Prometheus has
+# scrape_configs: [] by design; all core metrics arrive via Alloy remote-write.
+obs_private_ip: "10.0.1.30"
+
+# spread-computer /metrics port (overridable seam; datapipeline app + task-14
+# contract change it in one place). Shared by the spread_computer + alloy roles.
+spread_computer_metrics_port: 9105
+
+# ClickHouse native Prometheus endpoint (no exporter binary — first-party).
+# Used both by the clickhouse role (binds it) and the alloy scrape target below.
+clickhouse_prometheus_port: 9363
+
+# node_exporter loopback bind (mirrors the role default).
+node_exporter_listen_address: "127.0.0.1:9100"
+
+# kamal-proxy ACME/cert state dir (mirrors the role default).
+kamal_proxy_state_dir: /var/lib/kamal-proxy
+
+# --- Alloy collector contract ----------------------------------------------
+# Warm tier = 15s (task 14, spec 05 §scrape-interval). The core box is
+# single-tier — all warm services (spread-computer, query-api), middleware
+# (Redpanda, CH) and host exporters are warm-path — so one 15s interval covers
+# every scrape block. Only the hot box scrapes at 5s.
+alloy_scrape_interval: "15s"
+# scrape_timeout <= scrape_interval; 10s default fits the 15s warm interval.
+alloy_scrape_timeout: "10s"
+# Per-host external label on remote-write metrics (host="core") — distinguishes
+# core's job=node series from hot's in the obs Prometheus; resolves host= alerts.
+alloy_host_label: "core"
+# Job labels MUST stay exactly node|clickhouse|redpanda|query-api|spread-computer
+# (spec 05 obs_target_down regex + task-09 verification). All targets loopback.
+alloy_scrape_targets:
+  - { job: node, target: "127.0.0.1:9100" }
+  # CH native endpoint emits 1217 raw ClickHouseProfileEvents_* event counters
+  # (~40% of the job's 3082 series, near-zero dashboard value). Drop-list keeps
+  # everything else (incl. any future ClickHouse*/clickhouse_* the name contract
+  # settles on) so newly-added panels are never starved. Re-measure topk(__name__)
+  # and extend the alternation if another oversized noise family appears.
+  - { job: clickhouse, target: "127.0.0.1:{{ clickhouse_prometheus_port }}", drop_metrics: "ClickHouseProfileEvents_.*" }
+  # redpanda admin API (9644) serves both /metrics (verbose, ~11.5k series,
+  # vectorized_* only) and /public_metrics (curated redpanda_* subset). Scrape
+  # the curated path: ~9.5k fewer series AND the redpanda_* alert names resolve.
+  - { job: redpanda, target: "127.0.0.1:9644", metrics_path: "/public_metrics" }
+  - { job: query-api, target: "127.0.0.1:8080" }
+  - { job: spread-computer, target: "127.0.0.1:{{ spread_computer_metrics_port }}" }
+# Forwarding endpoints built from obs_private_ip.
+alloy_remote_write_url: "http://{{ obs_private_ip }}:9090/api/v1/write"
+alloy_loki_url: "http://{{ obs_private_ip }}:3100/loki/api/v1/push"
+alloy_tempo_endpoint: "{{ obs_private_ip }}:4317"
+alloy_pyroscope_url: "http://{{ obs_private_ip }}:4040"

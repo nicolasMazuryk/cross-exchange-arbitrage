@@ -1,0 +1,16 @@
+# Dev-local Grafana dashboard provider — copied from infra/ansible/roles/
+# grafana/templates/provisioning/dashboards/dashboards.yml.j2. Loads every JSON
+# under /etc/grafana/dashboards (mounted read-only). Flat "ArbiNet" folder.
+apiVersion: 1
+
+providers:
+  - name: arbinet
+    orgId: 1
+    folder: ArbiNet
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

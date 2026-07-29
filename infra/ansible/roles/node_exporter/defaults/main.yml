@@ -1,0 +1,15 @@
+---
+# node_exporter — Ubuntu prometheus-node-exporter apt package, bound to
+# loopback. Alloy scrapes 127.0.0.1:9100 and remote-writes to the obs box.
+# Overridden by group_vars/role_core.yml.
+node_exporter_package: prometheus-node-exporter
+node_exporter_service: prometheus-node-exporter
+node_exporter_default_file: /etc/default/prometheus-node-exporter
+# host:port the exporter binds. Loopback only — Alloy is on the same box.
+node_exporter_listen_address: 127.0.0.1:9100
+# Collectors to disable via --no-collector.<name>. The Debian package enables
+# the systemd collector by default (upstream does not); node_systemd_unit_state
+# is ~2140 series/host of near-zero value, so drop it. The obs box's
+# containerized obs_node_exporter already runs without it.
+node_exporter_disabled_collectors:
+  - systemd

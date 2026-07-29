@@ -1,0 +1,15 @@
+# SOPS creation rules — operator age recipient (single recipient).
+# Private key: ~/.config/sops/age/keys.txt (never committed).
+creation_rules:
+  # Consolidated Ansible vault (host/middleware config secrets).
+  - path_regex: infra/ansible/inventories/production/group_vars/all/vault\.sops\.yml$
+    age: age1yvj9rn0k6tjhn3rt6dpq2yklnwqtv3usmd307mdq24afkzdz8ywstrsung
+  # Standalone secrets (e.g. hcloud_token — decrypted by the hetzner.hcloud
+  # inventory plugin before group_vars load).
+  - path_regex: infra/ansible/inventories/production/secrets/.*\.sops\.yml$
+    age: age1yvj9rn0k6tjhn3rt6dpq2yklnwqtv3usmd307mdq24afkzdz8ywstrsung
+  # Dev stack secrets — full app env, same recipient as the prod vault (dev↔prod
+  # parity). docker:dev:up decrypts this to the gitignored .env with
+  # `sops -d --output-type dotenv` (stored as a flat YAML map, emitted as dotenv).
+  - path_regex: config/secrets/dev\.env\.sops\.yaml$
+    age: age1yvj9rn0k6tjhn3rt6dpq2yklnwqtv3usmd307mdq24afkzdz8ywstrsung

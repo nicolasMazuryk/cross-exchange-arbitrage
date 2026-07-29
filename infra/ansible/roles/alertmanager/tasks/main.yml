@@ -1,0 +1,47 @@
+---
+# alertmanager role — config + data dir + compose fragment. Tag: alertmanager.
+
+- name: Look up the Slack webhook + PagerDuty routing key from SOPS
+  ansible.builtin.set_fact:
+    alertmanager_slack_api_url: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).alertmanager_slack_api_url }}
+    alertmanager_pagerduty_routing_key: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).alertmanager_pagerduty_routing_key }}
+  no_log: true
+
+- name: Create the alertmanager config directory
+  ansible.builtin.file:
+    path: "{{ obs_stack_dir }}/config/alertmanager"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the alertmanager config (contains secrets — container-uid 0600, no_log)
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ obs_stack_dir }}/config/alertmanager/alertmanager.yml"
+    owner: "{{ alertmanager_uid }}"
+    group: "{{ alertmanager_uid }}"
+    mode: "0600"
+  no_log: true
+
+- name: Create the alertmanager data directory (container UID)
+  ansible.builtin.file:
+    path: "{{ obs_data_root }}/alertmanager"
+    state: directory
+    owner: "{{ alertmanager_uid }}"
+    group: "{{ alertmanager_uid }}"
+    mode: "0755"
+
+- name: Template the alertmanager compose fragment
+  ansible.builtin.template:
+    src: alertmanager.yaml.j2
+    dest: "{{ obs_stack_dir }}/services/alertmanager.yaml"
+    owner: root
+    group: root
+    mode: "0644"

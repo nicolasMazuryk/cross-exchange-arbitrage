@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+# Nightly drift schedule — jittered to avoid a fixed-time thundering herd, and
+# Persistent so a run missed while the box was down fires on next boot.
+[Unit]
+Description=Schedule ArbiNet nightly Ansible drift detection
+
+[Timer]
+OnCalendar={{ drift_oncalendar }}
+RandomizedDelaySec={{ drift_randomized_delay_sec }}
+Persistent=true
+Unit=arbinet-drift.service
+
+[Install]
+WantedBy=timers.target

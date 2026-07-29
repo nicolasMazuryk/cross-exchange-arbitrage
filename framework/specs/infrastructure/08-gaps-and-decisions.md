@@ -58,6 +58,8 @@ Every gap, conflict, or silent assumption found while turning the four observabi
 
 **Input needed:** confirm a host-managed (kamal-proxy) Let's Encrypt cert on the core box is acceptable (vs. a specific cert authority/SAN requirement).
 
+**DNS prerequisite now met.** The LE cert's DNS dependency is provisioned: `api.arbinet.xyz` A → core box via `hcloud_zone` (`dns.tf`, [02](./02-provisioning.md)), NS delegated from GoDaddy. The cert itself issues at `kamal deploy` time (app not yet built).
+
 ## G6 — Ansible vs Kamal ownership seam {#g6}
 
 **Gap.** Ansible roles "own install/config/sizing" for ClickHouse/Redpanda, but those run as **Kamal accessories** (containers). Who owns what?

@@ -1,0 +1,31 @@
+---
+# node_exporter role (task 09) — install prometheus-node-exporter from apt,
+# bind it to 127.0.0.1:9100 via ARGS, enable+start. systemd-native, so the
+# target is up==1 immediately (the immediate-up proof for task-09 verification;
+# app targets stay up==0 until Kamal runs them in task 13). Tag: node_exporter.
+
+- name: Install prometheus-node-exporter
+  ansible.builtin.apt:
+    name: "{{ node_exporter_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: node_exporter_apt
+  until: node_exporter_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Bind node_exporter to loopback via ARGS
+  ansible.builtin.template:
+    src: prometheus-node-exporter.j2
+    dest: "{{ node_exporter_default_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart node_exporter
+
+- name: Enable and start node_exporter
+  ansible.builtin.service:
+    name: "{{ node_exporter_service }}"
+    enabled: true
+    state: started

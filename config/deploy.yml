@@ -1,0 +1,131 @@
+# ArbiNet app layer — Kamal 2 descriptor (task 12, authoring only; deploy is task 13).
+# Two-host topology: trader on the hot box (10.0.1.10, no ingress), query-api +
+# spread-computer + the ClickHouse/Redpanda accessories on the core box (10.0.1.20).
+# Kamal runs the pinned containers on top of the config Ansible already laid down (G6).
+service: arbinet
+
+# Custom role names (no default `web`), so name the principal role explicitly.
+primary_role: trader
+
+# Single image, roles differ only by `cmd` (spec 04 §kamal-apps shape). Each task-11
+# Dockerfile builds the whole dist/, so every entrypoint exists in this one image.
+# Image path is lowercase; the registry login keeps its original case (AC2 / G7).
+# No registry prefix here — Kamal prepends registry.server (ghcr.io) → ghcr.io/nicolasmazuryk/arbinet-trader.
+image: nicolasmazuryk/arbinet-trader
+
+registry:
+  server: ghcr.io
+  username: nicolasMazuryk
+  password:
+    - KAMAL_REGISTRY_PASSWORD       # resolved in .kamal/secrets from the SOPS vault
+
+builder:
+  arch: amd64                       # amd64 only — single-arch build, no other platform (AC2)
+  context: .                        # build from repo root (Dockerfile COPYs package*.json + src/)
+  dockerfile: docker/Dockerfile.trader   # non-default path; one app image, roles differ by cmd
+
+# Root SSH is disabled; deploy as the passwordless-sudo `ansible` user (added to the
+# `docker` group by the docker role). Non-default operator key (Blocker A fix).
+ssh:
+  user: ansible
+  keys:
+    - "~/.ssh/nicolas"
+
+# ---- app roles ----
+servers:
+  trader:                           # hot box — no proxy/ingress, single-instance (AC1/AC4)
+    hosts:
+      - 10.0.1.10
+    proxy: false                    # opt OUT of kamal-proxy — trader has no edge (AC2).
+                                    # Kamal 2 routes every role through the proxy unless this is set.
+    cmd: node dist/trader.js
+    options:
+      publish: ["127.0.0.1:9464:9464"]   # Alloy hot scrapes 127.0.0.1:9464 (loopback-scrape convention)
+    env:
+      clear:
+        CH_URL: http://10.0.1.20:8123   # host-specific: trade-state over the private net (AC4)
+        CH_USER: arbinet                # networked CH access uses the `arbinet` vault user;
+                                        # `default` is loopback-only/no-password (CH users.d),
+                                        # so the over-the-net trader MUST auth as arbinet.
+                                        # CH_PASSWORD (shared secret) = vault ch_arbinet_password.
+
+  queryapi:                         # core box — only app behind the public edge (AC1)
+    hosts:
+      - 10.0.1.20
+    cmd: node dist/queryApi.js
+    options:
+      publish: ["127.0.0.1:8080:8080"]   # Alloy core scrapes 127.0.0.1:8080; coexists with kamal-proxy (proxy routes over docker net)
+    proxy:
+      ssl: true                     # kamal-proxy LE cert + TLS terminate (spec §edge-and-tls)
+      host: api.arbinet.xyz         # query-api domain (AC1)
+      app_port: 8080                # stub serves /up + /healthz + /metrics on 8080
+      healthcheck:
+        path: /up                   # mandatory health-gate (AC1, spec §mandatory-up)
+    env:
+      clear:
+        CH_URL: http://127.0.0.1:8123   # host-specific: loopback on the core box (AC4)
+
+  spreadcomputer:                   # core box — single-instance, no ingress (AC1/AC4)
+    hosts:
+      - 10.0.1.20
+    cmd: node dist/spreadComputer.js
+    options:
+      publish: ["127.0.0.1:9105:9105"]   # Alloy core scrapes 127.0.0.1:9105
+    env:
+      clear:
+        CH_URL: http://127.0.0.1:8123
+        METRICS_PORT: "9105"             # stub reads METRICS_PORT (default 9464); pin to the scraped port
+
+# ---- shared env ----
+env:
+  clear:
+    REDPANDA_BROKERS: 10.0.1.20:9092    # not secret; plain (spec §secrets) (AC4)
+  secret:
+    - CH_PASSWORD
+    - S3_ACCESS_KEY
+    - S3_SECRET_KEY
+    # QUERY_API_KEY + exchange API keys are datapipeline-runtime secrets — added to the
+    # vault + here when that app ships. The stubs need none, so they stay unwired for now.
+
+# ---- core-box accessories (AC3) ----
+accessories:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3       # pinned upstream amd64 (no `-lts` suffix on Docker Hub)
+    host: 10.0.1.20
+    # Top-level `network` REPLACES kamal's default `--network kamal`; putting host
+    # under `options` instead adds a 2nd `--network` → "cannot attach both ... network-modes".
+    network: host                   # share host net so network.xml binds 10.0.1.20:8123 + 127.0.0.1:9000
+    volumes:
+      - /etc/clickhouse-server/config.d:/etc/clickhouse-server/config.d
+      - /etc/clickhouse-server/users.d:/etc/clickhouse-server/users.d
+      - /mnt/ch-volume/clickhouse:/var/lib/clickhouse
+    env:
+      secret:
+        - S3_ACCESS_KEY             # tiered-storage S3 disk creds
+        - S3_SECRET_KEY
+
+  redpanda:
+    image: redpandadata/redpanda:v26.1.9           # pinned upstream amd64 (no rolling `v26.1` tag published)
+    host: 10.0.1.20
+    network: host                   # host net so redpanda binds 10.0.1.20:9092 + 127.0.0.1:9644 (see clickhouse note)
+    # Listeners + sizing live here on the kamal cmd (Kamal owns the container). NO
+    # --mode dev-container (it silently adds --unsafe-bypass-fsync, wrong for prod).
+    # --overprovisioned supplies dev-container's shared-box tuning without touching
+    # durability. Sizing mirrors role defaults (redpanda_smp=2 / redpanda_memory=5G).
+    # FSYNC-ON is NOT a side effect of dropping --mode: rpk has no production start-flag
+    # and defaults a fresh config to dev (fsync-bypass), so production is pinned by the
+    # redpanda.yaml node-config seed (developer_mode:false) the redpanda role writes;
+    # rpk preserves it on every start. auto_create_topics_enabled + retention seed once
+    # via the immutable /etc/redpanda/.bootstrap.yaml. Contingency: if boot fails a Volume
+    # self-check, add `--check=false` (independent of fsync, unlike dev-container).
+    cmd: >-
+      redpanda start --node-id 0 --smp 2 --memory 5G --reserve-memory 0M
+      --overprovisioned --kafka-addr 0.0.0.0:9092
+      --advertise-kafka-addr 10.0.1.20:9092 --rpc-addr 127.0.0.1:33145
+    volumes:
+      # /etc/redpanda holds the seeded .bootstrap.yaml (read once at cluster init) plus
+      # rpk's own runtime redpanda.yaml; dir mount (not single file) because rpk rewrites
+      # redpanda.yaml via atomic temp+rename, which fails on a file bind-mount
+      # ("rename ... device or resource busy").
+      - /etc/redpanda:/etc/redpanda
+      - /mnt/ch-volume/redpanda:/var/lib/redpanda/data

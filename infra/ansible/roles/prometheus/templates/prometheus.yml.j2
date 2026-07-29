@@ -1,0 +1,37 @@
+# {{ ansible_managed }}
+# Prometheus config (task 14). Core/hot metrics arrive via Alloy remote-write
+# (the agents own scrape_interval per box: hot 5s / core 15s); the static
+# scrape_configs below are ONLY the obs box's own self-observability (Prometheus
+# + a containerized node-exporter), which run no Alloy. Recording/alert rules
+# live under rules/.
+global:
+  scrape_interval: 15s
+  # Explicit (else Prometheus' built-in 10s default applies implicitly). 10s < 15s
+  # interval; obs self-scrapes take <30ms, so this is generous headroom.
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: arbinet-obs
+
+rule_files:
+  - /etc/prometheus/config/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+# obs-box self-observability only. Everything else (trader, query-api,
+# spread-computer, node@hot/core, clickhouse, redpanda) is remote-written by the
+# two Alloy agents — Prometheus does NOT scrape them.
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          host: obs
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          host: obs

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Kamal pre-deploy hook — single-instance trader guard for deploy/redeploy/rollback.
+#
+# Fires before kamal's deploy/redeploy/rollback (NOT app boot/start — kamal.sh guards
+# those). Receives KAMAL_HOSTS / KAMAL_ROLE. Non-zero exit ABORTS the operation:
+# if we can't guarantee single-instance, we don't deploy (fail-safe over overlap).
+#
+# Runs inside the kamal wrapper container → repo mounted at /workdir, helper reachable
+# at /workdir/infra/kamal/stop-trader.sh. Needs the `ssh` CLI → openssh-client added
+# in docker/Dockerfile.kamal.
+set -euo pipefail
+
+# Only act when the hot box (trader's only host) is actually targeted — a core-only
+# deploy (e.g. --roles=queryapi) leaves KAMAL_HOSTS without 10.0.1.10 and must NOT
+# stop the trader. Comma-pad both sides for an exact element match.
+case ",${KAMAL_HOSTS:-}," in
+  *",10.0.1.10,"*)
+    exec /workdir/infra/kamal/stop-trader.sh
+    ;;
+  *)
+    exit 0
+    ;;
+esac

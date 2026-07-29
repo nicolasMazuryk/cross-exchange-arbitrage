@@ -19,6 +19,12 @@ interface DepthSimulationResult {
   hasError: boolean
 }
 
+interface ScanLeg {
+  exchange: string
+  marketType: MarketType
+  symbol: string
+}
+
 interface OpportunityScore {
   estimatedProfitUsd: number
   estimatedProfitPercent: number
@@ -37,7 +43,6 @@ interface OpportunityScore {
 // Funding timeline interfaces
 interface FundingEvent {
   timestamp: number
-  time: Date
   buyExchangeFundingRate: number
   sellExchangeFundingRate: number
   netFundingRate: number
@@ -98,6 +103,8 @@ export interface ArbitrageOpportunity {
   confidenceScore: number
   traceId: string
   orderbookUpdateTimestamp: number
+  opportunityStalenessMs: number // now - earliest exchange book ts (how old the opportunity is)
+  orderbookTimestampSkewMs: number // |buyBook.timestamp - sellBook.timestamp| (leg time mismatch / phantom signal)
   // Strategy type
   strategy: StrategyType
   strategyVariant: StrategyVariant
@@ -155,6 +162,13 @@ export class ArbitrageEngine extends EventEmitter {
   private readonly sellSpotBuyPerpEnabled: boolean
   // Anti-spam logging configuration
   private antiSpamLogTime: number
+  // Hot-path scratch objects, reused across scans to avoid per-update allocation.
+  // Values are valid only within the synchronous call that filled them.
+  private readonly scanLegsScratch: ScanLeg[] = []
+  private readonly entryBuySimScratch: DepthSimulationResult = { avgExecutionPrice: 0, avgNormalizedExecutionPrice: 0, slippagePercent: 0, hasError: false }
+  private readonly entrySellSimScratch: DepthSimulationResult = { avgExecutionPrice: 0, avgNormalizedExecutionPrice: 0, slippagePercent: 0, hasError: false }
+  private readonly exitBuySimScratch: DepthSimulationResult = { avgExecutionPrice: 0, avgNormalizedExecutionPrice: 0, slippagePercent: 0, hasError: false }
+  private readonly exitSellSimScratch: DepthSimulationResult = { avgExecutionPrice: 0, avgNormalizedExecutionPrice: 0, slippagePercent: 0, hasError: false }
 
   constructor(
     orderbookManager: OrderbookManager,
@@ -204,12 +218,11 @@ export class ArbitrageEngine extends EventEmitter {
   }
 
   private setupEventListeners(): void {
-    // Listen for top of book updates
+    // Listen for top of book updates. Hot path: no trace context here —
+    // tracing starts at opportunity emission (scanOpportunities).
     this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
       try {
-        TraceContext.runWithExistingTrace(topOfBook.traceId, 'arbitrage-scan', () => {
-          this.scanOpportunities(topOfBook)
-        })
+        this.scanOpportunities(topOfBook)
       } catch (error) {
         logger.error({
           msg: 'Error scanning opportunities from orderbook update',
@@ -222,13 +235,15 @@ export class ArbitrageEngine extends EventEmitter {
     })
   }
 
+  // Writes into `out` (a reusable scratch object) instead of allocating per call.
   private simulateSlippage(
     orderbookSide: OrderBookLevel[],
     exchangeVolume: number,
     isBuy: boolean,
     exchange: string,
     exchangeSymbol: string,
-    metadataService: MarketMetadataService
+    metadataService: MarketMetadataService,
+    out: DepthSimulationResult
   ): DepthSimulationResult {
     let remainingVolume = exchangeVolume
     let weightedPrice = 0
@@ -268,12 +283,11 @@ export class ArbitrageEngine extends EventEmitter {
       ? ((avgExecutionPrice - basePrice) / basePrice) * 100
       : ((basePrice - avgExecutionPrice) / basePrice) * 100
 
-    return {
-      avgExecutionPrice,
-      avgNormalizedExecutionPrice: metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol),
-      slippagePercent,
-      hasError,
-    }
+    out.avgExecutionPrice = avgExecutionPrice
+    out.avgNormalizedExecutionPrice = metadataService.normalizePrice(avgExecutionPrice, exchangeSymbol)
+    out.slippagePercent = slippagePercent
+    out.hasError = hasError
+    return out
   }
 
   private calculateConfidenceScore(
@@ -452,7 +466,6 @@ export class ArbitrageEngine extends EventEmitter {
 
         timeline.push({
           timestamp: event.timestamp,
-          time: new Date(event.timestamp),
           buyExchangeFundingRate: event.buyExchangeFundingRate,
           sellExchangeFundingRate: event.sellExchangeFundingRate,
           netFundingRate,
@@ -478,7 +491,6 @@ export class ArbitrageEngine extends EventEmitter {
 
         timeline.push({
           timestamp: event.timestamp,
-          time: new Date(event.timestamp),
           buyExchangeFundingRate: isBuyPerp ? event.fundingRate : 0,
           sellExchangeFundingRate: isBuyPerp ? 0 : event.fundingRate,
           netFundingRate,
@@ -618,7 +630,15 @@ export class ArbitrageEngine extends EventEmitter {
 
     // TEMPORARY FOR DEBUGGING
     if (fundingRateDifferencePercent !== profitEstimate.fundingProfitPercent) {
-      console.log('fundingRateDifferencePercent === profitEstimate.fundingProfitPercent')
+      logger.info({
+        msg: 'fundingRateDifferencePercent !== profitEstimate.fundingProfitPercent',
+        function: 'ArbitrageEngine.determineStrategy',
+        buyExchange: buyFundingData!.exchange,
+        sellExchange: sellFundingData!.exchange,
+        symbol: buyFundingData!.symbol,
+        fundingRateDifferencePercent: fundingRateDifferencePercent.toFixed(3),
+        profitEstimateFundingProfitPercent: profitEstimate.fundingProfitPercent.toFixed(3),
+      })
     }
 
     if (this.fundingStrategyEnabled && withinFundingWindow) {
@@ -865,12 +885,29 @@ export class ArbitrageEngine extends EventEmitter {
         topOfBook.exchange,
         topOfBook.symbol,
         allOrderbooks,
-        topOfBook.timestamp,
-        topOfBook.traceId
+        topOfBook.timestamp
       )
 
       if (opportunities.length > 0) {
-        this.emit('opportunities', opportunities)
+        // Slow path begins here: create the trace context at opportunity
+        // emission so trading/funding/REST flows keep full tracing.
+        // The async callback body runs synchronously up to its first await,
+        // so 'opportunities' listeners still observe the live orderbooks of
+        // this emit tick.
+        TraceContext.runWithTrace('arbitrage-opportunities-detected', async traceId => {
+          for (const opportunity of opportunities) {
+            opportunity.traceId = traceId
+          }
+          this.emit('opportunities', opportunities)
+        }).catch(error => {
+          logger.error({
+            msg: 'Error emitting opportunities',
+            function: 'ArbitrageEngine.scanOpportunities',
+            exchange: topOfBook.exchange,
+            symbol: topOfBook.symbol,
+            error,
+          })
+        })
       }
     } catch (error) {
       logger.error({
@@ -887,8 +924,7 @@ export class ArbitrageEngine extends EventEmitter {
     updatingExchange: string,
     symbol: string,
     allOrderbooks: Map<string, Map<string, OrderBook>>,
-    orderbookUpdateTimestamp: number,
-    traceId: string
+    orderbookUpdateTimestamp: number
   ): ArbitrageOpportunity[] {
     const opportunities: ArbitrageOpportunity[] = []
 
@@ -899,13 +935,10 @@ export class ArbitrageEngine extends EventEmitter {
       const baseQuote = updatingMetadataService.normalizeBaseQuote(symbol)
       if (!baseQuote || this.blacklistPairs.includes(baseQuote)) return []
 
-      // Build all legs: (exchange, marketType, symbol) tuples with live orderbooks
-      interface Leg {
-        exchange: string
-        marketType: MarketType
-        symbol: string
-      }
-      const legs: Leg[] = []
+      // Build all legs: (exchange, marketType, symbol) tuples with live orderbooks.
+      // Class-level scratch array reused across scans — valid only within this call.
+      const legs = this.scanLegsScratch
+      legs.length = 0
 
       for (const [exchange, orderbooks] of allOrderbooks) {
         const metadataService = this.marketMetadataServices.get(exchange)
@@ -964,7 +997,7 @@ export class ArbitrageEngine extends EventEmitter {
               legA.symbol, legB.symbol, metadataServiceA, metadataServiceB,
               opportunities, fundingDataA, fundingDataB,
               legA.marketType, legB.marketType,
-              updatingExchange, orderbookUpdateTimestamp, traceId
+              updatingExchange, orderbookUpdateTimestamp
             )
           } catch (error) {
             logger.error({
@@ -984,7 +1017,7 @@ export class ArbitrageEngine extends EventEmitter {
               legB.symbol, legA.symbol, metadataServiceB, metadataServiceA,
               opportunities, fundingDataB, fundingDataA,
               legB.marketType, legA.marketType,
-              updatingExchange, orderbookUpdateTimestamp, traceId
+              updatingExchange, orderbookUpdateTimestamp
             )
           } catch (error) {
             logger.error({
@@ -1029,8 +1062,7 @@ export class ArbitrageEngine extends EventEmitter {
     buyMarketType: MarketType,
     sellMarketType: MarketType,
     updatingExchange: string,
-    orderbookUpdateTimestamp: number,
-    traceId: string
+    orderbookUpdateTimestamp: number
   ): void {
     if (!buyBook.asks[0] || !buyBook.bids[0] || !sellBook.asks[0] || !sellBook.bids[0]) return
 
@@ -1210,7 +1242,8 @@ export class ArbitrageEngine extends EventEmitter {
       true,
       buyExchange,
       buyExchangeSymbol,
-      buyMetadataService
+      buyMetadataService,
+      this.entryBuySimScratch
     )
     const entrySellSimulation = this.simulateSlippage(
       sellBook.bids,
@@ -1218,7 +1251,8 @@ export class ArbitrageEngine extends EventEmitter {
       false,
       sellExchange,
       sellExchangeSymbol,
-      sellMetadataService
+      sellMetadataService,
+      this.entrySellSimScratch
     )
 
     // === EXIT SLIPPAGE SIMULATION ===
@@ -1229,7 +1263,8 @@ export class ArbitrageEngine extends EventEmitter {
       false,
       buyExchange,
       buyExchangeSymbol,
-      buyMetadataService
+      buyMetadataService,
+      this.exitBuySimScratch
     )
     const exitSellSimulation = this.simulateSlippage(
       sellBook.asks,
@@ -1237,7 +1272,8 @@ export class ArbitrageEngine extends EventEmitter {
       true,
       sellExchange,
       sellExchangeSymbol,
-      sellMetadataService
+      sellMetadataService,
+      this.exitSellSimScratch
     )
 
     if (entryBuySimulation.hasError || entrySellSimulation.hasError || exitBuySimulation.hasError || exitSellSimulation.hasError) {
@@ -1283,7 +1319,18 @@ export class ArbitrageEngine extends EventEmitter {
       isSpotSpot
     )
 
-    // if (normalizedPair === "PROVE/USDT|linear:linear") return
+    // Create the final opportunity object with funding-aware data and strategy annotation
+    const nowTs = Date.now()
+    const opportunityStalenessMs = nowTs - Math.min(buyBook.timestamp, sellBook.timestamp)
+    const orderbookTimestampSkewMs = Math.abs(buyBook.timestamp - sellBook.timestamp)
+
+    if (["AI/USDT|spot:spot", "U/USDT|spot:spot", "SAHARA/USDT|spot:spot", "ARX/USDT|spot:spot", "ICNT/USDT|spot:spot", "NFP/USDT|spot:spot", "TAIKO/USDT|spot:spot", "LUNC/USDT|spot:spot", "USTC/USDT|spot:spot", "VANA/USDT|spot:spot", "SATS/USDT|spot:spot", "TAC/USDT|spot:spot"].includes(normalizedPair)) return
+
+    // if (["BB/USDT|spot:linear", "UP/USDT|spot:linear", "AI/USDT|spot:linear", "QNT/USDT|spot:linear"].includes(normalizedPair)) return
+
+    // if (["QNT/USDT|linear:linear", "BB/USDT|linear:linear", "OPENAI/USDT|linear:linear", "ON/USDT|linear:linear", "ANTHROPIC/USDT|linear:linear"].includes(normalizedPair)) return
+
+    // if ([buyExchange, sellExchange].includes('binance')) return
 
     if (!isSpotSpot) return
 
@@ -1291,8 +1338,8 @@ export class ArbitrageEngine extends EventEmitter {
 
     // if (isSpotSpot || bothLegsArePerp) return
 
-    if (profitEstimate.estimatedProfitPercent > 0.5) {
-      console.log(normalizedPair, buyExchange, sellExchange, profitEstimate.costsPercent, ' | ', profitEstimate.fundingProfitPercent, ' | ', profitEstimate.spreadProfitPercent, ' | ', profitEstimate.estimatedProfitPercent)
+    if (profitEstimate.estimatedProfitPercent > 0.3 && orderbookTimestampSkewMs < 500) {
+      logger.signal(normalizedPair, buyExchange, sellExchange, profitEstimate.costsPercent, profitEstimate.fundingProfitPercent, profitEstimate.spreadProfitPercent, profitEstimate.estimatedProfitPercent, nowTs - buyBook.timestamp, nowTs - sellBook.timestamp, opportunityStalenessMs, orderbookTimestampSkewMs)
     }
 
     // === CONFIDENCE VALIDATION ===
@@ -1356,7 +1403,6 @@ export class ArbitrageEngine extends EventEmitter {
       finalNormalizedVolume * entrySellSimulation.avgNormalizedExecutionPrice
     )
 
-    // Create the final opportunity object with funding-aware data and strategy annotation
     opportunities.push({
       id: persistenceResult.candidate!.id,
       strategy: strategyResult.strategy,
@@ -1379,7 +1425,10 @@ export class ArbitrageEngine extends EventEmitter {
       // Additional properties
       confidenceScore: profitEstimate.confidenceScore,
       orderbookUpdateTimestamp,
-      traceId,
+      opportunityStalenessMs,
+      orderbookTimestampSkewMs,
+      traceId: '', // stamped with a fresh trace at emission in scanOpportunities
+
       // Funding tracking
       buyExchangeNextFundingTimestamp: buyFundingData?.nextFundingTimestamp ?? 0,
       sellExchangeNextFundingTimestamp: sellFundingData?.nextFundingTimestamp ?? 0,

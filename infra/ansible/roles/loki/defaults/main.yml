@@ -1,0 +1,8 @@
+---
+# loki — single-binary log store, filesystem backend, 7d retention via compactor.
+# Overridden by group_vars/role_obs.yml.
+loki_image: grafana/loki:3.7.2
+loki_port: 3100
+loki_retention_period: 168h
+loki_mem_limit: 1536m
+loki_uid: 10001

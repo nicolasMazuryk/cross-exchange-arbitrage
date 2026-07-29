@@ -1,0 +1,31 @@
+---
+# glitchtip — error tracking. 5-service fragment: web (publishes :8000), worker
+# (celery+beat), a one-shot migrate (applies schema; web/worker gate on it),
+# postgres + redis (internal obs network only, no host port). Web does NOT
+# auto-migrate. Secrets from SOPS. Overridden by group_vars/role_obs.yml.
+glitchtip_image: glitchtip/glitchtip:6.1.6
+glitchtip_postgres_image: postgres:16.14-alpine
+glitchtip_redis_image: redis:7.4-alpine
+glitchtip_port: 8000
+glitchtip_max_event_life_days: 30
+glitchtip_postgres_db: glitchtip
+glitchtip_postgres_user: glitchtip
+glitchtip_domain: "http://{{ hcloud_private_ipv4 }}:8000"
+glitchtip_default_from_email: glitchtip@arbinet.xyz
+glitchtip_web_mem_limit: 1g
+glitchtip_worker_mem_limit: 512m
+glitchtip_postgres_mem_limit: 768m
+glitchtip_redis_mem_limit: 256m
+# Bind-mount data-dir owners/modes. The container entrypoints chown+chmod their
+# data dirs on every start (postgres -> uid 70 / 0700, redis -> uid 999 / 0750,
+# both group root); pre-setting the same values keeps re-runs idempotent.
+# uploads is written by the glitchtip app user (uid 1000). UIDs are specific to
+# the pinned alpine images.
+glitchtip_postgres_uid: 70
+glitchtip_redis_uid: 999
+glitchtip_uploads_uid: 1000
+# First-login provisioning (post_tasks in playbooks/obs.yml). Admin password is
+# vaulted (glitchtip_admin_password); email is the username (GlitchTip uses email
+# as USERNAME_FIELD). The superuser is auto-added as OWNER of this org.
+glitchtip_admin_email: tripod.dev.engineers@gmail.com
+glitchtip_org_name: ArbiNet

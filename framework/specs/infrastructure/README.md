@@ -91,7 +91,7 @@ Three Terraform-provisioned, label-tagged Hetzner hosts on one private network. 
 | Obs UI access | **WireGuard VPN** into the private network. No public IP on Grafana/GlitchTip. |
 | TF state lock | S3 backend in Hetzner Object Storage with **native lockfile** (Terraform ≥ 1.10 `use_lockfile=true`); no DynamoDB. |
 | Trader singleton | **Kamal stop-before-start only** (zero-downtime overlap disabled). No app-level lock. |
-| Ingress / TLS | **kamal-proxy on the core box** terminates TLS (Let's Encrypt); **Hetzner LB dropped** — query-api is off the hot path (G5 reversed). Firewall edge 22/80/443 + WireGuard on the core box. |
+| Ingress / TLS | **kamal-proxy on the core box** terminates TLS (Let's Encrypt) for **`api.arbinet.xyz`**; **Hetzner LB dropped** — query-api is off the hot path (G5 reversed). Firewall edge 22/80/443 + WireGuard on the core box. DNS via Terraform-managed `hcloud_zone arbinet.xyz`. |
 | Region | **NBG1** everywhere; object-storage endpoint `nbg1.your-objectstorage.com`. |
 | Block storage | core Volume **200 GB** `/mnt/ch-volume` (CH + Redpanda data); obs Volume **40 GB** `/mnt/obs-data`. Hot box has **no Volume**. Volumes ship small, grow via Terraform `size`. |
 | Cold storage | Hetzner Object Storage bucket **`arbinet-cold`** (CH S3 disk + daily Parquet); TF state bucket **`arbinet-tfstate`**. |

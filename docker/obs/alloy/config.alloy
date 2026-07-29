@@ -1,0 +1,159 @@
+// Dev-local Alloy — rendered from infra/ansible/roles/alloy/templates/
+// config.alloy.j2 with dev values. ONE container plays the role prod splits
+// across the hot+core Alloy agents: scrape loopback/app /metrics, tail docker
+// logs → Loki, receive OTLP → Tempo, receive Pyroscope → Pyroscope. Job names
+// match prod EXACTLY (node|clickhouse|redpanda|query-api|spread-computer|trader)
+// so PromQL/dashboards/alert names line up. Single host label host="dev" (prod
+// splits hot/core/obs). Forwarding targets are compose service names on the
+// shared `arbinet` bridge network.
+
+// ---- Metrics: scrape -> remote_write (dev Prometheus) ----
+prometheus.remote_write "obs" {
+  external_labels = { host = "dev" }
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}
+
+// clickhouse: drop the 1217 raw ClickHouseProfileEvents_* counters at the
+// scrape edge (prod parity — near-zero dashboard value, ~40% of the job).
+prometheus.relabel "clickhouse_drop" {
+  forward_to = [prometheus.remote_write.obs.receiver]
+  rule {
+    action        = "drop"
+    source_labels = ["__name__"]
+    regex         = "ClickHouseProfileEvents_.*"
+  }
+}
+
+prometheus.scrape "node" {
+  targets         = [{ __address__ = "node-exporter:9100" }]
+  job_name        = "node"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.scrape "clickhouse" {
+  targets         = [{ __address__ = "clickhouse:9363" }]
+  job_name        = "clickhouse"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.relabel.clickhouse_drop.receiver]
+}
+
+// redpanda admin API (9644) /public_metrics — curated redpanda_* subset (prod
+// parity: ~9.5k fewer series than /metrics, and the redpanda_* names resolve).
+prometheus.scrape "redpanda" {
+  targets         = [{ __address__ = "redpanda:9644" }]
+  job_name        = "redpanda"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/public_metrics"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.scrape "query_api" {
+  targets         = [{ __address__ = "query-api:8080" }]
+  job_name        = "query-api"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.scrape "spread_computer" {
+  targets         = [{ __address__ = "spread-computer:9105" }]
+  job_name        = "spread-computer"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.scrape "trader" {
+  targets         = [{ __address__ = "trader:9464" }]
+  job_name        = "trader"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+// ---- Logs: docker tail -> Loki ----
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// Promote the docker container name to a `container` Loki label. `__meta_*`
+// labels are dropped at push, so without this every line lands in one unlabeled
+// stream — unqueryable. Dev addition over the verbatim prod body (prod tails
+// the same logs; the label is cosmetic) so LogQL `{container="…"}` and the
+// log→trace pivot work deterministically. See OBSERVABILITY.md.
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+  // Tail only the dev stack's own containers. Without this Alloy also tails
+  // transient buildx/buildkit containers whose ancient log timestamps Loki
+  // rejects with HTTP 400 ("timestamp too old") — pure noise.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(arbinet-.*)"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.obs.receiver]
+}
+
+loki.write "obs" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// ---- Traces: OTLP receive -> Tempo ----
+otelcol.receiver.otlp "in" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+// ---- Profiles: Pyroscope receive -> Pyroscope ----
+pyroscope.receive_http "in" {
+  http {
+    listen_address = "0.0.0.0"
+    listen_port    = 4040
+  }
+  forward_to = [pyroscope.write.obs.receiver]
+}
+
+pyroscope.write "obs" {
+  endpoint {
+    url = "http://pyroscope:4040"
+  }
+}

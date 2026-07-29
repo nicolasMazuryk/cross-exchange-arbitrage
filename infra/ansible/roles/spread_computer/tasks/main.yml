@@ -1,0 +1,35 @@
+---
+# spread_computer role (task 09) — config-on-host only. Creates the env/config
+# dir and templates the env file the Kamal spread-computer container mounts in
+# task 13. Zero app logic, no container, no service. The /metrics endpoint is
+# bound by the app at runtime (task 13) → up{job="spread-computer"}==0 until
+# then; this role just declares METRICS_BIND. Tag: spread_computer.
+
+- name: Create the spread-computer config directory
+  ansible.builtin.file:
+    path: "{{ spread_computer_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Look up the clickhouse arbinet user/password from SOPS
+  ansible.builtin.set_fact:
+    spread_computer_ch_user: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).ch_arbinet_user }}
+    spread_computer_ch_password: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).ch_arbinet_password }}
+  no_log: true
+
+- name: Template the spread-computer env file (CH creds from SOPS)
+  ansible.builtin.template:
+    src: spread-computer.env.j2
+    dest: "{{ spread_computer_env_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  no_log: true

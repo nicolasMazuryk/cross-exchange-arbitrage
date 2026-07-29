@@ -1,0 +1,18 @@
+---
+# kamal_proxy role (task 09) — host-prep only, fully idempotent (file: dir only).
+# Creates the ACME/Let's Encrypt cert-state dir the kamal-proxy v2 container
+# mounts so issued certs survive container redeploys. Mode 0700 — only the proxy
+# (run as root via Kamal) reads it; cert private keys live here.
+#
+# NOT configured here (deploy-time, task 12/13): the proxy itself, route table,
+# and the /up health-gate — all set via `kamal-proxy deploy` CLI flags
+# (--health-check-path=/up, --tls / ACME). kamal-proxy reads no static file, so
+# there is nothing else durable to lay on the host. Tag: kamal_proxy.
+
+- name: Create the kamal-proxy ACME/cert state directory
+  ansible.builtin.file:
+    path: "{{ kamal_proxy_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"

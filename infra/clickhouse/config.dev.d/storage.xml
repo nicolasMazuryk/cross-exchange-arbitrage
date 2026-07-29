@@ -1,13 +1,13 @@
 <!-- Dev storage policy: single-disk only. No warm/cold tier in local dev.
-     Schemas reference policy `tiered`; we redefine it here as a single-volume
-     alias of the default disk so identical DDL works in dev and prod. -->
+     Schemas reference policy `tiered`; we alias it here to a single volume on
+     the built-in `default` disk so identical DDL works in dev and prod.
+     NOTE: do NOT redefine the `default` disk here — CH 26.3 rejects giving it a
+     <path> under <storage_configuration> ("default disk path should be provided
+     in <path> not in <storage_configuration>", UNKNOWN_ELEMENT_IN_CONFIG). The
+     `default` disk is implicit (its path = the server-level <path>); the policy
+     just references it. -->
 <clickhouse>
   <storage_configuration>
-    <disks>
-      <default>
-        <path>/var/lib/clickhouse/</path>
-      </default>
-    </disks>
     <policies>
       <tiered>
         <volumes>

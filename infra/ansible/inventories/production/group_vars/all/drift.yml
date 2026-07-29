@@ -1,0 +1,6 @@
+---
+# Drift detection — shared, non-secret vars (stack-wide, so group_vars not role
+# defaults: baseline authorizes this key on EVERY host's deploy user, including
+# hot/core where the drift_detection role itself never runs). The private half
+# lives in vault.sops.yml (drift_ssh_private_key); see roles/drift_detection.
+drift_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDAVqJxLVWcbCoFdnLH4pssAEPdx7lq0CdeL1ojf1fjs arbinet-drift"

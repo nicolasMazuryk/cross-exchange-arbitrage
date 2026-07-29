@@ -1,0 +1,16 @@
+<!-- {{ ansible_managed }} -->
+<!-- arbinet app user (spec 03 §clickhouse-role). Password from SOPS vault —
+     never committed in plaintext to the role tree. default_database = arbinet. -->
+<clickhouse>
+  <users>
+    <{{ clickhouse_arbinet_user }}>
+      <password>{{ clickhouse_arbinet_password }}</password>
+      <default_database>{{ clickhouse_default_database }}</default_database>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <profile>default</profile>
+      <quota>default</quota>
+    </{{ clickhouse_arbinet_user }}>
+  </users>
+</clickhouse>

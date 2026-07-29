@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Nightly drift detection — runs `ansible-playbook {{ drift_playbook }} --check
+# --diff` against env_prod from the obs box (private net), parses the PLAY RECAP
+# for summed changed=, and writes a node_exporter textfile metric. A clean run
+# is changed=0; any changed>0 = a host drifted out-of-band → `drift_detected`
+# fires (spec 07 §Nightly drift detection). NOT idempotent-state-changing: the
+# dockerized ansible runs read-only (--check).
+set -uo pipefail
+
+LOG="{{ drift_log_path }}"
+METRIC_FILE="{{ drift_metric_file }}"
+METRIC_TMP="${METRIC_FILE}.$$"
+RUNNER_IMAGE="{{ drift_runner_image }}"
+
+ts() { date +%s; }
+log() { echo "[$(date -Is)] $*" | tee -a "$LOG" >&2; }
+
+log "drift-check start (image=${RUNNER_IMAGE})"
+
+# Read-only --check against the live fleet. The runner image carries pinned
+# ansible-core + collections + sops/age; the tree, age key and drift SSH key are
+# bind-mounted read-only. --network host so the inventory plugin can reach the
+# Hetzner API and the hosts answer on 10.0.1.x over the private net.
+RUN_OUTPUT="$(docker run --rm --network host \
+  -v {{ drift_ansible_dir }}:/ansible:ro \
+  -v {{ drift_age_key_path }}:/run/age-key.txt:ro \
+  -v {{ drift_ssh_key_path }}:/run/drift_ed25519:ro \
+  -e SOPS_AGE_KEY_FILE=/run/age-key.txt \
+  -e ANSIBLE_PRIVATE_KEY_FILE=/run/drift_ed25519 \
+  -e ANSIBLE_REMOTE_USER=ansible \
+  -e ANSIBLE_HOST_KEY_CHECKING=False \
+  "${RUNNER_IMAGE}" \
+  {{ drift_playbook }} -i {{ drift_inventory }} --check --diff --limit env_prod 2>&1)"
+RUN_RC=$?
+
+# Persist the full run (diff included) for the operator to investigate drift.
+printf '%s\n' "$RUN_OUTPUT" | tee -a "$LOG" >/dev/null
+
+# Sum `changed=N` across every host line in the PLAY RECAP. No recap (e.g. the
+# runner never started) → treat as failure, changed unknown=0.
+CHANGED="$(printf '%s\n' "$RUN_OUTPUT" \
+  | grep -oE 'changed=[0-9]+' \
+  | grep -oE '[0-9]+' \
+  | awk '{s+=$1} END {print s+0}')"
+RECAP_SEEN="$(printf '%s\n' "$RUN_OUTPUT" | grep -c 'PLAY RECAP')"
+
+if [ "$RUN_RC" -eq 0 ] && [ "$RECAP_SEEN" -ge 1 ]; then
+  SUCCESS=1
+else
+  SUCCESS=0
+fi
+
+log "drift-check done rc=${RUN_RC} changed=${CHANGED} success=${SUCCESS}"
+
+# Write the textfile metric atomically (temp + mv) so node-exporter never reads
+# a half-written file.
+{
+  echo "# HELP arbinet_ansible_drift_changed Hosts-summed Ansible --check changed= count (drift)."
+  echo "# TYPE arbinet_ansible_drift_changed gauge"
+  echo "arbinet_ansible_drift_changed ${CHANGED}"
+  echo "# HELP arbinet_ansible_drift_run_success Last drift run completed cleanly (1) or errored (0)."
+  echo "# TYPE arbinet_ansible_drift_run_success gauge"
+  echo "arbinet_ansible_drift_run_success ${SUCCESS}"
+  echo "# HELP arbinet_ansible_drift_last_run_timestamp_seconds Unix time of the last drift run."
+  echo "# TYPE arbinet_ansible_drift_last_run_timestamp_seconds gauge"
+  echo "arbinet_ansible_drift_last_run_timestamp_seconds $(ts)"
+} > "$METRIC_TMP"
+mv -f "$METRIC_TMP" "$METRIC_FILE"
+
+# Exit 0 even on drift/failure — the metric is the signal, not the exit code
+# (a non-zero exit would just mark the systemd unit failed and hide the metric).
+exit 0

@@ -1,0 +1,94 @@
+# {{ ansible_managed }}
+# GlitchTip 5-service fragment. postgres + redis stay on the internal obs
+# network (no host port); only web publishes :8000 on the private IP. A
+# one-shot glitchtip-migrate applies the DB schema; web/worker gate on it
+# completing so they never boot against an empty DB.
+services:
+  glitchtip-postgres:
+    image: {{ glitchtip_postgres_image }}
+    container_name: glitchtip-postgres
+    hostname: postgres
+    restart: unless-stopped
+    env_file:
+      - {{ obs_stack_dir }}/config/glitchtip/glitchtip.env
+    volumes:
+      - {{ obs_data_root }}/glitchtip/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ glitchtip_postgres_user }} -d {{ glitchtip_postgres_db }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: {{ glitchtip_postgres_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+  glitchtip-redis:
+    image: {{ glitchtip_redis_image }}
+    container_name: glitchtip-redis
+    hostname: redis
+    restart: unless-stopped
+    volumes:
+      - {{ obs_data_root }}/glitchtip/redis:/data
+    mem_limit: {{ glitchtip_redis_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+  glitchtip-migrate:
+    image: {{ glitchtip_image }}
+    container_name: glitchtip-migrate
+    command: ./manage.py migrate --noinput
+    restart: "no"
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+    env_file:
+      - {{ obs_stack_dir }}/config/glitchtip/glitchtip.env
+    mem_limit: {{ glitchtip_web_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+  glitchtip-web:
+    image: {{ glitchtip_image }}
+    container_name: glitchtip-web
+    restart: unless-stopped
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_started
+      glitchtip-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - {{ obs_stack_dir }}/config/glitchtip/glitchtip.env
+    volumes:
+      - {{ obs_data_root }}/glitchtip/uploads:/code/uploads
+    ports:
+      - "{{ obs_bind_ip }}:{{ glitchtip_port }}:8000"
+    mem_limit: {{ glitchtip_web_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+  glitchtip-worker:
+    image: {{ glitchtip_image }}
+    container_name: glitchtip-worker
+    restart: unless-stopped
+    command: ./bin/run-celery-with-beat.sh
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_started
+      glitchtip-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - {{ obs_stack_dir }}/config/glitchtip/glitchtip.env
+    volumes:
+      - {{ obs_data_root }}/glitchtip/uploads:/code/uploads
+    mem_limit: {{ glitchtip_worker_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

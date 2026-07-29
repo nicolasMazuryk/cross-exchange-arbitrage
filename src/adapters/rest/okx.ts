@@ -186,9 +186,11 @@ export class OkxExchange extends BaseExchange {
   async fetchFundingData(): Promise<Map<string, ParsedFunding>> {
     try {
       const allRates = await this.exchange.fetchFundingRates(undefined)
+      const tradable = new Set(Object.keys(this.getTradingMarkets()))
       const fundingData = new Map<string, ParsedFunding>()
 
       for (const [symbol, rate] of Object.entries(allRates)) {
+        if (!tradable.has(symbol)) continue
         const r = rate as any
         if (typeof r.fundingRate !== 'number' || isNaN(r.fundingRate) || !r.nextFundingTimestamp) {
           logger.warn({

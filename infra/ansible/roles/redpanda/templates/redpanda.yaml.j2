@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Node-config SEED — pins PRODUCTION mode so fsync stays ON. Seeded ONCE
+# (force:false); rpk owns this file at runtime and merges in the listeners/sizing/
+# rpc from the Kamal start cmd (config/deploy.yml), preserving developer_mode:false.
+#
+# Why this seed is REQUIRED (not redundant): `rpk redpanda start` has NO production
+# --mode value (only `dev-container`), and a FRESH redpanda.yaml defaults to
+# development mode, which makes rpk launch the broker with `--unsafe-bypass-fsync=true`
+# (data-loss risk, wrong for prod). The only way to pin production for a containerised
+# broker is to set developer_mode:false in the node config before first start. rpk then
+# keeps it false across every reboot.
+redpanda:
+  developer_mode: false

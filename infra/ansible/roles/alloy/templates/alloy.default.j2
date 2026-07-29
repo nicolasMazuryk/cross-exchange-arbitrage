@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# Read by the packaged alloy.service unit. CONFIG_FILE points the binary at the
+# templated River config; the single-binary model is spec 05's mandate.
+CONFIG_FILE="{{ alloy_config_file }}"
+CUSTOM_ARGS=""
+RESTART_ON_UPGRADE=true

@@ -1,0 +1,42 @@
+# {{ ansible_managed }}
+# Drift detection alerts (task 15, spec 07 §Nightly drift detection). Fed by the
+# obs-box node_exporter textfile metric arbinet_drift.prom, written nightly by
+# the drift_detection role's --check --diff wrapper. severity=warn → Slack
+# (Alertmanager routes by the severity label).
+groups:
+  - name: drift_alerts
+    rules:
+      # Any host changed out-of-band since the last run = drift.
+      - alert: drift_detected
+        expr: arbinet_ansible_drift_changed > 0
+        for: 0m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "Ansible drift: {% raw %}{{ $value }}{% endraw %} changed task(s) on env_prod"
+          action: "A host drifted from the repo (out-of-band change). Inspect /var/log/arbinet-drift.log on the obs box for the --diff; codify the change into a role or revert it with a normal (non --check) site.yml run. Runbook: infra/runbooks/incident-response.md#drift_detected."
+
+      # Dead-timer guard — a clean run must keep proving itself. Fires if the last
+      # successful write is older than 36h (nightly schedule + generous slack).
+      - alert: drift_check_stale
+        expr: time() - arbinet_ansible_drift_last_run_timestamp_seconds > 129600
+        for: 0m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "Drift check stale — last run > 36h ago"
+          action: "The nightly drift timer hasn't reported in >36h (dead timer, broken textfile collector, or obs box down). Check `systemctl status arbinet-drift.timer` + node-exporter textfile dir on obs. Runbook: infra/runbooks/incident-response.md#drift_check_stale."
+
+      # Catches a run that errored (unreachable host / play failure) without a
+      # changed count — distinct from real drift.
+      - alert: drift_check_failed
+        expr: arbinet_ansible_drift_run_success == 0
+        for: 0m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "Drift check run failed (success=0)"
+          action: "Last drift --check did not complete cleanly (host unreachable or play error). Inspect /var/log/arbinet-drift.log on obs. Runbook: infra/runbooks/incident-response.md#drift_check_stale."

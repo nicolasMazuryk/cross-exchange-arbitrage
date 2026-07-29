@@ -1,0 +1,92 @@
+#cloud-config
+# Minimal, idempotent reachability bootstrap — identical across all hosts.
+# Everything beyond reachability (mounts, middleware, hardening) is Ansible's job.
+users:
+  - name: ansible
+    groups: sudo
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${ssh_pubkey}
+
+ssh_pwauth: false
+disable_root: true
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+  # Stop cloud-init managing networking. DataSourceHetzner sets ipv6=True and tries
+  # IPv6 *via DHCP* on the public NIC at init-local; Hetzner serves IPv6 by metadata,
+  # not DHCP, so a slow early IMDS fetch makes the render throw and init-local fails
+  # (cloud-init #6862) — a random box per provision shows `status: error`. cloud-init
+  # owns no NIC here: enp1s0 is fine on the fallback DHCP netplan already on disk, and
+  # ${private_iface} is brought up by hc-private-nic-up@ + Hetzner's hc-net-ifup@. Lands in
+  # the config stage (too late for THIS boot's init-local); the power_state reboot below
+  # makes the next boot's init-local run with it present → clean status.
+  - path: /etc/cloud/cloud.cfg.d/99-arbinet-disable-network.cfg
+    owner: root:root
+    permissions: "0644"
+    content: |
+      network: {config: disabled}
+  # Reachability backstop: guarantee the private NIC (${private_iface}) leases its
+  # 10.0.1.x address even when Hetzner's hc-net-ifup@ loses the boot race on slow
+  # large SKUs (core cpx62 / obs cpx42). Device-triggered so it fires the instant
+  # the NIC appears, however late.
+  #
+  # --ipv4only is load-bearing for the singleton guarantee: Hetzner's hc-net-ifup@
+  # runs `dhcpcd --ipv4only`, whose control socket is /run/dhcpcd/<iface>-4.sock.
+  # A default (dual-stack) dhcpcd uses a DIFFERENT socket (<iface>.sock) and so
+  # does NOT detect Hetzner's instance — both would run (verified: two masters on
+  # the race-winner). Matching --ipv4only shares the -4.sock, so when Hetzner won
+  # our start no-ops ("sending commands to dhcpcd process", exit 0); when Hetzner
+  # lost we are the sole client. The private NIC only needs IPv4, so dropping IPv6
+  # costs nothing.
+  #
+  # Type=oneshot + RemainAfterExit (NOT forking): on the race-winner the no-op
+  # exit forks no daemon, which a forking unit reads as failure (verified: unit
+  # goes `failed` though the NIC is up). oneshot treats exit-0 as success and
+  # RemainAfterExit keeps the unit `active`. Renewal is unaffected: on the
+  # race-loser `dhcpcd --waitip=4` still backgrounds its own renewing daemon after
+  # acquiring the lease (verified: daemon persists, lease+route held) — the lease
+  # would only expire under dhcpcd's own `--oneshot` FLAG, which we do not pass.
+  - path: /etc/systemd/system/hc-private-nic-up@.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Bring up Hetzner private NIC %i via dhcpcd (boot-race backstop)
+      Wants=sys-subsystem-net-devices-%i.device
+      After=sys-subsystem-net-devices-%i.device
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/dhcpcd --ipv4only --waitip=4 %i
+      ExecStop=/usr/sbin/dhcpcd --exit %i
+      [Install]
+      WantedBy=sys-subsystem-net-devices-%i.device
+
+packages:
+  - python3
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl restart ssh
+  - systemctl enable --now qemu-guest-agent
+  - systemctl daemon-reload
+  # enable creates the .device.wants symlink (covers a late NIC); start --no-block
+  # || true covers the NIC already present at this instant without erroring cloud-init.
+  - systemctl enable hc-private-nic-up@${private_iface}.service
+  - systemctl start --no-block hc-private-nic-up@${private_iface}.service || true
+
+# Reboot once per instance (after `final`) so boot #2's init-local re-runs with
+# cloud-init networking disabled — eliminates the random Hetzner IPv6-DHCP init-local
+# error (#6862). user_data drop-ins land too late for boot #1; this is the only
+# user_data-only path to a clean `cloud-init status` on a from-zero provision.
+power_state:
+  mode: reboot
+  message: "arbinet: reboot once so init-local re-runs with cloud-init networking disabled"
+  condition: true

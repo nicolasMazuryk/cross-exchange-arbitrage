@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+# Minimal-bootable Pyroscope (single-binary, target=all). All state under /data
+# (absolute paths so nothing depends on the container cwd). 7d retention via the
+# compactor blocks-retention limit.
+server:
+  http_listen_address: 0.0.0.0
+  http_listen_port: 4040
+
+pyroscopedb:
+  data_path: /data
+
+metastore:
+  raft:
+    dir: /data/metastore/raft
+  data_dir: /data/metastore/data
+
+storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/shared
+
+limits:
+  compactor_blocks_retention_period: {{ pyroscope_retention_period }}

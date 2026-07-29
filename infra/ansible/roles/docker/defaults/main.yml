@@ -1,0 +1,18 @@
+---
+# docker — install Docker CE + compose-plugin from the official apt repo.
+docker_apt_arch: amd64
+docker_apt_gpg_url: https://download.docker.com/linux/ubuntu/gpg
+# Pinned sha256 of the Docker apt GPG key (supply-chain pin + check-mode
+# idempotency for the nightly drift check). Recompute on key rotation:
+#   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sha256sum
+docker_apt_gpg_sha256: "sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+docker_apt_keyring: /etc/apt/keyrings/docker.asc
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+# Deploy user added to the `docker` group so Kamal's docker calls over SSH don't
+# need sudo (root SSH is disabled). Survives rebuilds — durable fix for Blocker A.
+docker_deploy_user: ansible

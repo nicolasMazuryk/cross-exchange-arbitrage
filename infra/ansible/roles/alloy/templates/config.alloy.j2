@@ -1,0 +1,99 @@
+// {{ ansible_managed }}
+// Core-box telemetry collector (spec 05 §signal-flow-over-the-private-network).
+// All core metrics reach Prometheus via THIS remote-write — Prometheus has
+// scrape_configs: [] by design, so the scrape jobs below are what make
+// up{job=~"node|clickhouse|redpanda|query-api|spread-computer"} exist at all.
+// Scrape loopback exporters + app /metrics, tail docker logs, receive OTLP +
+// Pyroscope, forward everything to the obs box ({{ alloy_remote_write_url }}).
+
+// ---- Metrics: scrape (loopback) -> remote_write (obs Prometheus) ----
+prometheus.remote_write "obs" {
+  external_labels = { host = "{{ alloy_host_label }}" }
+  endpoint {
+    url = "{{ alloy_remote_write_url }}"
+  }
+}
+
+// Per-target options (declarative in group_vars alloy_scrape_targets):
+//   metrics_path : scrape path override (default /metrics) — redpanda uses
+//                  /public_metrics (curated subset; verbose /metrics is ~11.5k
+//                  series and only it carries vectorized_*, so /public_metrics
+//                  both cuts cardinality AND surfaces the redpanda_* alert names).
+//   drop_metrics : __name__ regex dropped at the scrape edge via prometheus.relabel
+//                  (Alloy flow has no inline metric_relabel_configs; the idiom is
+//                  scrape -> prometheus.relabel -> remote_write). Drop-list, not
+//                  keep-list, so newly-added panels are never silently starved.
+{% for t in alloy_scrape_targets %}
+{% if t.drop_metrics is defined %}
+prometheus.relabel "{{ t.job | replace('-', '_') }}_drop" {
+  forward_to = [prometheus.remote_write.obs.receiver]
+  rule {
+    action        = "drop"
+    source_labels = ["__name__"]
+    regex         = "{{ t.drop_metrics }}"
+  }
+}
+{% endif %}
+prometheus.scrape "{{ t.job | replace('-', '_') }}" {
+  targets         = [{ __address__ = "{{ t.target }}" }]
+  job_name        = "{{ t.job }}"
+  scrape_interval = "{{ alloy_scrape_interval }}"
+  scrape_timeout  = "{{ alloy_scrape_timeout }}"
+  metrics_path    = "{{ t.metrics_path | default('/metrics') }}"
+  forward_to      = [{% if t.drop_metrics is defined %}prometheus.relabel.{{ t.job | replace('-', '_') }}_drop.receiver{% else %}prometheus.remote_write.obs.receiver{% endif %}]
+}
+{% endfor %}
+
+// ---- Logs: docker tail -> Loki (obs) ----
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.containers.targets
+  forward_to = [loki.write.obs.receiver]
+}
+
+loki.write "obs" {
+  endpoint {
+    url = "{{ alloy_loki_url }}"
+  }
+}
+
+// ---- Traces: OTLP receive (loopback) -> Tempo (obs) ----
+otelcol.receiver.otlp "in" {
+  grpc {
+    endpoint = "{{ alloy_otlp_grpc_listen }}"
+  }
+  http {
+    endpoint = "{{ alloy_otlp_http_listen }}"
+  }
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "{{ alloy_tempo_endpoint }}"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+// ---- Profiles: Pyroscope receive (loopback) -> Pyroscope (obs) ----
+pyroscope.receive_http "in" {
+  http {
+    listen_address = "{{ alloy_pyroscope_listen_address }}"
+    listen_port    = {{ alloy_pyroscope_listen_port }}
+  }
+  forward_to = [pyroscope.write.obs.receiver]
+}
+
+pyroscope.write "obs" {
+  endpoint {
+    url = "{{ alloy_pyroscope_url }}"
+  }
+}

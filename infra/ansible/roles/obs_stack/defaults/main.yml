@@ -1,0 +1,19 @@
+---
+# obs_stack — base role: lays the root compose project + shared network before
+# the per-backend fragments exist. The compose `up` runs in the playbook
+# post_tasks once every fragment is templated.
+obs_stack_dir: /opt/obs-stack
+# obs_network_name is a stack-wide var (group_vars/role_obs.yml) shared by every
+# backend fragment, so it is intentionally not role-prefixed here.
+
+# Backend fragments assembled via compose `include:`. Adding a backend = adding
+# its role + one entry here.
+obs_stack_includes:
+  - prometheus
+  - node_exporter      # obs-box self host metrics (task 14, obs_node_exporter role)
+  - loki
+  - tempo
+  - pyroscope
+  - alertmanager
+  - grafana
+  - glitchtip

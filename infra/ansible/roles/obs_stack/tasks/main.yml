@@ -1,0 +1,24 @@
+---
+# Lay the root obs-stack compose project: directories + root compose.yaml with
+# an include: of every backend fragment and the shared `obs` bridge network.
+# Idempotent (directories + templated file). Tag: obs_stack.
+
+- name: Create the obs-stack project directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ obs_stack_dir }}"
+    - "{{ obs_stack_dir }}/services"
+    - "{{ obs_stack_dir }}/config"
+
+- name: Template the root compose.yaml (include list + shared obs network)
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ obs_stack_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"

@@ -1,0 +1,19 @@
+<!-- {{ ansible_managed }} -->
+<!-- Native Prometheus endpoint (spec 05 §signal-flow-over-the-private-network).
+     First-party ClickHouse metrics source — no separate exporter binary, no
+     extra systemd unit, no scrape creds (the server exposes its own stats).
+     Binds the prometheus port on every <listen_host> (loopback + private IP);
+     Alloy scrapes 127.0.0.1:{{ clickhouse_prometheus_port }} on loopback and
+     remote-writes to the obs box. The job="clickhouse" label is set Alloy-side
+     (must match up{job=~"…|clickhouse|…"} in spec 05). Answers only while the
+     CH container runs (Kamal, task 13) — until then up{job="clickhouse"}==0. -->
+<clickhouse>
+  <prometheus>
+    <endpoint>/metrics</endpoint>
+    <port>{{ clickhouse_prometheus_port }}</port>
+    <metrics>true</metrics>
+    <events>true</events>
+    <asynchronous_metrics>true</asynchronous_metrics>
+    <errors>true</errors>
+  </prometheus>
+</clickhouse>

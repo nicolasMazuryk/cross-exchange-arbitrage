@@ -1,0 +1,22 @@
+# Thin trader stub — amd64-only, multi-stage, non-root.
+# All three prod hosts are amd64; building arm64 (Apple Silicon) → amd64 deploy
+# produces exec-format errors. See specs/infrastructure/04-deployment.md.
+
+# build stage
+FROM --platform=linux/amd64 node:24.13-slim AS build
+WORKDIR /app
+COPY package*.json tsconfig.json ./
+RUN npm ci
+COPY src/ ./src/
+RUN npm run build
+RUN npm prune --omit=dev
+
+# runtime stage
+FROM --platform=linux/amd64 node:24.13-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+USER node
+EXPOSE 8081 9464
+CMD ["node", "dist/trader.js"]

@@ -1,0 +1,24 @@
+# Dev-local Prometheus — parity with infra/ansible/roles/prometheus/templates/
+# prometheus.yml.j2, scaled to one laptop.
+#
+# Like prod, Prometheus does NOT scrape the app/infra targets itself — the
+# single Alloy container scrapes them (node/clickhouse/redpanda/query-api/
+# spread-computer/trader) and remote-writes here (needs the compose flag
+# --web.enable-remote-write-receiver). The one static job below is Prometheus'
+# own self-observability. No Alertmanager / rule_files in dev (documented
+# divergence in OBSERVABILITY.md). Retention 24h via the compose command flag.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: arbinet-obs
+
+# Self-observability only. node-exporter is scraped by Alloy (job=node, host=dev)
+# so it is NOT duplicated here.
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          host: dev

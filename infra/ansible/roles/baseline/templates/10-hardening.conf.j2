@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# sshd hardening drop-in (overrides /etc/ssh/sshd_config).
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding yes
+MaxAuthTries {{ baseline_ssh_max_auth_tries }}
+AllowUsers {{ baseline_ssh_allow_users }}
+ClientAliveInterval {{ baseline_ssh_client_alive_interval }}
+ClientAliveCountMax {{ baseline_ssh_client_alive_count_max }}
+Ciphers {{ baseline_ssh_ciphers | join(',') }}
+KexAlgorithms {{ baseline_ssh_kex | join(',') }}
+MACs {{ baseline_ssh_macs | join(',') }}

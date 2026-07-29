@@ -5,7 +5,7 @@
       "type": "node",
       "request": "launch",
       "name": "Debug ArbiNet",
-      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**/*.js",],
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**/*.js"],
       "program": "${workspaceFolder}/src/main.ts",
       "preLaunchTask": "tsc: build - tsconfig.json",
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
@@ -16,6 +16,48 @@
       "trace": true,
       "smartStep": true,
       "console": "integratedTerminal"
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach: trader",
+      "address": "localhost",
+      "port": 9229,
+      "localRoot": "${workspaceFolder}",
+      "remoteRoot": "/app",
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**/*.js"],
+      "restart": true,
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach: query-api",
+      "address": "localhost",
+      "port": 9230,
+      "localRoot": "${workspaceFolder}",
+      "remoteRoot": "/app",
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**/*.js"],
+      "restart": true,
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach: spread-computer",
+      "address": "localhost",
+      "port": 9231,
+      "localRoot": "${workspaceFolder}",
+      "remoteRoot": "/app",
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**/*.js"],
+      "restart": true,
+      "sourceMaps": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Attach: all dev services",
+      "configurations": ["Attach: trader", "Attach: query-api", "Attach: spread-computer"]
     }
   ]
 }

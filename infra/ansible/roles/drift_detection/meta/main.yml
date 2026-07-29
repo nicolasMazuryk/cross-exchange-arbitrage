@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: drift_detection
+  author: arbinet
+  description: Nightly Ansible --check --diff drift detection on the obs box, surfaced as a node_exporter textfile metric + Prometheus alert
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags: []
+dependencies: []

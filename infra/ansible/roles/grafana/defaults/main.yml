@@ -1,0 +1,7 @@
+---
+# grafana — UI/visualisation. Admin password from SOPS; anonymous disabled; no
+# datasources yet (task 14). Overridden by group_vars/role_obs.yml.
+grafana_image: grafana/grafana:13.0.2
+grafana_port: 3000
+grafana_mem_limit: 512m
+grafana_uid: 472

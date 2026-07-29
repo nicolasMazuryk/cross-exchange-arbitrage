@@ -1,0 +1,9 @@
+---
+# tempo — trace store, OTLP receivers (gRPC :4317 / HTTP :4318), local backend,
+# 3d block retention. Overridden by group_vars/role_obs.yml.
+tempo_image: grafana/tempo:2.10.5
+tempo_otlp_grpc_port: 4317
+tempo_otlp_http_port: 4318
+tempo_block_retention: 72h
+tempo_mem_limit: 1g
+tempo_uid: 10001

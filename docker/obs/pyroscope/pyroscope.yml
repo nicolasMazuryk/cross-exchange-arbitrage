@@ -1,0 +1,23 @@
+# Dev-local Pyroscope — body copied from infra/ansible/roles/pyroscope/
+# templates/pyroscope.yml.j2 (single-binary target=all, filesystem backend, all
+# state under /data). Retention dev-scaled to 24h (prod 7d). Alloy forwards
+# received profiles here on pyroscope:4040.
+server:
+  http_listen_address: 0.0.0.0
+  http_listen_port: 4040
+
+pyroscopedb:
+  data_path: /data
+
+metastore:
+  raft:
+    dir: /data/metastore/raft
+  data_dir: /data/metastore/data
+
+storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/shared
+
+limits:
+  compactor_blocks_retention_period: 24h

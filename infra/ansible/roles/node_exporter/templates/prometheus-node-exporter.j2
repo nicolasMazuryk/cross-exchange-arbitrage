@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# Bind node_exporter to loopback only (spec 05 — Alloy scrapes locally, then
+# remote-writes to the obs box; the exporter never faces the network).
+# Disabled collectors trim TSDB cardinality: the Debian package enables the
+# systemd collector (upstream does not), and node_systemd_unit_state alone is
+# ~2140 series across the 3 hosts — high count, near-zero value here.
+ARGS="--web.listen-address={{ node_exporter_listen_address }}{% for c in node_exporter_disabled_collectors %} --no-collector.{{ c }}{% endfor %}"

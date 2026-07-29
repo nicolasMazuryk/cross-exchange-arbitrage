@@ -2,6 +2,9 @@ import { EventEmitter } from 'events'
 import { Logger } from '../../utils/logger'
 import config from '../../utils/config'
 import { MarketType } from '../../types/exchange'
+import { getMarketTypeFromUnifiedSymbol } from '../../utils/utils'
+import { applyDeltaInPlace, applySnapshotInPlace } from './bookMerge'
+import { hotPathCounters } from '../monitoring/hotPathCounters'
 
 const logger = new Logger('orderbook-manager')
 
@@ -23,7 +26,8 @@ export interface OrderBookUpdate {
   finalUpdateId: number
   sequence?: number
   prevFinalUpdateId?: number
-  traceId: string
+  // Unpopulated on the hot path; trace context is created at opportunity emission.
+  traceId?: string
 }
 
 export interface OrderBook {
@@ -33,6 +37,13 @@ export interface OrderBook {
   timestamp: number
 }
 
+/**
+ * HOT-PATH CONTRACT: one persistent TopOfBook object per (exchange, symbol) is
+ * mutated in place on every update, and `bestBid`/`bestAsk` reference live
+ * book levels that are themselves mutated in place. An emitted TopOfBook is
+ * valid only during the synchronous emit tick — consumers must copy any field
+ * they retain and must not hold the object (or its levels) across ticks.
+ */
 export interface TopOfBook {
   exchange: string
   symbol: string
@@ -41,12 +52,15 @@ export interface TopOfBook {
   bestAsk: OrderBookLevel
   spreadPercent: number
   timestamp: number
-  traceId: string
+  // Unpopulated on the hot path; trace context is created at opportunity emission.
+  traceId?: string
 }
 
 export class OrderbookManager extends EventEmitter {
-  private orderbooks: Map<string, Map<string, OrderBook>> = new Map() // exchange -> symbol -> orderbook
-  private topOfBooks: Map<string, Map<string, TopOfBook>> = new Map() // exchange -> symbol -> topOfBook
+  // Protected so BookMirror (Phase 2 ingest) can maintain the same stores while
+  // presenting the identical public surface to consumers.
+  protected orderbooks: Map<string, Map<string, OrderBook>> = new Map() // exchange -> symbol -> orderbook
+  protected topOfBooks: Map<string, Map<string, TopOfBook>> = new Map() // exchange -> symbol -> topOfBook
   private trackedPairs: Set<string>
 
   constructor() {
@@ -56,12 +70,14 @@ export class OrderbookManager extends EventEmitter {
 
   public updateOrderbook(update: OrderBookUpdate): void {
     try {
-      const { exchange, symbol, bids, asks, finalUpdateId, timestamp, type, traceId } = update
+      const { exchange, symbol, bids, asks, timestamp, type } = update
 
       // Filter out updates with empty bids and asks arrays
       if (bids.length === 0 && asks.length === 0) {
         return
       }
+
+      hotPathCounters.inc('ob_updates')
 
       // Initialize exchange maps if they don't exist
       if (!this.orderbooks.has(exchange)) {
@@ -74,7 +90,12 @@ export class OrderbookManager extends EventEmitter {
 
       // Process the update based on its type
       if (type === 'snapshot') {
-        exchangeOrderbooks.set(symbol, { bids, asks, finalUpdateId, timestamp })
+        let book = exchangeOrderbooks.get(symbol)
+        if (!book) {
+          book = { bids: [], asks: [], finalUpdateId: 0, timestamp: 0 }
+          exchangeOrderbooks.set(symbol, book)
+        }
+        applySnapshotInPlace(book, update)
       } else if (type === 'delta') {
         this.handleDeltaUpdate(update)
       }
@@ -90,26 +111,39 @@ export class OrderbookManager extends EventEmitter {
       const bestAsk = updatedOrderbook.asks[0]
 
       if (bestBid && bestAsk) {
-        const symbolTopOfBook = exchangeTopOfBook.get(symbol)
         const spreadPercent = ((bestAsk.price - bestBid.price) / bestBid.price) * 100
+        const topOfBook = exchangeTopOfBook.get(symbol)
 
-        const newTopOfBook: TopOfBook = {
-          exchange,
-          symbol,
-          marketType: update.marketType,
-          bestBid,
-          bestAsk,
-          spreadPercent,
-          timestamp,
-          traceId,
+        if (!topOfBook) {
+          // First top-of-book for this symbol: allocate the persistent object; no emit
+          // (matches previous behavior — emission requires a prior top to compare against).
+          exchangeTopOfBook.set(symbol, {
+            exchange,
+            symbol,
+            marketType: update.marketType,
+            bestBid,
+            bestAsk,
+            spreadPercent,
+            timestamp,
+          })
+          return
         }
-        exchangeTopOfBook.set(symbol, newTopOfBook)
 
-        if (
-          symbolTopOfBook &&
-          (symbolTopOfBook.bestBid.price !== bestBid.price || symbolTopOfBook.bestAsk.price !== bestAsk.price)
-        ) {
-          this.emit('topOfBookUpdate', newTopOfBook)
+        // In-place quantity updates leave the top level object (and its price)
+        // unchanged; the top price only moves via insert/delete/snapshot, which
+        // replace the level object — so this compare stays valid.
+        const topPriceChanged =
+          topOfBook.bestBid.price !== bestBid.price || topOfBook.bestAsk.price !== bestAsk.price
+
+        topOfBook.marketType = update.marketType
+        topOfBook.bestBid = bestBid
+        topOfBook.bestAsk = bestAsk
+        topOfBook.spreadPercent = spreadPercent
+        topOfBook.timestamp = timestamp
+
+        if (topPriceChanged) {
+          hotPathCounters.inc('tob_emits')
+          this.emit('topOfBookUpdate', topOfBook)
         }
       }
     } catch (error) {
@@ -154,62 +188,36 @@ export class OrderbookManager extends EventEmitter {
         finalUpdateId,
         timestamp,
       })
-      exchangeOrderbooks.set(symbol, { bids, asks, finalUpdateId, timestamp })
+      applySnapshotInPlace(symbolOrderbook, update)
       return
     }
 
-    // Process bids
-    const updatedBids = this.processDeltaLevels(symbolOrderbook.bids, bids, true)
-
-    // Process asks
-    const updatedAsks = this.processDeltaLevels(symbolOrderbook.asks, asks, false)
-
-    // Update the orderbook
-    exchangeOrderbooks.set(symbol, {
-      bids: updatedBids,
-      asks: updatedAsks,
-      finalUpdateId,
-      timestamp,
-    })
-
-    logger.trace({
-      msg: 'Processed delta update for orderbook',
-      function: 'OrderbookManager.handleDeltaUpdate',
-      exchange,
-      symbol,
-      finalUpdateId,
-      timestamp,
-    })
+    // Merge deltas into the stored book in place — no copy, no sort
+    applyDeltaInPlace(symbolOrderbook.bids, bids, true)
+    applyDeltaInPlace(symbolOrderbook.asks, asks, false)
+    symbolOrderbook.finalUpdateId = finalUpdateId
+    symbolOrderbook.timestamp = timestamp
   }
 
-  private processDeltaLevels(
-    currentLevels: OrderBookLevel[],
-    deltaLevels: OrderBookLevel[],
-    isBid: boolean
-  ): OrderBookLevel[] {
-    const updatedLevels = [...currentLevels]
-
-    for (const delta of deltaLevels) {
-      const existingIndex = updatedLevels.findIndex(level => level.price === delta.price)
-
-      if (delta.quantity === 0) {
-        // Delete level if quantity is 0
-        if (existingIndex !== -1) {
-          updatedLevels.splice(existingIndex, 1)
-        }
-      } else if (existingIndex !== -1) {
-        // Update existing level
-        updatedLevels[existingIndex] = delta
-      } else {
-        // Insert new level
-        updatedLevels.push(delta)
+  /**
+   * Drop an exchange's books (post-reconnect reset). Books rebuild from fresh
+   * snapshots; consumers already skip missing books. With `marketType` set,
+   * only that type's books are dropped (split ingest workers reset their own
+   * slice without nuking a sibling worker's books) — market type is derived
+   * from the unified symbol, so books never need to store it.
+   */
+  public clearExchangeBooks(exchange: string, marketType?: MarketType): void {
+    if (!marketType) {
+      this.orderbooks.get(exchange)?.clear()
+      this.topOfBooks.get(exchange)?.clear()
+      return
+    }
+    for (const store of [this.orderbooks.get(exchange), this.topOfBooks.get(exchange)]) {
+      if (!store) continue
+      for (const symbol of store.keys()) {
+        if (getMarketTypeFromUnifiedSymbol(symbol) === marketType) store.delete(symbol)
       }
     }
-
-    // Sort bids in descending order, asks in ascending order
-    return updatedLevels.sort((a, b) => {
-      return isBid ? b.price - a.price : a.price - b.price
-    })
   }
 
   public getOrderbook(exchange: string, symbol: string): OrderBook | undefined {

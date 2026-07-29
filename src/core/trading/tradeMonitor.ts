@@ -6,7 +6,6 @@ import { MarketMetadataService } from '../markets/marketMetadataService'
 import { OrderbookManager, TopOfBook, OrderBookLevel } from '../orderbook/orderbookManager'
 import { placeOrderAndMonitor, calculateSlippage, calculateFees } from './utils'
 import { Logger } from '../../utils/logger'
-import { TraceContext } from '../../utils/traceContext'
 import config, { StrategyType, StrategyVariant, getFees } from '../../utils/config'
 import { MarketType } from '../../types/exchange'
 import { ArbitrageOpportunity } from '../arbitrage/arbitrageEngine'
@@ -513,10 +512,17 @@ export class TradeMonitor extends EventEmitter {
    * Setup real-time orderbook event listeners
    */
   private setupOrderbookEventListeners(): void {
-    // Listen for top of book updates from orderbook manager
+    // Listen for top of book updates from orderbook manager.
+    // Hot path: no trace context here — tracing starts at opportunity emission.
     this.orderbookManager.on('topOfBookUpdate', (topOfBook: TopOfBook) => {
-      TraceContext.runWithExistingTrace(topOfBook.traceId, 'trade-monitor', async () => {
-        await this.handleOrderbookUpdate(topOfBook)
+      this.handleOrderbookUpdate(topOfBook).catch(error => {
+        logger.error({
+          msg: 'Error handling orderbook update',
+          function: 'TradeMonitor.setupOrderbookEventListeners',
+          exchange: topOfBook.exchange,
+          symbol: topOfBook.symbol,
+          error,
+        })
       })
     })
   }

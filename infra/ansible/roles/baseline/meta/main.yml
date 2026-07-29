@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: baseline
+  author: arbinet
+  description: ArbiNet baseline role (all hosts)
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags: []
+dependencies: []

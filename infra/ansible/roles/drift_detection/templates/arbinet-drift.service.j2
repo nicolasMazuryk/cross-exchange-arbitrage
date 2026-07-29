@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# Oneshot drift check — triggered by arbinet-drift.timer. Writes the
+# node_exporter textfile metric; never mutates the fleet (--check).
+[Unit]
+Description=ArbiNet nightly Ansible drift detection (--check --diff against env_prod)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart={{ drift_wrapper_path }}
+TimeoutStartSec={{ drift_run_timeout_sec }}
+# Best-effort; the metric carries success/failure, so don't thrash on restart.
+Nice=10

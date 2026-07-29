@@ -112,6 +112,11 @@ trackedPairs:
   - ADAUSDT
   - DOGEUSDT
 
+# Minimum arbitrage peers a market must have to be subscribed (perf: fewer WS streams).
+# A peer = a leg sharing the same normalized base/quote that is NOT (same exchange AND same type).
+# 0 = disabled (subscribe all). 1 = drop unpairable singletons. 2+ = require N counterparts.
+minMarketPeers: 0
+
 trading:
   orderAmountUsd: 20  # in USDT, default order size for arbitrage opportunities
   maxPositionAmountUsd: 30  # maximum position amount in USD
@@ -143,6 +148,10 @@ arbitrage: # pairs require > $20 to enter minimum order size
 accountSync:
   maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)
   snapshotIntervalMs: 180000  # interval for periodic snapshots in milliseconds (3 minutes)
+
+performanceMonitor:
+  enabled: true      # config-gated; flip off without code change
+  intervalMs: 10000  # flush one structured process-health sample every 10s
 
 funding:
   fetchIntervalMs: 15000  # fetch funding rates every 60 seconds using browser automation

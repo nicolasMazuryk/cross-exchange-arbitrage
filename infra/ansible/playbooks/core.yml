@@ -1,0 +1,33 @@
+---
+# core.yml — core-box data middleware + app-support + telemetry. Task 08 lays
+# config-on-host (chrony, the /mnt/ch-volume mount, ClickHouse + Redpanda config
+# the task-13 Kamal accessories mount). Task 09 appends app-support + telemetry:
+# Docker (for the Alloy log-tail socket + Kamal in task 13), node_exporter +
+# ClickHouse-native Prometheus endpoint, spread-computer/kamal-proxy host config,
+# and the Alloy collector that forwards every core signal to the obs box. No
+# containers / schema DDL / topic creation here (gap G6). Run after baseline/wireguard.
+- name: Configure the core-box data middleware, app-support and telemetry
+  hosts: role_core
+  become: true
+  roles:
+    - role: chrony
+      tags: [core, chrony]
+    - role: volume_mount
+      vars:
+        volume_mount_path: /mnt/ch-volume
+      tags: [core, volume_mount]
+    - role: clickhouse
+      tags: [core, clickhouse]
+    - role: redpanda
+      tags: [core, redpanda]
+    # --- task 09: app-support + telemetry ---
+    - role: docker            # Alloy log-tail socket + Kamal (task 13)
+      tags: [core, docker]
+    - role: node_exporter
+      tags: [core, node_exporter]
+    - role: spread_computer
+      tags: [core, spread_computer]
+    - role: kamal_proxy
+      tags: [core, kamal_proxy]
+    - role: alloy             # last: scrapes the exporters/endpoints above
+      tags: [core, alloy]

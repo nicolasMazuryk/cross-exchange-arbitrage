@@ -1,0 +1,21 @@
+---
+# hot.yml — hot-box lean obs prerequisites (task 10). On top of baseline +
+# wireguard the hot box runs only the Kamal-deployed trader; this play lays the
+# two obs prerequisites as config-on-host: tight chrony + a LEAN Alloy agent &
+# node_exporter (scrape node + trader on loopback, tail logs, receive OTLP/
+# Pyroscope, forward every signal to the obs box). docker is the foundational
+# prereq for the Alloy log-tail socket + Kamal (task 13). No clickhouse/redpanda/
+# query-api/spread-computer scrape — those are core-box only. Run after
+# baseline/wireguard.
+- name: Configure the hot-box lean roles (chrony + Alloy + node_exporter)
+  hosts: role_hot
+  become: true
+  roles:
+    - role: chrony            # tight clock sync (same as core)
+      tags: [hot, chrony]
+    - role: docker            # Alloy log-tail socket + Kamal (task 13)
+      tags: [hot, docker]
+    - role: node_exporter
+      tags: [hot, node_exporter]
+    - role: alloy             # last: scrapes the exporter above + trader
+      tags: [hot, alloy]

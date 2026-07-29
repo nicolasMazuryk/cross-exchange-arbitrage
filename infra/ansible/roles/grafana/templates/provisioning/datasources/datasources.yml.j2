@@ -1,0 +1,72 @@
+# {{ ansible_managed }}
+# Grafana datasources (task 14, spec 05 §Trace/log/profile correlation). All four
+# backends sit on the shared `obs` compose network, so Grafana reaches them by
+# service name (Tempo's query HTTP :3200 is NOT host-published — service name is
+# the only path). Cross-signal navigation wired here:
+#   metric exemplar → Tempo trace  (Prometheus exemplarTraceIdDestinations)
+#   trace → logs                   (Tempo tracesToLogsV2 → Loki)
+#   trace → profile                (Tempo tracesToProfiles → Pyroscope)
+#   log → trace                    (Loki derived field trace_id → Tempo)
+apiVersion: 1
+
+deleteDatasources:
+  - { name: Prometheus, orgId: 1 }
+  - { name: Tempo, orgId: 1 }
+  - { name: Loki, orgId: 1 }
+  - { name: Pyroscope, orgId: 1 }
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: false
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+          urlDisplayLabel: "View trace"
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        filterByTraceID: true
+        filterBySpanID: false
+        tags:
+          - { key: "host", value: "host" }
+      tracesToProfiles:
+        datasourceUid: pyroscope
+        profileTypeId: "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "View trace"
+
+  - name: Pyroscope
+    uid: pyroscope
+    type: grafana-pyroscope-datasource
+    access: proxy
+    url: http://pyroscope:4040

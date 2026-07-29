@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+logs
+*.log
+.dev-data
+.context
+config/*.production.yaml
+.env
+.env.*
+
+.bmad
+.codex
+.claude
+.cursor

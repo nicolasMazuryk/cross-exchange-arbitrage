@@ -1,0 +1,53 @@
+# {{ ansible_managed }}
+# Alertmanager routing (task 14, spec 05 §Alert rules). Receivers = Slack +
+# PagerDuty only (no SMTP/email — the spec's lone disk_low email route collapses
+# to Slack). Routing by severity: crit → PagerDuty AND Slack; warn/info → Slack.
+# Secrets (slack webhook, PagerDuty Events-API-v2 routing_key) are SOPS-looked-up
+# in the role (no_log) and rendered here; this file is 0600 container-uid-owned.
+global:
+  resolve_timeout: {{ alertmanager_resolve_timeout }}
+
+route:
+  receiver: slack
+  group_by: ['alertname', 'severity']
+  group_wait: {{ alertmanager_group_wait }}
+  group_interval: {{ alertmanager_group_interval }}
+  repeat_interval: {{ alertmanager_repeat_interval }}
+  routes:
+    # crit / page → PagerDuty AND Slack (the receiver carries both configs).
+    - matchers:
+        - severity="crit"
+      receiver: pagerduty-slack
+      continue: false
+    # warn + info → Slack only.
+    - matchers:
+        - severity=~"warn|info"
+      receiver: slack
+      continue: false
+
+receivers:
+  - name: slack
+    slack_configs:
+      - api_url: {{ alertmanager_slack_api_url }}
+        channel: '{{ alertmanager_slack_channel }}'
+        send_resolved: true
+        title: '[{% raw %}{{ .Status | toUpper }}{% endraw %}] {% raw %}{{ .CommonLabels.alertname }}{% endraw %}'
+        text: >-
+          {% raw %}{{ range .Alerts }}*{{ .Annotations.summary }}*
+          {{ .Annotations.action }}
+          {{ end }}{% endraw %}
+
+  - name: pagerduty-slack
+    pagerduty_configs:
+      - routing_key: {{ alertmanager_pagerduty_routing_key }}
+        send_resolved: true
+        description: '{% raw %}{{ .CommonLabels.alertname }}: {{ .CommonAnnotations.summary }}{% endraw %}'
+    slack_configs:
+      - api_url: {{ alertmanager_slack_api_url }}
+        channel: '{{ alertmanager_slack_channel }}'
+        send_resolved: true
+        title: '[PAGE] {% raw %}{{ .CommonLabels.alertname }}{% endraw %}'
+        text: >-
+          {% raw %}{{ range .Alerts }}*{{ .Annotations.summary }}*
+          {{ .Annotations.action }}
+          {{ end }}{% endraw %}

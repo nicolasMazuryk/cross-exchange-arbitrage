@@ -1,0 +1,79 @@
+---
+# grafana role — secret env file + data dir + compose fragment. Tag: grafana.
+
+- name: Look up the grafana admin password from SOPS
+  ansible.builtin.set_fact:
+    grafana_admin_password: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).grafana_admin_password }}
+  no_log: true
+
+- name: Create the grafana config directory
+  ansible.builtin.file:
+    path: "{{ obs_stack_dir }}/config/grafana"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the grafana env file (secret — 0600)
+  ansible.builtin.template:
+    src: grafana.env.j2
+    dest: "{{ obs_stack_dir }}/config/grafana/grafana.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Create the grafana provisioning + dashboards directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ obs_stack_dir }}/config/grafana/provisioning/datasources"
+    - "{{ obs_stack_dir }}/config/grafana/provisioning/dashboards"
+    - "{{ obs_stack_dir }}/config/grafana/dashboards"
+
+- name: Template the grafana datasource provisioning (exemplar/trace/log links)
+  ansible.builtin.template:
+    src: provisioning/datasources/datasources.yml.j2
+    dest: "{{ obs_stack_dir }}/config/grafana/provisioning/datasources/datasources.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Template the grafana dashboard provider
+  ansible.builtin.template:
+    src: provisioning/dashboards/dashboards.yml.j2
+    dest: "{{ obs_stack_dir }}/config/grafana/provisioning/dashboards/dashboards.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy the dashboard JSON files
+  ansible.builtin.copy:
+    src: dashboards/
+    dest: "{{ obs_stack_dir }}/config/grafana/dashboards/"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the grafana data directory (container UID)
+  ansible.builtin.file:
+    path: "{{ obs_data_root }}/grafana"
+    state: directory
+    owner: "{{ grafana_uid }}"
+    group: "{{ grafana_uid }}"
+    mode: "0755"
+
+- name: Template the grafana compose fragment
+  ansible.builtin.template:
+    src: grafana.yaml.j2
+    dest: "{{ obs_stack_dir }}/services/grafana.yaml"
+    owner: root
+    group: root
+    mode: "0644"

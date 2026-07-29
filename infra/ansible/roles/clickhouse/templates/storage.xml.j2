@@ -1,0 +1,35 @@
+<!-- {{ ansible_managed }} -->
+<!-- 2-tier storage policy (spec 03 §clickhouse-role). S3 creds are injected
+     from_env at container start by Kamal — never written here.
+     Hot+warm consolidated: the core box exposes ONE durable data Volume
+     (the accessory bind-mounts it at /var/lib/clickhouse, so the built-in
+     `default` disk already lives on it), so a separate on-Volume "warm" tier
+     would just churn parts between identical storage. S3 is the only
+     physically separate tier → default (durable) → s3 (cold). -->
+<clickhouse>
+  <storage_configuration>
+    <disks>
+      <!-- Hot/warm = CH's built-in `default` disk (the server <path>), which the
+           Kamal accessory bind-mounts onto the durable Hetzner Volume. A custom
+           disk MUST NOT redefine that same path — CH 26.3 aborts with
+           UNKNOWN_ELEMENT_IN_CONFIG ("Disk path cannot be equal to <path>. Use
+           <default> disk instead."). -->
+      <s3>
+        <type>s3</type>
+        <endpoint>{{ clickhouse_s3_endpoint }}</endpoint>
+        <access_key_id from_env="S3_ACCESS_KEY"/>
+        <secret_access_key from_env="S3_SECRET_KEY"/>
+        <metadata_path>/var/lib/clickhouse/disks/s3/</metadata_path>
+      </s3>
+    </disks>
+    <policies>
+      <tiered>
+        <volumes>
+          <main> <disk>default</disk> <max_data_part_size_bytes>{{ clickhouse_hot_max_part_size }}</max_data_part_size_bytes></main>
+          <cold> <disk>s3</disk>      <prefer_not_to_merge>true</prefer_not_to_merge></cold>
+        </volumes>
+        <move_factor>{{ clickhouse_move_factor }}</move_factor>
+      </tiered>
+    </policies>
+  </storage_configuration>
+</clickhouse>

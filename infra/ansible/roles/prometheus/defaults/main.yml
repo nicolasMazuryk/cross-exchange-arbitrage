@@ -1,0 +1,33 @@
+---
+# prometheus — TSDB + remote-write receiver. Minimal-bootable (no scrape jobs;
+# those land in task 14). Overridden by group_vars/role_obs.yml.
+prometheus_image: prom/prometheus:v3.12.0
+prometheus_port: 9090
+prometheus_retention_time: 15d
+prometheus_mem_limit: 2g
+prometheus_uid: 65534
+
+# Rule files templated into config/prometheus/rules/ (task 14). Recording rules +
+# SLO burn-rate, the infra alert set, and the trader page/warn sets.
+prometheus_rule_files:
+  - recording.rules.yml
+  - alerts.rules.yml
+  - trader-page.rules.yml
+  - trader-warn.rules.yml
+  - drift.rules.yml
+
+# cardinality_high self-alert threshold. The spec's ~5.5–5.7k budget never held:
+# the verbose redpanda /metrics (~11.5k), node systemd collector (~2.1k) and CH
+# ProfileEvents (~1.2k) put real head_series at ~20.4k, so the old 6000 alert was
+# permanently red. After the task 09/10 scrape-edge prune (redpanda
+# /public_metrics, node --no-collector.systemd, CH ProfileEvents drop-list) the
+# measured apps-DOWN floor is ~7.2k active series. Apps-up projection =
+# 7.2k − stubs + spec trader/qapi/spread budget (~2.2k) ≈ 9.4k. Threshold =
+# ceil(9.4k × 1.30 headroom) ≈ 12.2k, rounded to a clean 12500 — so the alert
+# signals a real cardinality regression, not the steady state.
+prometheus_cardinality_alert_threshold: 12500
+
+# NOTE: trader_drawdown_breach_usd (drawdown_breach $ threshold, business input,
+# deferred per spec 05 §open-questions) is a stack-wide var, defined null in
+# group_vars/role_obs.yml — NOT here (role defaults must be role-prefixed). The
+# trader-page rule template gates the rule on it via | default(none).

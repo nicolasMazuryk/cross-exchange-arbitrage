@@ -1,0 +1,29 @@
+---
+# Overridable baseline knobs.
+baseline_ssh_allow_users: ansible
+baseline_ssh_max_auth_tries: 5
+baseline_ssh_client_alive_interval: 300
+baseline_ssh_client_alive_count_max: 2
+
+# Modern crypto (OpenSSH 9.x on Ubuntu 24.04).
+baseline_ssh_ciphers:
+  - chacha20-poly1305@openssh.com
+  - aes256-gcm@openssh.com
+  - aes128-gcm@openssh.com
+baseline_ssh_kex:
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org
+  - diffie-hellman-group16-sha512
+baseline_ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-256-etm@openssh.com
+
+# Networks ufw trusts fully (private net + WG overlay).
+baseline_trusted_networks:
+  - "{{ private_subnet_cidr }}"
+  - "{{ wireguard.overlay_cidr }}"
+
+# Public ingress ufw permits (defense-in-depth behind the Hetzner FW).
+baseline_ufw_allowed_ports:
+  - { port: 22, proto: tcp }
+  - { port: "{{ wireguard.port }}", proto: udp }

@@ -214,11 +214,13 @@ export class BybitExchange extends BaseExchange {
       }
 
       const ignoredFunding = appConfig.exchanges.bybit.ignoredFundingSymbols ?? []
+      const tradable = new Set(Object.keys(this.getTradingMarkets()))
       const allRates = { ...linearRates, ...inverseRates }
       const fundingData = new Map<string, ParsedFunding>()
 
       for (const [symbol, rate] of Object.entries(allRates)) {
         if (ignoredFunding.includes(symbol)) continue
+        if (!tradable.has(symbol)) continue
         const r = rate as any
         if (typeof r.fundingRate !== 'number' || isNaN(r.fundingRate) || !r.fundingTimestamp) {
           logger.warn({

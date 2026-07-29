@@ -1,0 +1,45 @@
+# Dockerized Kamal wrapper (task 13). Host ruby is 2.6 (too old) and there is no
+# homebrew ruby, so every `kamal` call runs in this container instead.
+#
+# Kamal's `.kamal/secrets` shells out to `sops -d` to resolve vault keys, so the
+# stock kamal image (which has neither) won't decrypt. This layer adds pinned
+# linux sops + age on top. Arch-aware: builds for the local platform (arm64 on
+# Apple Silicon) — the container only runs the kamal CLI + sops; the app image it
+# builds/pushes is amd64 (builder.arch in deploy.yml).
+FROM ghcr.io/basecamp/kamal:v2.11.0
+
+# Pinned tool versions.
+ARG SOPS_VERSION=v3.9.4
+ARG AGE_VERSION=v1.2.1
+ARG X25519_VERSION=1.0.10
+# Set by buildx from the build platform (amd64 | arm64).
+ARG TARGETARCH=arm64
+
+USER root
+
+# The in-container pre-deploy hook (.kamal/hooks/pre-deploy) SSHes to the hot box to
+# stop the trader before kamal boots a new one (single-instance guard). The stock
+# alpine kamal image has neither ssh nor bash: openssh-client for the SSH reach, and
+# bash because the hook + infra/kamal/stop-trader.sh use a bash shebang and bash-isms
+# (`[[ ]]`, process-substitution stderr filter) — busybox sh would fail to exec them.
+RUN apk add --no-cache openssh-client bash
+
+RUN set -eux; \
+    wget -qO /usr/local/bin/sops \
+      "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.${TARGETARCH}"; \
+    chmod 0755 /usr/local/bin/sops; \
+    wget -qO /tmp/age.tgz \
+      "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-${TARGETARCH}.tar.gz"; \
+    tar -xzf /tmp/age.tgz -C /tmp; \
+    mv /tmp/age/age /tmp/age/age-keygen /usr/local/bin/; \
+    chmod 0755 /usr/local/bin/age /usr/local/bin/age-keygen; \
+    rm -rf /tmp/age /tmp/age.tgz; \
+    sops --version; age --version
+
+# Enable curve25519-sha256 KEX in net-ssh (the hardened prod sshd only offers
+# curve25519 + dh-group16; net-ssh's stock kex list overlaps with neither). net-ssh
+# registers the curve25519 kex only when the optional `x25519` C-ext gem is present.
+# build-base/gcc/make ship in the base image. (ed25519 key auth already works —
+# ed25519 + bcrypt_pbkdf are bundled.)
+RUN gem install x25519 -v "${X25519_VERSION}" --no-document \
+    && ruby -e 'require "net/ssh"; k = Net::SSH::Transport::Algorithms::ALGORITHMS[:kex].grep(/25519/); abort "curve25519 kex not registered" if k.empty?; puts "kex ok: " + k.join(" ")'

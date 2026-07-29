@@ -1,0 +1,40 @@
+---
+# GlitchTip first-login provisioning — superuser + ArbiNet org. Runs in a one-off
+# `docker compose run` web container, so it needs the stack already up; called as
+# a post_task from playbooks/obs.yml (AFTER compose_up), NOT from main.yml (which
+# runs in the roles phase before the stack exists). Self-contained: it loads its
+# own admin password here (a provision-time secret, unlike main.yml's env-file
+# secrets) so `--tags glitchtip_provision` works without the role's main tasks.
+# Snippet lives in files/provision_admin.py; see it for the CHANGED/NOCHANGE
+# contract.
+- name: Load the GlitchTip admin password from SOPS
+  ansible.builtin.set_fact:
+    glitchtip_admin_password: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).glitchtip_admin_password }}
+  no_log: true
+  tags: [obs, glitchtip_provision]
+
+# Defense-in-depth: an empty/undefined password would make the snippet
+# set_password('') and silently WIPE the operator login. Refuse instead.
+- name: Assert the GlitchTip admin password is present
+  ansible.builtin.assert:
+    that: glitchtip_admin_password | default('') | length > 0
+    fail_msg: glitchtip_admin_password is empty/undefined — refusing to provision (would wipe the admin login)
+    quiet: true
+  tags: [obs, glitchtip_provision]
+
+- name: Provision GlitchTip superuser + organization (idempotent)
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-directory {{ obs_stack_dir }}
+      run --rm -T
+      -e GT_ADMIN_EMAIL={{ glitchtip_admin_email }}
+      -e GT_ADMIN_PASSWORD={{ glitchtip_admin_password }}
+      -e GT_ORG_NAME={{ glitchtip_org_name }}
+      glitchtip-web ./manage.py shell -c "{{ lookup('file', 'provision_admin.py') }}"
+  register: glitchtip_provision
+  changed_when: "'CHANGED' in glitchtip_provision.stdout"
+  no_log: true
+  tags: [obs, glitchtip_provision]

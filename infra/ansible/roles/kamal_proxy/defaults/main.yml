@@ -1,0 +1,6 @@
+---
+# kamal_proxy — thin host-prep role. kamal-proxy v2 is configured at DEPLOY time
+# via CLI flags (--health-check-path=/up, ACME/Let's Encrypt) in task 12/13; it
+# reads no static routing file. The only durable thing that must pre-exist is the
+# ACME/cert state dir the proxy container mounts so LE certs survive redeploys.
+kamal_proxy_state_dir: /var/lib/kamal-proxy

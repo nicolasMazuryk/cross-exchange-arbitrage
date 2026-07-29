@@ -44,7 +44,7 @@ servers:
   queryapi:
     hosts: [10.0.1.20]                                           # core box
     cmd: node dist/queryApi.js
-    proxy: { ssl: true, host: api.arbinet.example, app_port: 8080, healthcheck: { path: /up } }
+    proxy: { ssl: true, host: api.arbinet.xyz, app_port: 8080, healthcheck: { path: /up } }
   spreadcomputer: { hosts: [10.0.1.20], cmd: node dist/spreadComputer.js }  # core box
 ```
 

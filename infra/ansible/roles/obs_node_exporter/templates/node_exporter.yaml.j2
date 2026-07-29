@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+# obs-box node-exporter — host metrics for obs self-observability (task 14).
+# No published port: Prometheus (same obs network) scrapes node-exporter:9100
+# internally. host /proc,/sys,/ mounted read-only via --path.rootfs=/host.
+services:
+  node-exporter:
+    image: {{ obs_node_exporter_image }}
+    container_name: node-exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=0.0.0.0:9100
+      # Textfile collector — exposes the nightly drift metric (arbinet_drift.prom)
+      # the drift_detection role writes to the host dir, visible here under /host
+      # (the / bind-mount). Host-rooted via --path.rootfs=/host.
+      - --collector.textfile.directory=/host{{ obs_node_exporter_textfile_dir }}
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    mem_limit: {{ obs_node_exporter_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

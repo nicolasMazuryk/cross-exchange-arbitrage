@@ -1,0 +1,7 @@
+---
+# volume_mount — mount the attached Hetzner Cloud Volume at a target path,
+# superseding the HC automount default (/mnt/HC_Volume_<id>). Parametrized:
+# obs uses /mnt/obs-data; core (task 08) reuses with /mnt/ch-volume.
+volume_mount_path: /mnt/obs-data
+volume_mount_fstype: ext4
+volume_mount_opts: defaults,nofail

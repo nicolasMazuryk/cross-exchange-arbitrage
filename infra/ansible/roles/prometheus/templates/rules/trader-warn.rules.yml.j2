@@ -1,0 +1,76 @@
+# {{ ansible_managed }}
+# Trader ticket/warn alerts (task 14, spec 05 §Trader ticket/warn). Degradation,
+# not bleeding: severity=warn, routes=slack. Trader-named rules are dormant until
+# the app emits them; cardinality_high keys off prometheus_tsdb_head_series and
+# is LIVE now (Prometheus self-scrape).
+groups:
+  - name: trader_warn
+    rules:
+      - alert: slippage_high
+        expr: histogram_quantile(0.95, sum(rate(trade_slippage_bps_bucket[10m])) by (le)) > 20
+        for: 10m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "slippage p95 > 20 bps"
+          action: "Realized slippage eroding edge. Check venue liquidity + order sizing."
+
+      - alert: fill_rate_low
+        expr: |
+          sum(rate(order_fills_total{status="filled"}[10m]))
+          /
+          clamp_min(sum(rate(order_fills_total[10m])), 1) < 0.80
+        for: 10m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "fill rate < 80% over 10m"
+          action: "Low fill rate = adverse selection. Review pricing aggressiveness."
+
+      - alert: funnel_anomaly
+        expr: |
+          increase(arb_opportunities_detected_total[5m]) > 0
+          and
+          increase(trade_executions_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "opportunities detected but none acted (silent miss)"
+          action: "Detection firing but no executions. Inspect arb_funnel_total reject reasons."
+
+      - alert: reject_spike
+        expr: |
+          sum(rate(order_reject_total[5m])) > 1.5 * sum(rate(order_reject_total[1h]))
+          and
+          sum(rate(order_reject_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "order reject rate spiking vs 1h baseline"
+          action: "Reject rate up. Check order_reject_total{reason} + venue status."
+
+      - alert: t2t_slow
+        expr: histogram_quantile(0.99, sum(rate(tick_to_trade_seconds_bucket[5m])) by (le)) > 0.005
+        for: 5m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "tick-to-trade p99 > 5ms"
+          action: "Losing the latency race. Drill the t2t stage heatmap for the slow stage."
+
+      - alert: cardinality_high
+        expr: prometheus_tsdb_head_series > {{ prometheus_cardinality_alert_threshold }}
+        for: 0m
+        labels:
+          severity: warn
+          routes: slack
+        annotations:
+          summary: "TSDB head series > {{ prometheus_cardinality_alert_threshold }} (measured apps-up floor ~9.4k + 30%)"
+          action: "Cardinality regression above the re-baselined floor. First check the scrape edge (redpanda back on /metrics? node systemd collector re-enabled? CH drop-list bypassed?), then trim labels in prune order (recording.rules.yml header): hold-duration buckets → edge {strategy} → exchange_order_latency {phase} only."

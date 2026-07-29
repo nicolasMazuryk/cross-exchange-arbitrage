@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Cluster bootstrap seed (spec 03 §redpanda-role). redpanda reads this ONLY at the
+# first cluster init and never rewrites it (unlike redpanda.yaml, which rpk owns at
+# runtime). It carries cluster-LEVEL properties only — listeners/sizing live on the
+# Kamal start cmd (config/deploy.yml). Topic creation/partitioning = app (task 12).
+#
+# auto_create_topics_enabled was a dev-container side effect we lost by dropping
+# --mode; seed it here so the trader's `ob.ticks` auto-creates on first produce.
+auto_create_topics_enabled: true
+# Cluster-level fail-safe: single-broker replication + retention cap (spec 03).
+default_topic_replications: 1
+retention_bytes: {{ redpanda_cluster_retention_bytes }}

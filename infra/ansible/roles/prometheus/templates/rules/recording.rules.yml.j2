@@ -1,0 +1,205 @@
+# {{ ansible_managed }}
+# ============================================================================
+# Recording rules + SLO burn-rate alerts (task 14, spec 05 §SLIs/SLOs).
+#
+# SLOs are computed over a 30-day rolling window and fire as MULTIWINDOW
+# MULTI-BURN-RATE alerts (Google SRE workbook): a fast-burn pair (1h + 5m
+# windows, burn factor 14.4) pages early when the error budget is being spent
+# fast; a slow-burn pair (6h + 30m windows, burn factor 6) catches the slow
+# leak. Burn-rate beats a raw threshold — fewer false pages, still catches a
+# real budget burn.
+#
+# ----------------------------------------------------------------------------
+# CANONICAL HISTOGRAM BUCKET SETS (spec 05 §Histogram buckets) — app-emitted
+# (datapipeline instrumentation contract); documented here so every
+# histogram_quantile() below and in the dashboards resolves against the right
+# boundaries. NOT authored by infra; reproduced for traceability.
+#
+#   In-process hot path : 0.0001 .. 0.1 (0.1ms-100ms)  tick_to_trade_seconds,
+#                         orderbook_apply_seconds, nodejs_eventloop_lag_seconds
+#   Exchange RTT        : 0.005 .. 5                    exchange_order_latency_seconds
+#   Freshness           : 0.05 .. 5                     orderbook_age_seconds
+#   Edge / slippage     : -50 .. 50 (linear bps)        trade_slippage_bps,
+#                         trade_edge_expected_bps, trade_edge_realized_bps
+#   Hold duration       : 1 .. 21600 (s)                trade_hold_duration_seconds
+#   Clock skew          : 0.01 .. 1 (s)                 exchange_clock_skew_seconds
+#   Warm-hop produce    : 0.0005 .. 0.025 (s)           ob_ticks_produce_seconds
+#   CH query / qapi HTTP: 0.05 .. 10 (s)                clickhouse_query_duration_seconds,
+#                         qapi_http_duration_seconds
+#
+# ----------------------------------------------------------------------------
+# SERIES-CARDINALITY BUDGET — re-baselined to MEASURED reality (tasks 09/10).
+# The spec's ~5.5-5.7k was aspirational; the native endpoints emit far more, so
+# the scrape edge is pruned (redpanda /public_metrics, node --no-collector.systemd,
+# CH ProfileEvents_* drop-list). Measured apps-DOWN floor ≈ 7.2k active series:
+#   redpanda ~1.97k · node x3 ~2.39k · clickhouse ~1.87k · prometheus ~0.94k.
+# Apps-UP projection ≈ 9.4k (+ trader/qapi/spread ~2.2k spec budget). The
+# cardinality_high self-alert (trader-warn.rules.yml) fires at
+# prometheus_tsdb_head_series > {{ prometheus_cardinality_alert_threshold }}
+# (= ceil(9.4k × 1.30 headroom), clean 12500). Prune order if obs-box RAM is
+# threatened, biggest leverage first: (0) scrape-edge already pruned above;
+# (1) trade_hold_duration_seconds → 7 buckets; (2) drop {strategy} from edge
+# histograms; (3) collapse exchange_order_latency_seconds to {phase} only;
+# then other per-symbol labels.
+# ============================================================================
+groups:
+  # --- SLI error-ratio recordings (multiwindow) ----------------------------
+  - name: slo_sli_recordings
+    interval: 30s
+    rules:
+      # ob.ticks produce drop rate — SLO < 0.1% (the 5ms drop budget).
+      # Denominator = produce histogram _count (every produce attempt).
+      - record: sli:ob_ticks_produce_drops:ratio_rate5m
+        expr: |
+          sum(rate(ob_ticks_produce_dropped_total[5m]))
+          /
+          clamp_min(sum(rate(ob_ticks_produce_seconds_count[5m])), 1)
+      - record: sli:ob_ticks_produce_drops:ratio_rate30m
+        expr: |
+          sum(rate(ob_ticks_produce_dropped_total[30m]))
+          /
+          clamp_min(sum(rate(ob_ticks_produce_seconds_count[30m])), 1)
+      - record: sli:ob_ticks_produce_drops:ratio_rate1h
+        expr: |
+          sum(rate(ob_ticks_produce_dropped_total[1h]))
+          /
+          clamp_min(sum(rate(ob_ticks_produce_seconds_count[1h])), 1)
+      - record: sli:ob_ticks_produce_drops:ratio_rate6h
+        expr: |
+          sum(rate(ob_ticks_produce_dropped_total[6h]))
+          /
+          clamp_min(sum(rate(ob_ticks_produce_seconds_count[6h])), 1)
+
+      # Spread emit drop rate — SLO < 0.1% over 5 min.
+      - record: sli:spread_emit_drops:ratio_rate5m
+        expr: |
+          sum(rate(spread_engine_drop_total[5m]))
+          /
+          clamp_min(sum(rate(spread_engine_rows_emitted_total[5m])), 1)
+      - record: sli:spread_emit_drops:ratio_rate30m
+        expr: |
+          sum(rate(spread_engine_drop_total[30m]))
+          /
+          clamp_min(sum(rate(spread_engine_rows_emitted_total[30m])), 1)
+      - record: sli:spread_emit_drops:ratio_rate1h
+        expr: |
+          sum(rate(spread_engine_drop_total[1h]))
+          /
+          clamp_min(sum(rate(spread_engine_rows_emitted_total[1h])), 1)
+      - record: sli:spread_emit_drops:ratio_rate6h
+        expr: |
+          sum(rate(spread_engine_drop_total[6h]))
+          /
+          clamp_min(sum(rate(spread_engine_rows_emitted_total[6h])), 1)
+
+      # WS health availability — SLO > 99% per exchange. Error = 1 - uptime.
+      - record: sli:ws_health:error_ratio_rate5m
+        expr: 1 - avg(avg_over_time(ws_health[5m]))
+      - record: sli:ws_health:error_ratio_rate30m
+        expr: 1 - avg(avg_over_time(ws_health[30m]))
+      - record: sli:ws_health:error_ratio_rate1h
+        expr: 1 - avg(avg_over_time(ws_health[1h]))
+      - record: sli:ws_health:error_ratio_rate6h
+        expr: 1 - avg(avg_over_time(ws_health[6h]))
+
+  # --- Convenience quantile recordings (dashboards / threshold alerts) ------
+  - name: slo_quantile_recordings
+    interval: 30s
+    rules:
+      - record: sli:ob_ticks_produce:p99_5m
+        expr: histogram_quantile(0.99, sum(rate(ob_ticks_produce_seconds_bucket[5m])) by (le))
+      - record: sli:tick_to_trade:p99_5m
+        expr: histogram_quantile(0.99, sum(rate(tick_to_trade_seconds_bucket[5m])) by (le))
+      - record: sli:qapi_http:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(qapi_http_duration_seconds_bucket[5m])) by (le, route))
+      - record: sli:clickhouse_query:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(clickhouse_query_duration_seconds_bucket[5m])) by (le))
+      - record: sli:exchange_clock_skew:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(exchange_clock_skew_seconds_bucket[5m])) by (le))
+
+  # --- SLO burn-rate alerts (fast 1h/5m @14.4 · slow 6h/30m @6) -------------
+  - name: slo_burn_alerts
+    rules:
+      # ob.ticks produce drops — budget 0.1%.
+      - alert: ob_ticks_produce_slo_fastburn
+        expr: |
+          sli:ob_ticks_produce_drops:ratio_rate1h > (14.4 * 0.001)
+          and
+          sli:ob_ticks_produce_drops:ratio_rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+          slo: ob_ticks_produce_drop
+        annotations:
+          summary: "ob.ticks produce drop budget burning fast (>14.4x)"
+          action: "Hot→core produce exceeding the 5ms drop budget. Check hot-box event-loop lag + Redpanda producer queue (spec 06 §scaling-triggers)."
+      - alert: ob_ticks_produce_slo_slowburn
+        expr: |
+          sli:ob_ticks_produce_drops:ratio_rate6h > (6 * 0.001)
+          and
+          sli:ob_ticks_produce_drops:ratio_rate30m > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warn
+          routes: slack
+          slo: ob_ticks_produce_drop
+        annotations:
+          summary: "ob.ticks produce drop budget burning slow (>6x)"
+          action: "Sustained produce-drop leak. Inspect Redpanda producer_queue_bytes + hot-box CPU."
+
+      # Spread emit drops — budget 0.1%.
+      - alert: spread_emit_slo_fastburn
+        expr: |
+          sli:spread_emit_drops:ratio_rate1h > (14.4 * 0.001)
+          and
+          sli:spread_emit_drops:ratio_rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+          slo: spread_emit_drop
+        annotations:
+          summary: "spread emit drop budget burning fast (>14.4x)"
+          action: "SpreadComputer dropping rows. Check core-box CPU + consumer lag on spread_ticks."
+      - alert: spread_emit_slo_slowburn
+        expr: |
+          sli:spread_emit_drops:ratio_rate6h > (6 * 0.001)
+          and
+          sli:spread_emit_drops:ratio_rate30m > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warn
+          routes: slack
+          slo: spread_emit_drop
+        annotations:
+          summary: "spread emit drop budget burning slow (>6x)"
+          action: "Sustained spread-drop leak. Inspect SpreadComputer throughput."
+
+      # WS health availability — budget 1% (SLO > 99%).
+      - alert: ws_health_slo_fastburn
+        expr: |
+          sli:ws_health:error_ratio_rate1h > (14.4 * 0.01)
+          and
+          sli:ws_health:error_ratio_rate5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: warn
+          routes: slack
+          slo: ws_health
+        annotations:
+          summary: "WS health availability budget burning fast (>14.4x)"
+          action: "A venue feed is flapping/down. Cross-check ws_down + ws_reconnects_total per exchange."
+      - alert: ws_health_slo_slowburn
+        expr: |
+          sli:ws_health:error_ratio_rate6h > (6 * 0.01)
+          and
+          sli:ws_health:error_ratio_rate30m > (6 * 0.01)
+        for: 15m
+        labels:
+          severity: warn
+          routes: slack
+          slo: ws_health
+        annotations:
+          summary: "WS health availability budget burning slow (>6x)"
+          action: "Sustained sub-99% WS uptime on a venue. Investigate connection stability."

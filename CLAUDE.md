@@ -10,6 +10,8 @@ ArbiNet = automated crypto arbitrage system. Monitors real-time orderbooks acros
 - **Spread Arbitrage** — exploits price spread differences between exchanges
 - **Funding Arbitrage** — exploits funding rate differentials between exchanges, time-windowed entry/exit around funding events
 
+**Infrastructure** lives in `infra/` with its own [`infra/CLAUDE.md`](./infra/CLAUDE.md) (Hetzner: Terraform + Ansible + Kamal). To reach the prod private net (`10.0.1.0/24`), bring up the operator WireGuard tunnel — config at `~/Documents/exchange-arbitrage/wireguard/operator-wg0.conf` (`sudo wg-quick up …`, interactive sudo; tear down after).
+
 
 ## Tech Stack
 
@@ -67,6 +69,18 @@ npm run push:ecr          # Push Docker images to AWS ECR
 - **trader** — runs the arbitrage/execution app
 - **query-api** — serves queries over stored data
 - Single-process local dev still uses `npm start` + Redis.
+
+#### Dev Stack Gotchas (`docker-compose.dev.yml`)
+- **CH 26.3 rejects redefining the `default` disk** — `config.dev.d/storage.xml` must NOT give `default` a `<path>` under `<storage_configuration>` (`code 137 UNKNOWN_ELEMENT_IN_CONFIG`); reference the implicit `default` disk, only define the `tiered` policy.
+- **Mounting `config.dev.d` over `/etc/clickhouse-server/config.d` shadows the image's `docker_related_config.xml`** (which sets `listen_host 0.0.0.0`) → CH binds loopback only → bridge/host clients get empty/refused. Re-provide it: `config.dev.d/network.xml` with `<listen_host>0.0.0.0</listen_host>`.
+- **Dev CH networked user = `arbinet`/`arbinet`** (env `CLICKHOUSE_USER/PASSWORD`); the `default` user needs a password over the bridge. Trader stub uses `CH_USER=arbinet`.
+- **Dev secrets = SOPS** `config/secrets/dev.env.sops.yaml` (same age recipient as prod vault). `npm run docker:dev:up` decrypts to `.env` via `sops -d --output-type dotenv` (temp-then-`mv`, no clobber on failure) — needs `SOPS_AGE_KEY_FILE`. Edit: `npm run docker:dev:secrets`.
+- **nodemon hot-reload in containers needs `legacyWatch: true`** (`nodemon.json`) — Docker Desktop macOS bind-mount fsevents don't propagate, polling required.
+- **Redpanda dev healthcheck** `rpk cluster health` returns `Healthy: false` on `high_disk_usage_nodes` (full laptop disk) though the broker works — gate on `rpk cluster info` + `Nodes down: []` instead. Dual listeners (`INTERNAL redpanda:9092` / `EXTERNAL 127.0.0.1:19092`) so both bridge containers and host kafka tooling connect.
+- **Container Node inspectors** mapped 9229 (trader) / 9230 (query-api) / 9231 (spread-computer); VSCode attach configs in `.vscode/launch.json`.
+
+### Local Observability Stack (dev)
+The dev stack also runs prod-parity observability — **Prometheus** (9090) / **Loki** (3100) / **Tempo** (3200) / **Pyroscope** (4040) / **Grafana** (3000), fed by a single **Grafana Alloy** collector (4317 OTLP / 4040 pyroscope). Same images/pipeline/datasources/10-dashboards as the Hetzner `obs` box, 24h retention. The three stubs are OTel-instrumented via `src/stubs/telemetry.ts` (`--require`d before entrypoint; no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` set, so prod is untouched). **Query metrics/logs/traces/profiles via CLI/curl — NOT MCP** — to debug code you just ran. Verify: `npm run docker:dev:obs:verify`. Full cookbook + correlation walkthrough + parity divergences in [`OBSERVABILITY.md`](./OBSERVABILITY.md).
 
 ## Code Conventions
 

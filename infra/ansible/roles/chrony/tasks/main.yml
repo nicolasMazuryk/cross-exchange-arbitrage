@@ -1,0 +1,30 @@
+---
+# chrony role — tight host clock sync for core-box workloads (ClickHouse
+# timestamps, Redpanda, time-correlated telemetry). Config only; the chrony
+# service is a host daemon (not a container), so this role runs it. Tag: chrony.
+
+- name: Install chrony
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: chrony_apt
+  until: chrony_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Deploy chrony.conf
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart chrony
+
+- name: Enable and start chrony
+  ansible.builtin.service:
+    name: chrony
+    enabled: true
+    state: started

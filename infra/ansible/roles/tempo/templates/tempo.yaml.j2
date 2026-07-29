@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+services:
+  tempo:
+    image: {{ tempo_image }}
+    container_name: tempo
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/tempo/tempo.yml
+    volumes:
+      - {{ obs_stack_dir }}/config/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - {{ obs_data_root }}/tempo:/var/tempo
+    ports:
+      - "{{ obs_bind_ip }}:{{ tempo_otlp_grpc_port }}:4317"
+      - "{{ obs_bind_ip }}:{{ tempo_otlp_http_port }}:4318"
+    mem_limit: {{ tempo_mem_limit }}
+    networks:
+      - {{ obs_network_name }}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

@@ -12,7 +12,8 @@ infra/terraform/
 ├── versions.tf             # required_version >= 1.15, provider pin
 ├── backend.tf              # S3 backend (Hetzner Object Storage) + native lockfile
 ├── variables.tf            # hcloud_token, operator_ips, ssh keys, region, sizes
-├── outputs.tf              # host private IPs, bucket names → consumed by Ansible/Kamal
+├── outputs.tf              # host private IPs, bucket names, zone NS/FQDN → consumed by Ansible/Kamal
+├── dns.tf                  # hcloud_zone arbinet.xyz (primary) + A/CNAME rrsets (api/apex/www)
 └── modules/
     ├── network/            # hcloud_network + subnet
     ├── firewall/           # hcloud_firewall (parametrized: hot vs core vs obs rule set)
@@ -56,9 +57,13 @@ The full set Terraform provisions for the three-host deployment. Sizing rational
 | `hcloud_firewall` **fw-obs** | Inbound: **WireGuard UDP 51820** (operator IPs), **SSH 22** (operator IPs, over WG in practice); private-net all-allow; **no public service ports** | Edge policy for obs (gap **G11**) |
 | Object Storage bucket **arbinet-cold** | NBG1 (`nbg1.your-objectstorage.com`) | CH S3 cold disk + daily Parquet export ([`../datapipeline/10-cold-path.md`](../datapipeline/10-cold-path.md)) |
 | Object Storage bucket **arbinet-tfstate** | NBG1 | Terraform remote state + native lockfile (below) |
+| `hcloud_zone` **arbinet.xyz** | `mode=primary`, zone `ttl=3600`; NS delegated from GoDaddy registrar (one-time manual step) | Hetzner authoritative DNS for the query-api edge domain; fully Terraform-managed (no Console) |
+| `hcloud_zone_rrset` **api / @ / www** | `api` A → `module.core.public_ipv4` (`ttl=300`), apex `@` A → core (`ttl=300`), `www` CNAME → `arbinet.xyz.` (`ttl=3600`) | `api.arbinet.xyz` = kamal-proxy TLS host; apex/www DNS presence. Low A TTL keeps re-pointing fast on core rebuild |
 | `hcloud_ssh_key` | Operator ed25519 key `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICIljEw49E8vw0nrc6zzdsooLDFAsE5HSs/AxMspZiY5 nicolasmazuryk@gmail.com`, Terraform-tracked | Injected at all servers' creation; key-only SSH. Matching private key lives at `~/.ssh/nicolas` on the operator machine (never in repo/state); Ansible + Kamal authenticate over SSH with it |
 
 **No `hcloud_load_balancer`.** The single public edge is kamal-proxy on the core box ([04](./04-deployment.md#edge-and-tls-path)).
+
+**DNS is Terraform-managed (no Console).** `hcloud_zone arbinet.xyz` + its rrsets live in `dns.tf`; the only manual step is delegating the zone's nameservers (Terraform output `zone_nameservers`) to Hetzner at the GoDaddy registrar, once.
 
 ### Volume lifecycle
 

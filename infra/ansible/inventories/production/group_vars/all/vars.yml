@@ -1,0 +1,22 @@
+---
+# Non-secret WireGuard overlay config (privkeys live in vault.sops.yml).
+# Gateway-per-host model: each host is an independent WG gateway onto the
+# Hetzner private net (10.0.1.0/24) via NAT MASQUERADE. One operator config =
+# full subnet access. All 3 hosts run an endpoint; core is the primary.
+wireguard:
+  port: 51820
+  overlay_cidr: 10.8.0.0/24
+  # Each gateway's wg0 address. One operator tunnel at a time → no clash.
+  host_overlay_ip: 10.8.0.1
+  primary_endpoint_host: core
+  operator:
+    name: operator
+    pubkey: "kqKnRrhUAGZiC2MaHq8ka8IgYk+2CPXmUmXDpyIsQUg="
+    overlay_ip: 10.8.0.2
+  host_pubkeys:
+    hot: "4H06L8Q5Mch1RxvPBb55gOnl3sR4aakyT6hTklx3I2Q="
+    core: "we+VHI/aJ/XfAG0F0sQ8OP4jgT7mIvQrR3WlSOV5mW4="
+    obs: "OUMFPewwFMsamui1QT/MwhJhGx++JOMc3IBDJfL+ZFU="
+
+# Hetzner private subnet the WG gateway forwards into.
+private_subnet_cidr: 10.0.1.0/24

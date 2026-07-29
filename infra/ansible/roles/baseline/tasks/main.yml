@@ -1,0 +1,128 @@
+---
+# Baseline hardening — sshd drop-in, ufw, unattended-upgrades, fail2ban,
+# sysctl, auditd. Applied to all three hosts. Tag: baseline.
+
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+      - auditd
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: baseline_apt
+  until: baseline_apt is succeeded
+  retries: 6
+  delay: 20
+
+# --- SSH hardening ---------------------------------------------------------
+- name: Deploy sshd hardening drop-in
+  ansible.builtin.template:
+    src: 10-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart ssh
+
+- name: Validate the full sshd config (fail before locking ourselves out)
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+  register: baseline_sshd_validate
+  until: baseline_sshd_validate is succeeded
+  retries: 6
+  delay: 10
+
+# --- Drift runner key ------------------------------------------------------
+# Authorize the dedicated drift SSH key on the deploy user so the obs-box drift
+# runner can reach the fleet over the private net for the nightly --check
+# (task 15). Private half in vault; public half is a non-secret shared var.
+- name: Authorize the drift SSH key on the deploy user
+  ansible.posix.authorized_key:
+    user: "{{ baseline_ssh_allow_users }}"
+    key: "{{ drift_ssh_public_key }}"
+    state: present
+  when: drift_ssh_public_key | default('') | length > 0
+
+# --- UFW (allow rules BEFORE enable — lockout-safe ordering) ---------------
+- name: Allow public ingress ports
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+  loop: "{{ baseline_ufw_allowed_ports }}"
+
+- name: Allow all traffic from trusted networks (private net + WG overlay)
+  community.general.ufw:
+    rule: allow
+    src: "{{ item }}"
+  loop: "{{ baseline_trusted_networks }}"
+
+- name: Enable ufw with default-deny incoming
+  community.general.ufw:
+    state: enabled
+    direction: incoming
+    policy: deny
+
+- name: Set default-allow outgoing
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+# --- Unattended upgrades ---------------------------------------------------
+- name: Enable unattended-upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+# --- fail2ban --------------------------------------------------------------
+- name: Deploy fail2ban sshd jail
+  ansible.builtin.template:
+    src: fail2ban-jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+
+# --- sysctl kernel hardening ----------------------------------------------
+- name: Apply kernel hardening sysctls
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/60-baseline-hardening.conf
+    sysctl_set: true
+    state: present
+    reload: true
+  loop:
+    - { name: net.ipv4.tcp_syncookies, value: "1" }
+    - { name: net.ipv4.conf.all.accept_source_route, value: "0" }
+    - { name: net.ipv4.conf.default.accept_source_route, value: "0" }
+    - { name: net.ipv6.conf.all.accept_source_route, value: "0" }
+    - { name: net.ipv4.conf.all.accept_redirects, value: "0" }
+    - { name: net.ipv4.conf.default.accept_redirects, value: "0" }
+    - { name: net.ipv4.conf.all.send_redirects, value: "0" }
+    - { name: net.ipv4.conf.default.send_redirects, value: "0" }
+    - { name: net.ipv6.conf.all.accept_redirects, value: "0" }
+    - { name: net.ipv4.conf.all.secure_redirects, value: "0" }
+
+# --- auditd ----------------------------------------------------------------
+- name: Enable and start auditd
+  ansible.builtin.service:
+    name: auditd
+    enabled: true
+    state: started

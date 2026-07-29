@@ -1,7 +1,22 @@
 import pino from 'pino'
 import path from 'path'
+import { trace, context as otelContext } from '@opentelemetry/api'
 import { TraceContext } from './traceContext'
 import { yamlConfig } from './config'
+
+/**
+ * Deferred real-app OTel hook (parity with the stub logger). When the real app
+ * is run under the OTel preload (`src/stubs/telemetry.ts`), this emits the
+ * active span's `trace_id`/`span_id` as snake_case hex so the SAME Loki derived
+ * field (`'"trace_id":"(\w+)"'`) pivots a log line to its Tempo trace. No-op
+ * when no OTLP/span is active — today's `npm start` output is unchanged (the
+ * AsyncLocalStorage camelCase `traceId` from TraceContext is untouched).
+ */
+function otelTraceMixin(): Record<string, string> {
+  const span = trace.getSpanContext(otelContext.active())
+  if (!span || !span.traceId) return {}
+  return { trace_id: span.traceId, span_id: span.spanId }
+}
 
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace'
 
@@ -12,6 +27,10 @@ export interface LogData {
 const LOG_LEVEL = yamlConfig.app.logLevel as LogLevel
 const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 
+const SIGNAL_MARKER = '🔸'
+const ANSI_SIGNAL = '\x1b[1m\x1b[35m' // bold magenta — dev pretty only
+const ANSI_RESET = '\x1b[0m'
+
 const serializers = {
   err: pino.stdSerializers.err,
   error: pino.stdSerializers.err,
@@ -21,6 +40,7 @@ const createBaseLogger = () => {
   if (!IS_PRODUCTION) {
     return pino({
       level: LOG_LEVEL,
+      mixin: otelTraceMixin,
       serializers,
       transport: {
         targets: [
@@ -60,6 +80,7 @@ const createBaseLogger = () => {
   // Production mode: JSON output for centralized logging
   return pino({
     level: LOG_LEVEL,
+    mixin: otelTraceMixin,
     serializers,
     transport: {
       targets: [
@@ -120,6 +141,10 @@ export class Logger {
   private logger: pino.Logger
   private module: string
 
+  // Sticky per-column max widths, shared across all signal() lines so they
+  // align into a single table regardless of which Logger instance emits them.
+  private static signalColMeta: { width: number }[] = []
+
   constructor(module: string, childLogger?: pino.Logger) {
     this.module = module
     this.logger = childLogger || baseLogger.child({ module })
@@ -150,6 +175,37 @@ export class Logger {
   }
   trace(data: LogData): void {
     this.logger.trace(this.enrichWithContext(data))
+  }
+
+  /**
+   * Dedicated inline log for arbitrage opportunities and trades. Each arg is a
+   * column; columns are padded to a sticky max width (shared across all signal
+   * lines) and joined with ` | ` so successive lines align like a table on one
+   * line. Numbers right-align (floats fixed to 4 decimals); strings left-align.
+   * Bypasses `enrichWithContext` — no trace fields, no `module` binding (emits
+   * via `baseLogger`) so pino-pretty appends nothing. ANSI color is dev-only so
+   * prod log files stay clean JSON.
+   */
+  signal(...args: any[]): void {
+    const cells = args.map((a) => {
+      const numeric = typeof a === 'number'
+      let s: string
+      if (numeric) s = Number.isInteger(a) ? String(a) : a.toFixed(4)
+      else if (a !== null && typeof a === 'object') s = JSON.stringify(a)
+      else s = String(a)
+      return { s, numeric }
+    })
+    const meta = Logger.signalColMeta
+    const body = cells
+      .map(({ s, numeric }, i) => {
+        const m = meta[i] || (meta[i] = { width: 0 })
+        if (s.length > m.width) m.width = s.length
+        return numeric ? s.padStart(m.width) : s.padEnd(m.width)
+      })
+      .join(' | ')
+    const label = `${SIGNAL_MARKER}`
+    const msg = IS_PRODUCTION ? `${label} ${body}` : `${ANSI_SIGNAL}${label}${ANSI_RESET} ${body}`
+    baseLogger.info({ msg })
   }
 
   child(bindings: LogData): Logger {

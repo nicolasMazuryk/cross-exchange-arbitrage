@@ -1,0 +1,27 @@
+# Shared dev image for the local datapipeline stack (docker-compose.dev.yml).
+#
+# NOT a prod artifact. The three prod Dockerfiles (Dockerfile.trader/queryApi/
+# spreadComputer) are multi-stage, --platform=linux/amd64-pinned, npm-pruned
+# (no ts-node), USER node — built for amd64 hosts and incompatible with the
+# spec's "ts-node + nodemon hot reload" on an arm64 laptop. This image restores
+# the role the deleted Dockerfile.arbinet used to play: ONE native image, ALL
+# deps (incl. ts-node + nodemon), repo bind-mounted at runtime, a per-service
+# `command` in compose selecting the entrypoint. Native arch (no --platform) so
+# it runs as fast on Apple Silicon as on amd64.
+FROM node:24.13-slim
+
+WORKDIR /app
+ENV NODE_ENV=development
+
+# Install ALL deps (including devDependencies: ts-node, nodemon, typescript).
+# The repo is bind-mounted over /app at runtime; node_modules lives in an
+# anonymous volume (see compose) so the container's install is not shadowed by
+# the host tree. Copying package*.json first keeps this layer cached across
+# source edits.
+COPY package*.json ./
+RUN npm ci
+
+# Source arrives via the bind-mount at runtime; nothing to COPY. Each service
+# overrides CMD via compose `command:` (nodemon + inspector, see compose).
+EXPOSE 8080 8081 9464 9229
+CMD ["npx", "nodemon", "--exec", "node --require ts-node/register", "src/trader.ts"]

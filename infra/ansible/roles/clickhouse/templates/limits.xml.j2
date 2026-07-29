@@ -1,0 +1,12 @@
+<!-- {{ ansible_managed }} -->
+<!-- Resource limits (spec 03/06). CH gets ~12 GB on the core box (no co-located
+     trader). max_threads exposed as a scaling trigger. -->
+<clickhouse>
+  <profiles><default>
+    <max_memory_usage>{{ clickhouse_max_memory_usage }}</max_memory_usage>
+    <max_bytes_before_external_group_by>{{ clickhouse_max_bytes_external_group_by }}</max_bytes_before_external_group_by>
+    <max_threads>{{ clickhouse_max_threads }}</max_threads>
+    <async_insert>{{ clickhouse_async_insert }}</async_insert>
+    <wait_for_async_insert>{{ clickhouse_wait_for_async_insert }}</wait_for_async_insert>
+  </default></profiles>
+</clickhouse>

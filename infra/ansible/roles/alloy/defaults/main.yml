@@ -1,0 +1,45 @@
+---
+# alloy — Grafana Alloy collector (core box, task 09; leaned by the hot box in
+# task 10). Single systemd binary from the official Grafana apt repo. Scrapes the
+# loopback exporters + app /metrics, tails docker logs, receives OTLP + Pyroscope,
+# forwards all signals to the obs box. Shared topology vars (scrape targets,
+# endpoint URLs built from obs_private_ip) live in group_vars/role_core.yml;
+# these are standalone fallbacks.
+alloy_package: alloy
+alloy_service: alloy
+alloy_user: alloy
+alloy_config_file: /etc/alloy/config.alloy
+alloy_default_file: /etc/default/alloy
+
+# Grafana apt repo (deb822, mirrors the docker role's GPG+repo pattern).
+alloy_apt_arch: amd64
+alloy_apt_gpg_url: https://apt.grafana.com/gpg.key
+alloy_apt_keyring: /etc/apt/keyrings/grafana.asc
+
+# Forwarding endpoints (obs box). Real values built from obs_private_ip in
+# group_vars; literal fallback keeps standalone/--syntax-check runs working.
+alloy_remote_write_url: http://10.0.1.30:9090/api/v1/write
+alloy_loki_url: http://10.0.1.30:3100/loki/api/v1/push
+alloy_tempo_endpoint: 10.0.1.30:4317
+alloy_pyroscope_url: http://10.0.1.30:4040
+
+# Local receiver binds (loopback — apps on this box push here).
+alloy_otlp_grpc_listen: 127.0.0.1:4317
+alloy_otlp_http_listen: 127.0.0.1:4318
+alloy_pyroscope_listen_address: 127.0.0.1
+alloy_pyroscope_listen_port: 4040
+
+# Scrape config. Job labels MUST match up{job=~"node|clickhouse|redpanda|
+# query-api|spread-computer"} (spec 05 alert + task-09 verify). Real list in
+# group_vars; empty fallback here.
+alloy_scrape_interval: 15s
+# scrape_timeout MUST be <= scrape_interval (Alloy/Prometheus refuse to build a
+# scrape config otherwise; default timeout is 10s, which breaks the hot box's 5s
+# interval). Keep it equal to the interval per box (overridden in group_vars).
+alloy_scrape_timeout: 10s
+alloy_scrape_targets: []
+
+# Per-host external label on remote-write metrics → host="core"/"hot" so the
+# obs Prometheus {job=node,instance=127.0.0.1:9100} series don't collide and the
+# spec's host= alert labels resolve. Overridden per box in group_vars.
+alloy_host_label: "unknown"

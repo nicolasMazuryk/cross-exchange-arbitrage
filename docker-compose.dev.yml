@@ -1,13 +1,23 @@
-version: '3.8'
-
-# Local development stack for the datapipeline:
-#   ClickHouse v26 LTS, Redpanda (KRaft), trader, query-api.
-# Bind-mounts under ./.dev-data (gitignored). Bridge networking with port mapping.
-# No cold S3 disk; storage policy points only at the default volume.
+# Local development stack for the datapipeline (NOT the production runtime).
+#
+# Brings up the full pipeline on one laptop: Redpanda (KRaft) + ClickHouse +
+# the three app services (trader / query-api / spread-computer) — which prod
+# splits across the hot and core boxes (spec 04 §local-development). Image tags
+# match the live prod Kamal accessories EXACTLY (CH 26.3, Redpanda v26.1.9 — the
+# real published tags; the spec prose's 26.3-lts/v26.1 don't exist on the
+# registries, see infra/CLAUDE.md). Bind-mounts under ./.dev-data (gitignored),
+# single-disk storage policy, bootstrap.sql init. The app services run the same
+# thin stubs prod runs today, under nodemon + a Node inspector for hot-reload
+# and VSCode attach debugging (.vscode/launch.json).
+#
+# Secrets: `npm run docker:dev:up` decrypts config/secrets/dev.env.sops.yaml ->
+# .env (SOPS+age, same recipient as the prod vault) BEFORE compose runs, so every
+# service boots with the full prod env (exchange keys, CH_*, S3_*) = dev↔prod
+# parity. Needs SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt.
 
 services:
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
+    image: redpandadata/redpanda:v26.1.9
     container_name: arbinet-redpanda-dev
     command:
       - redpanda
@@ -17,77 +27,295 @@ services:
       - --reserve-memory=0M
       - --overprovisioned
       - --node-id=0
-      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr=PLAINTEXT://127.0.0.1:9092
       - --mode=dev-container
+      # Two listeners: INTERNAL (redpanda:9092) for the app containers on the
+      # bridge, EXTERNAL (127.0.0.1:19092) for host-side kafka tooling. A single
+      # advertised addr can't serve both — clients honour the advertised name.
+      - --kafka-addr=INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
+      - --advertise-kafka-addr=INTERNAL://redpanda:9092,EXTERNAL://127.0.0.1:19092
     ports:
-      - "9092:9092"
-      - "9644:9644"
+      - "19092:19092"   # host kafka clients (rpk from the laptop)
+      - "9644:9644"     # admin / native Prometheus endpoint
     volumes:
       - ./.dev-data/redpanda:/var/lib/redpanda/data
+    healthcheck:
+      # Broker reachable + this node not down. NOT full "Healthy: true" — that
+      # flips false on `high_disk_usage_nodes` when the laptop disk is tight,
+      # which doesn't stop the stub from producing. `rpk cluster info` exits 0
+      # only when the broker answers.
+      test: ["CMD-SHELL", "rpk cluster info >/dev/null 2>&1 && rpk cluster health 2>/dev/null | grep -q 'Nodes down:.*\\[\\]'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
     restart: unless-stopped
     networks: [arbinet]
 
   clickhouse:
-    image: clickhouse/clickhouse-server:26-lts
+    image: clickhouse/clickhouse-server:26.3
     container_name: arbinet-clickhouse-dev
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native
     environment:
       CLICKHOUSE_DB: arbinet
       CLICKHOUSE_USER: arbinet
       CLICKHOUSE_PASSWORD: arbinet
     volumes:
       - ./.dev-data/clickhouse:/var/lib/clickhouse
+      # Single-disk dev storage policy (no warm/cold tier) — `tiered` aliases the
+      # default disk so identical DDL works dev↔prod.
       - ./infra/clickhouse/config.dev.d:/etc/clickhouse-server/config.d:ro
-      - ./infra/clickhouse/users.d:/etc/clickhouse-server/users.d:ro
+      # db + migrations table only; app tables/MVs come from the migration tasks.
       - ./infra/clickhouse/bootstrap.sql:/docker-entrypoint-initdb.d/bootstrap.sql:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
     restart: unless-stopped
     networks: [arbinet]
 
+  # --- App services: shared docker/Dockerfile.dev, repo bind-mounted, each run
+  #     under nodemon + a Node inspector (0.0.0.0:9229 in-container, mapped to a
+  #     distinct host port). env_file: .env carries the FULL prod env (SOPS). ---
   trader:
     build:
       context: .
-      dockerfile: docker/Dockerfile.arbinet
+      dockerfile: docker/Dockerfile.dev
     container_name: arbinet-trader-dev
     env_file: .env
     environment:
       NODE_ENV: development
-      KAFKA_BROKERS: redpanda:9092
-      CLICKHOUSE_URL: http://clickhouse:8123
-    command: ["npx", "ts-node", "src/main.ts"]
+      REDPANDA_BROKERS: redpanda:9092
+      CH_URL: http://clickhouse:8123
+      # Observability: OTLP traces + Pyroscope profiles via the single Alloy
+      # collector (prod parity). telemetry.ts is a no-op unless OTEL_..._ENDPOINT
+      # is set, so this is the ONLY thing that turns instrumentation on.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4317
+      OTEL_SERVICE_NAME: trader
+      PYROSCOPE_SERVER_ADDRESS: http://alloy:4040
+      PYROSCOPE_APPLICATION_NAME: trader
+    # --require the OTel/Pyroscope bootstrap AFTER ts-node/register (so the .ts
+    # loads) but BEFORE the entrypoint (so auto-instrumentation patches http/
+    # kafkajs/@clickhouse/client before they are first required).
+    command: ["npx", "nodemon", "--exec", "node --inspect=0.0.0.0:9229 --require ts-node/register --require ./src/stubs/telemetry.ts", "src/trader.ts"]
+    ports:
+      - "9229:9229"   # Node inspector — VSCode "Attach: trader"
     volumes:
       - .:/app
       - /app/node_modules
     working_dir: /app
-    depends_on: [redpanda, clickhouse]
+    depends_on:
+      redpanda: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      alloy: { condition: service_started }
     restart: unless-stopped
     networks: [arbinet]
 
   query-api:
     build:
       context: .
-      dockerfile: docker/Dockerfile.queryApi
+      dockerfile: docker/Dockerfile.dev
     container_name: arbinet-query-api-dev
     env_file: .env
     environment:
       NODE_ENV: development
-      CLICKHOUSE_URL: http://clickhouse:8123
-      KAFKA_BROKERS: redpanda:9092
-    command: ["npx", "ts-node", "src/services/queryApi/server.ts"]
+      CH_URL: http://clickhouse:8123
+      REDPANDA_BROKERS: redpanda:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4317
+      OTEL_SERVICE_NAME: query-api
+      PYROSCOPE_SERVER_ADDRESS: http://alloy:4040
+      PYROSCOPE_APPLICATION_NAME: query-api
+    command: ["npx", "nodemon", "--exec", "node --inspect=0.0.0.0:9229 --require ts-node/register --require ./src/stubs/telemetry.ts", "src/queryApi.ts"]
     ports:
-      - "8124:8124"
+      - "8080:8080"   # /up, /healthz, /metrics
+      - "9230:9229"   # Node inspector — VSCode "Attach: query-api"
     volumes:
       - .:/app
       - /app/node_modules
     working_dir: /app
-    depends_on: [clickhouse, redpanda]
+    depends_on:
+      clickhouse: { condition: service_healthy }
+      redpanda: { condition: service_healthy }
+      alloy: { condition: service_started }
+    restart: unless-stopped
+    networks: [arbinet]
+
+  spread-computer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: arbinet-spread-computer-dev
+    env_file: .env
+    environment:
+      NODE_ENV: development
+      CH_URL: http://clickhouse:8123
+      REDPANDA_BROKERS: redpanda:9092
+      # Prod parity: spread-computer /metrics on 9105 (job=spread-computer
+      # scrape target), NOT the 9464 default shared with trader.
+      METRICS_PORT: "9105"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4317
+      OTEL_SERVICE_NAME: spread-computer
+      PYROSCOPE_SERVER_ADDRESS: http://alloy:4040
+      PYROSCOPE_APPLICATION_NAME: spread-computer
+    command: ["npx", "nodemon", "--exec", "node --inspect=0.0.0.0:9229 --require ts-node/register --require ./src/stubs/telemetry.ts", "src/spreadComputer.ts"]
+    ports:
+      - "9231:9229"   # Node inspector — VSCode "Attach: spread-computer"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    working_dir: /app
+    depends_on:
+      redpanda: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      alloy: { condition: service_started }
+    restart: unless-stopped
+    networks: [arbinet]
+
+  # ===================================================================
+  # Observability stack — prod-parity backends (same images/tags as the
+  # Hetzner obs box) scaled to one laptop. Alloy is the single telemetry
+  # agent (scrape→remote-write, docker-log tail→Loki, OTLP→Tempo,
+  # pyroscope→Pyroscope), mirroring the prod systemd Alloy. Configs under
+  # docker/obs/. See OBSERVABILITY.md. Stateful backends use named volumes
+  # (reliable for the non-root obs images on Docker Desktop macOS).
+  # ===================================================================
+
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    container_name: arbinet-prometheus-dev
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Alloy remote-writes here (prod parity) — receiver + lifecycle must be on.
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+      - --storage.tsdb.retention.time=24h
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/obs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    restart: unless-stopped
+    networks: [arbinet]
+
+  loki:
+    image: grafana/loki:3.7.2
+    container_name: arbinet-loki-dev
+    command: ["-config.file=/etc/loki/loki.yml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./docker/obs/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    # Distroless image (no shell/wget) → no container healthcheck; readiness is
+    # gated by scripts/obs-smoke.sh polling http://localhost:3100/ready.
+    restart: unless-stopped
+    networks: [arbinet]
+
+  tempo:
+    image: grafana/tempo:2.10.5
+    container_name: arbinet-tempo-dev
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      - "3200:3200"   # query/API
+    volumes:
+      - ./docker/obs/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    # Distroless image — readiness gated by obs-smoke.sh (http://.../ready).
+    restart: unless-stopped
+    networks: [arbinet]
+
+  pyroscope:
+    image: grafana/pyroscope:2.0.2
+    container_name: arbinet-pyroscope-dev
+    command: ["-config.file=/etc/pyroscope/pyroscope.yml"]
+    ports:
+      - "4040:4040"
+    volumes:
+      - ./docker/obs/pyroscope/pyroscope.yml:/etc/pyroscope/pyroscope.yml:ro
+      - pyroscope-data:/data
+    # Distroless image — readiness gated by obs-smoke.sh (http://.../ready).
+    restart: unless-stopped
+    networks: [arbinet]
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.8.2
+    container_name: arbinet-node-exporter-dev
+    command:
+      - --path.rootfs=/host
+    # Scratch image (no shell) → no healthcheck. On Docker Desktop macOS this
+    # reports the Linux VM's metrics, not macOS — acceptable for parity demo
+    # (documented in OBSERVABILITY.md). Scraped by Alloy as job=node. NOTE: no
+    # `rslave` mount propagation — Docker Desktop macOS rejects it ("path / ...
+    # not a shared or slave mount"); plain :ro is fine for the VM-metrics demo.
+    pid: host
+    volumes:
+      - /:/host:ro
+    restart: unless-stopped
+    networks: [arbinet]
+
+  alloy:
+    image: grafana/alloy:v1.16.2
+    container_name: arbinet-alloy-dev
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "12345:12345"   # Alloy debug UI (optional)
+      - "4317:4317"     # OTLP grpc (stubs export here)
+      - "4318:4318"     # OTLP http
+    volumes:
+      - ./docker/obs/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      prometheus: { condition: service_healthy }
+      loki: { condition: service_started }
+      tempo: { condition: service_started }
+      pyroscope: { condition: service_started }
+    restart: unless-stopped
+    networks: [arbinet]
+
+  grafana:
+    image: grafana/grafana:13.0.2
+    container_name: arbinet-grafana-dev
+    env_file: ./docker/obs/grafana/grafana.env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/obs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/obs/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    depends_on:
+      prometheus: { condition: service_healthy }
+      loki: { condition: service_started }
+      tempo: { condition: service_started }
+      pyroscope: { condition: service_started }
     restart: unless-stopped
     networks: [arbinet]
 
 networks:
   arbinet:
     driver: bridge
+
+volumes:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  pyroscope-data:
+  grafana-data:
+  alloy-data:

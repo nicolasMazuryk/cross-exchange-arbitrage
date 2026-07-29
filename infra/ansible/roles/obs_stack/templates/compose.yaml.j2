@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+# Root obs-stack compose project. Each backend role templates a self-contained
+# fragment under services/<backend>.yaml; this file merges them via include: and
+# declares the shared `obs` bridge network they all attach to. Bring up the
+# merged project with: docker compose -f {{ obs_stack_dir }}/compose.yaml up -d
+include:
+{% for backend in obs_stack_includes %}
+  - services/{{ backend }}.yaml
+{% endfor %}
+
+networks:
+  {{ obs_network_name }}:
+    name: {{ obs_network_name }}
+    driver: bridge

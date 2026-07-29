@@ -1,0 +1,42 @@
+# Pinned ansible runner for nightly drift detection (built on the obs box).
+# Carries the exact ansible-core + collection + sops/age versions the nightly
+# `--check --diff` executes with, so a host-side toolchain change can't silently
+# alter drift semantics. Self-contained: hcloud inventory plugin + SDK,
+# community.sops (+ sops/age binaries) for the vault lookups, openssh client to
+# reach the fleet over the private net.
+FROM python:3.12-slim
+
+ARG ANSIBLE_CORE=2.17.6
+ARG SOPS_VERSION=3.9.4
+ARG AGE_VERSION=1.2.0
+
+ENV ANSIBLE_HOST_KEY_CHECKING=False \
+    ANSIBLE_RETRY_FILES_ENABLED=False \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client ca-certificates curl rsync \
+ && rm -rf /var/lib/apt/lists/*
+
+# sops + age binaries (community.sops shells out to them) — amd64 obs box.
+RUN curl -fsSL -o /usr/local/bin/sops \
+      "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
+ && chmod +x /usr/local/bin/sops \
+ && curl -fsSL -o /tmp/age.tgz \
+      "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz" \
+ && tar -xzf /tmp/age.tgz -C /usr/local/bin --strip-components=1 age/age age/age-keygen \
+ && rm -f /tmp/age.tgz
+
+# Pinned ansible-core + the hcloud python SDK (inventory plugin dependency).
+RUN pip install "ansible-core==${ANSIBLE_CORE}" hcloud
+
+# Pinned collections used by site.yml + the inventory.
+RUN ansible-galaxy collection install \
+      hetzner.hcloud:==4.3.0 \
+      community.sops:==1.9.1 \
+      community.docker:==4.4.0 \
+      community.general:==10.1.0 \
+      ansible.posix:==1.6.2
+
+WORKDIR /ansible
+ENTRYPOINT ["ansible-playbook"]

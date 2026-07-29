@@ -1,0 +1,110 @@
+---
+# drift_detection role — installs the nightly drift-check on the obs box: a
+# pinned dockerized ansible runner, a read-only copy of the ansible tree, the
+# delivered age + drift SSH keys, the wrapper, and the systemd timer/service.
+# Tag: drift_detection.
+
+- name: Create the drift install + secrets directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ drift_install_root }}", mode: "0755" }
+    - { path: "{{ drift_install_root }}/runner", mode: "0755" }
+    - { path: "{{ drift_secrets_dir }}", mode: "0700" }
+    - { path: "{{ drift_textfile_dir }}", mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# --- Pinned dockerized ansible runner --------------------------------------
+- name: Copy the drift runner Dockerfile
+  ansible.builtin.copy:
+    src: Dockerfile.drift
+    dest: "{{ drift_install_root }}/runner/Dockerfile"
+    owner: root
+    group: root
+    mode: "0644"
+  register: drift_detection_dockerfile
+
+- name: Build the pinned drift runner image
+  community.docker.docker_image:
+    name: "{{ drift_runner_image }}"
+    source: build
+    force_source: "{{ drift_detection_dockerfile is changed }}"
+    build:
+      path: "{{ drift_install_root }}/runner"
+      pull: false
+    state: present
+
+# --- Read-only copy of the ansible tree (no git creds on the box) -----------
+- name: Push the ansible/ tree to the obs box
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir | dirname }}/"
+    dest: "{{ drift_ansible_dir }}/"
+    archive: true
+    delete: true
+    rsync_opts:
+      - "--exclude=.ansible"
+      - "--exclude=*.retry"
+      - "--exclude=.git"
+
+# --- Secret delivery (residual exposure documented in host-rebuild runbook) --
+- name: Deliver the age key for on-box SOPS decrypt (0600, no_log)
+  ansible.builtin.copy:
+    content: "{{ lookup('file', drift_age_key_src) }}"
+    dest: "{{ drift_age_key_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Look up the drift SSH private key from the vault
+  ansible.builtin.set_fact:
+    drift_detection_ssh_private_key: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).drift_ssh_private_key }}
+  no_log: true
+
+- name: Deliver the drift SSH private key (0600, no_log)
+  ansible.builtin.copy:
+    content: "{{ drift_detection_ssh_private_key }}\n"
+    dest: "{{ drift_ssh_key_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# --- Wrapper + systemd units -----------------------------------------------
+- name: Render the drift-check wrapper
+  ansible.builtin.template:
+    src: drift-check.sh.j2
+    dest: "{{ drift_wrapper_path }}"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Render the drift systemd service + timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - arbinet-drift.service
+    - arbinet-drift.timer
+  notify: Reload systemd
+
+- name: Flush handlers so the units are reloaded before enabling
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable + start the drift timer
+  ansible.builtin.systemd:
+    name: arbinet-drift.timer
+    enabled: true
+    state: started
+    daemon_reload: true

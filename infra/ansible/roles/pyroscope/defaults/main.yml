@@ -1,0 +1,8 @@
+---
+# pyroscope — continuous-profiling store (single-binary, target=all), filesystem
+# backend, 7d retention. Overridden by group_vars/role_obs.yml.
+pyroscope_image: grafana/pyroscope:2.0.2
+pyroscope_port: 4040
+pyroscope_retention_period: 168h
+pyroscope_mem_limit: 1536m
+pyroscope_uid: 10001

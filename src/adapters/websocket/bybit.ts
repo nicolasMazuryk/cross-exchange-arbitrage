@@ -4,7 +4,7 @@ import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './ty
 import { MarketType } from '../../types/exchange'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import logger from '../../utils/logger'
-import { TraceContext } from '../../utils/traceContext'
+import { parseLevels } from './parseLevels'
 
 const EXCHANGE_NAME = 'bybit'
 
@@ -21,20 +21,11 @@ class BybitMessageParser implements PublicWebSocketMessageParser {
       exchange: EXCHANGE_NAME,
       symbol: this.getUnifiedSymbol(data.data.s, marketType),
       marketType,
-      timestamp: data.ts,
-      asks: data.data.a.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
-      bids: data.data.b.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
+      timestamp: data.cts ?? data.ts,
+      asks: parseLevels(data.data.a),
+      bids: parseLevels(data.data.b),
       finalUpdateId: data.data.u,
       sequence: data.data.seq,
-      traceId: '', // Will be set by the message handler
     }
   }
 }
@@ -57,13 +48,13 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
 
   protected setupEventHandlers(batch: StreamBatch): void {
     batch.client.on('open', () => {
-      logger.info({
-        msg: 'WebSocket connection opened',
-        function: 'BybitPublicWebSocketClient.setupEventHandlers.open',
-        exchange: this.exchangeName,
-        batchId: batch.id,
-        symbolCount: batch.symbols.length,
-      })
+      // logger.info({
+      //   msg: 'WebSocket connection opened',
+      //   function: 'BybitPublicWebSocketClient.setupEventHandlers.open',
+      //   exchange: this.exchangeName,
+      //   batchId: batch.id,
+      //   symbolCount: batch.symbols.length,
+      // })
       batch.isConnected = true
     })
 
@@ -77,14 +68,14 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
       await this.handleConnectionError(batch)
     })
 
-    batch.client.on('response', (data: any) => {
-      logger.info({
-        msg: 'WebSocket reply received',
-        function: 'BybitPublicWebSocketClient.setupEventHandlers.response',
-        exchange: this.exchangeName,
-        batchId: batch.id,
-        data,
-      })
+    batch.client.on('response', () => {
+      // logger.info({
+      //   msg: 'WebSocket reply received',
+      //   function: 'BybitPublicWebSocketClient.setupEventHandlers.response',
+      //   exchange: this.exchangeName,
+      //   batchId: batch.id,
+      //   data,
+      // })
     })
 
     batch.client.on('reconnect', (data: any) => {
@@ -132,29 +123,19 @@ export class BybitPublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('update', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
-        try {
-          if (this.messageParser.isOrderBookMessage(data)) {
-            const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
-            update.traceId = traceId
-            this.emit('orderbookUpdate', update)
-          }
-        } catch (error) {
-          logger.error({
-            msg: 'Error parsing WebSocket message',
-            exchange: this.exchangeName,
-            batchId: batch.id,
-            error,
-          })
+      try {
+        if (this.messageParser.isOrderBookMessage(data)) {
+          const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
+          this.emit('orderbookUpdate', update)
         }
-      }).catch(error => {
+      } catch (error) {
         logger.error({
-          msg: 'Error in trace context for WebSocket message',
-          function: 'BybitPublicWebSocketClient.setupEventHandlers.update',
+          msg: 'Error parsing WebSocket message',
           exchange: this.exchangeName,
+          batchId: batch.id,
           error,
         })
-      })
+      }
     })
   }
 

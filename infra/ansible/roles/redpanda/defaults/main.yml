@@ -1,0 +1,25 @@
+---
+# redpanda — single-broker KRaft config-on-host (spec 03/06). No image pin
+# (Kamal owns the container, task 13). Overridden by group_vars/role_core.yml.
+redpanda_uid: 101                    # redpanda container UID:GID
+redpanda_data_dir: /mnt/ch-volume/redpanda          # host bind (Kamal mount)
+redpanda_container_data_dir: /var/lib/redpanda/data # in-container path
+
+redpanda_node_id: 0
+redpanda_kafka_port: 9092
+redpanda_admin_host: 127.0.0.1
+redpanda_admin_port: 9644
+
+# Sizing — DOC SOURCE ONLY (sizing table 06: --smp 2 --memory 5G). These now live
+# on the Kamal start cmd (config/deploy.yml) with the container they configure; kept
+# here so the role still documents the canonical sizing.
+redpanda_smp: 2
+redpanda_memory: 5G
+redpanda_reserve_memory: 0M
+
+# Cluster-level fail-safe retention cap (~20 GiB). Per-topic caps below are
+# DOCUMENTED ONLY — the app (task 12) creates topics; this role never does.
+redpanda_cluster_retention_bytes: 21474836480
+redpanda_topics:
+  - { name: ob.ticks, retention_bytes: 21474836480, delete_retention_ms: 86400000 }
+  - { name: spreads.live, retention_bytes: 21474836480 }

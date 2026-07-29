@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# Gateway WireGuard config. This host is an independent WG endpoint that NATs a
+# dialed operator onto the Hetzner private net ({{ private_subnet_cidr }}) via
+# MASQUERADE out {{ wireguard_private_iface }}.
+[Interface]
+Address = {{ wireguard.host_overlay_ip }}/24
+ListenPort = {{ wireguard.port }}
+PrivateKey = {{ wireguard_host_privkey }}
+PostUp = sysctl -w net.ipv4.ip_forward=1
+PostUp = iptables -A FORWARD -i %i -j ACCEPT
+PostUp = iptables -A FORWARD -o %i -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o {{ wireguard_private_iface }} -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT
+PostDown = iptables -D FORWARD -o %i -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o {{ wireguard_private_iface }} -j MASQUERADE
+
+[Peer]
+# operator
+PublicKey = {{ wireguard.operator.pubkey }}
+AllowedIPs = {{ wireguard.operator.overlay_ip }}/32

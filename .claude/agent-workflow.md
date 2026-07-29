@@ -32,7 +32,7 @@
 - Never mark a task complete without proving it works
 - Diff behavior between main and your changes when relevant
 - Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
+- Run tests, run commands, check logs, verify in runtime, demonstrate correctness
 
 ### 5. Demand Elegance (Balanced)
 
@@ -44,7 +44,7 @@
 ### 6. Autonomous Bug Fixing
 
 - When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests — then resolve them
+- Point at failing tests, logs, errors, metrics, traces, profiling — then resolve them
 - Zero context switching required from the user
 - Go fix failing CI tests without being told how
 

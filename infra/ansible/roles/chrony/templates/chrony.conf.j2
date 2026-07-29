@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# Tight clock sync (spec 03 §chrony-role). Contract: host clock within 50 ms
+# of UTC; chrony_tracking_last_offset_seconds surfaced for the >200 ms p95 alert.
+{% for pool in chrony_pools %}
+pool {{ pool }} iburst minpoll {{ chrony_minpoll }} maxpoll {{ chrony_maxpoll }}
+{% endfor %}
+rtcsync
+makestep {{ chrony_makestep }}
+logdir {{ chrony_logdir }}

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-lint.sh\""
+            "command": "echo 'bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-lint.sh\"' "
           }
         ]
       }

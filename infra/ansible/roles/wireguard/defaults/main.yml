@@ -1,0 +1,8 @@
+---
+# Role (hot/core/obs) derived from the host's role_* group, used to pick this
+# host's privkey out of the SOPS vault.
+wireguard_host_role: "{{ group_names | select('match', '^role_') | list | first | regex_replace('^role_', '') }}"
+
+# IPv4 prefix of the private subnet (e.g. '10.0.1.') — used to find the NIC
+# the WG gateway NATs out of, without pulling in ansible.utils.
+wireguard_private_prefix: "{{ private_subnet_cidr.split('/')[0].split('.')[0:3] | join('.') }}."

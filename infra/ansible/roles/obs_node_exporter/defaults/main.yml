@@ -1,0 +1,14 @@
+---
+# obs_node_exporter — containerized node-exporter for the obs box's OWN host
+# metrics (task 14). The obs box runs no host Alloy and no apt node_exporter
+# (unlike hot/core), so its host metrics + the prometheus_tsdb_head_series
+# series the cardinality_high alert reads would otherwise be uncollected. A
+# compose fragment on the shared obs network keeps obs self-contained and
+# reachable by Prometheus via the service name node-exporter:9100 (no host port,
+# no host-gateway hack). Overridden by group_vars/role_obs.yml.
+obs_node_exporter_image: quay.io/prometheus/node-exporter:v1.8.2
+obs_node_exporter_mem_limit: 128m
+
+# Host dir the textfile collector reads (the nightly drift metric lands here;
+# see drift_detection role). Host-rooted — node-exporter sees it under /host.
+obs_node_exporter_textfile_dir: /var/lib/node_exporter/textfile

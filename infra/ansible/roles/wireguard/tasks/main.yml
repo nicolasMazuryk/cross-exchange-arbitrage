@@ -1,0 +1,76 @@
+---
+# WireGuard gateway — UDP 51820 endpoint on every host, NAT-forwarding a dialed
+# operator onto the private net. Privkey from SOPS, operator pubkey from
+# inventory. Tag: wireguard.
+
+- name: Install wireguard
+  ansible.builtin.apt:
+    name: wireguard
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: wireguard_apt
+  until: wireguard_apt is succeeded
+  retries: 6
+  delay: 20
+
+- name: Persist net.ipv4.ip_forward (gateway forwarding)
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_file: /etc/sysctl.d/70-wireguard-forward.conf
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Wait for the private NIC to carry a private-subnet address (re-gather facts)
+  ansible.builtin.setup:
+    gather_subset: [network]
+  register: wireguard_netgather
+  until: >-
+    ansible_facts.interfaces
+    | map('extract', ansible_facts)
+    | selectattr('ipv4', 'defined')
+    | map(attribute='ipv4.address')
+    | select('match', '^' ~ (wireguard_private_prefix | regex_escape))
+    | list | length > 0
+  retries: 6
+  delay: 20
+
+- name: Resolve the private NIC (the iface carrying the private subnet IP)
+  ansible.builtin.set_fact:
+    wireguard_private_iface: "{{ item }}"
+  loop: "{{ ansible_facts.interfaces }}"
+  when:
+    - ansible_facts[item].ipv4 is defined
+    - ansible_facts[item].ipv4.address is defined
+    - ansible_facts[item].ipv4.address.startswith(wireguard_private_prefix)
+
+- name: Fail if the private NIC could not be resolved
+  ansible.builtin.fail:
+    msg: "No interface carrying {{ wireguard_private_prefix }}x found — private NIC never came up (check hc-private-nic-up@enp7s0.service)."
+  when: wireguard_private_iface is not defined
+
+- name: Look up this host's WG private key from SOPS
+  ansible.builtin.set_fact:
+    wireguard_host_privkey: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).wireguard_private_keys[wireguard_host_role] }}
+  no_log: true
+
+- name: Deploy wg0.conf
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: /etc/wireguard/wg0.conf
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart wg-quick
+
+- name: Enable and start wg-quick@wg0
+  ansible.builtin.service:
+    name: wg-quick@wg0
+    enabled: true
+    state: started

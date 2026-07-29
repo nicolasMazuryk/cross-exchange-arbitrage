@@ -1,0 +1,23 @@
+---
+# Orchestrator — applies layers in order: baseline -> wireguard -> (role
+# layers appended by tasks 07-10). Select layers with --tags baseline,wireguard.
+- name: Configure the prod fleet (all hosts)
+  hosts: env_prod
+  become: true
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: wireguard
+      tags: [wireguard]
+
+# Role layers (tasks 07-10). obs box: observability backend stack (task 07).
+- name: Apply the obs-box backend stack layer
+  import_playbook: obs.yml
+
+# core box: data middleware config-on-host (task 08).
+- name: Apply the core-box data-middleware layer
+  import_playbook: core.yml
+
+# hot box: lean obs prerequisites — chrony + lean Alloy + node_exporter (task 10).
+- name: Apply the hot-box lean layer
+  import_playbook: hot.yml

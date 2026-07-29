@@ -1,0 +1,53 @@
+---
+# glitchtip role — secret env file + data dirs + 4-service compose fragment.
+# Tag: glitchtip.
+
+- name: Look up the glitchtip secrets from SOPS
+  ansible.builtin.set_fact:
+    glitchtip_secret_key: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).glitchtip_secret_key }}
+    glitchtip_postgres_password: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).glitchtip_postgres_password }}
+  no_log: true
+
+- name: Create the glitchtip config directory
+  ansible.builtin.file:
+    path: "{{ obs_stack_dir }}/config/glitchtip"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the glitchtip env file (secrets — 0600)
+  ansible.builtin.template:
+    src: glitchtip.env.j2
+    dest: "{{ obs_stack_dir }}/config/glitchtip/glitchtip.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Create the glitchtip data directories
+  ansible.builtin.file:
+    path: "{{ obs_data_root }}/glitchtip/{{ item.name }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    # owner/group/mode mirror what each container entrypoint sets (idempotent).
+    - { name: postgres, owner: "{{ glitchtip_postgres_uid }}", group: root, mode: "0700" }
+    - { name: redis, owner: "{{ glitchtip_redis_uid }}", group: root, mode: "0750" }
+    - { name: uploads, owner: "{{ glitchtip_uploads_uid }}", group: "{{ glitchtip_uploads_uid }}", mode: "0750" }
+
+- name: Template the glitchtip compose fragment
+  ansible.builtin.template:
+    src: glitchtip.yaml.j2
+    dest: "{{ obs_stack_dir }}/services/glitchtip.yaml"
+    owner: root
+    group: root
+    mode: "0644"

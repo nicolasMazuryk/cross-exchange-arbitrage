@@ -1,0 +1,58 @@
+---
+# clickhouse role — config-on-host only (gap G6). Lays config.d/ + users.d/
+# fragments + the data dir on the mounted Volume; Kamal (task 13) runs the
+# pinned clickhouse/clickhouse-server image mounting this config. No schema DDL,
+# no MVs, no container here. Tag: clickhouse.
+
+- name: Create the clickhouse config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ clickhouse_config_dir }}/config.d"
+    - "{{ clickhouse_config_dir }}/users.d"
+
+- name: Create the clickhouse data dir on the Volume (container UID)
+  ansible.builtin.file:
+    path: "{{ clickhouse_data_dir }}"
+    state: directory
+    owner: "{{ clickhouse_uid }}"
+    group: "{{ clickhouse_uid }}"
+    mode: "0750"
+
+- name: Look up the clickhouse arbinet user/password from SOPS
+  ansible.builtin.set_fact:
+    clickhouse_arbinet_user: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).ch_arbinet_user }}
+    clickhouse_arbinet_password: >-
+      {{ (lookup('community.sops.sops',
+                 inventory_dir + '/group_vars/all/vault.sops.yml')
+          | from_yaml).ch_arbinet_password }}
+  no_log: true
+
+- name: Template the clickhouse config fragments
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ clickhouse_config_dir }}/config.d/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - storage.xml
+    - limits.xml
+    - network.xml
+    - prometheus.xml
+
+- name: Template the arbinet user (SOPS password — 0640, root:clickhouse)
+  ansible.builtin.template:
+    src: arbinet.xml.j2
+    dest: "{{ clickhouse_config_dir }}/users.d/arbinet.xml"
+    owner: root
+    group: "{{ clickhouse_uid }}"
+    mode: "0640"
+  no_log: true

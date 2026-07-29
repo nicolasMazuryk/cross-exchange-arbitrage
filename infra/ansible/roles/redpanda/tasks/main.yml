@@ -1,0 +1,53 @@
+---
+# redpanda role — config-on-host only (gap G6). Seeds two files + the data dir on the
+# Volume: redpanda.yaml (node config, force:false — pins production/fsync-ON, see task)
+# and .bootstrap.yaml (cluster properties read once at first cluster init). Listeners +
+# sizing live on the Kamal cmd (config/deploy.yml) — Kamal owns the container and runs the
+# pinned redpandadata/redpanda image (task 13). No topic creation, no partition design, no
+# broker started here. Tag: redpanda.
+
+- name: Create the redpanda config directory
+  ansible.builtin.file:
+    path: /etc/redpanda
+    state: directory
+    # Owned by the container's redpanda UID: `rpk redpanda start` persists rpk's own
+    # redpanda.yaml by writing a temp file in this dir then chown+rename — it runs as
+    # uid 101 and can't do that in a root-owned dir ("unable to chown temp config file").
+    owner: "{{ redpanda_uid }}"
+    group: "{{ redpanda_uid }}"
+    mode: "0755"
+
+- name: Create the redpanda data dir on the Volume (container UID)
+  ansible.builtin.file:
+    path: "{{ redpanda_data_dir }}"
+    state: directory
+    owner: "{{ redpanda_uid }}"
+    group: "{{ redpanda_uid }}"
+    mode: "0750"
+
+- name: Seed redpanda.yaml to pin PRODUCTION mode (fsync ON) — once, rpk owns it after
+  ansible.builtin.template:
+    src: redpanda.yaml.j2
+    dest: /etc/redpanda/redpanda.yaml
+    owner: "{{ redpanda_uid }}"
+    group: "{{ redpanda_uid }}"
+    mode: "0644"
+    # force:false = seed ONLY when absent. A FRESH rpk config defaults to development
+    # mode → rpk launches the broker with --unsafe-bypass-fsync (data loss). There is no
+    # production `start --mode` value, so developer_mode:false MUST be seeded in the node
+    # config before first start; rpk preserves it on every reboot. After the seed rpk owns
+    # the file (rewrites it on start), so force:false avoids a template-vs-rpk tug-of-war.
+    # On first create force:false still applies owner/mode (uid 101); rpk runs as 101 and
+    # keeps it, so no separate re-chown task is needed.
+    force: false
+
+- name: Template the cluster bootstrap seed (.bootstrap.yaml)
+  ansible.builtin.template:
+    src: bootstrap.yaml.j2
+    dest: /etc/redpanda/.bootstrap.yaml
+    owner: "{{ redpanda_uid }}"
+    group: "{{ redpanda_uid }}"
+    mode: "0644"
+    # Idempotent with no force:false trick — redpanda reads .bootstrap.yaml ONLY at the
+    # very first cluster init and never rewrites it, so there's no template-vs-rpk
+    # tug-of-war; Ansible can own this file outright (re-run → changed=0).

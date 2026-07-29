@@ -1,0 +1,65 @@
+---
+# Mount the attached HC Volume at volume_mount_path. Hetzner automount=true
+# lands the device at /mnt/HC_Volume_<id>; we move it to the target path and
+# drop the stray automount fstab entry. Declarative → idempotent (0 changed on
+# re-run). Tag: volume_mount.
+
+- name: Resolve the attached HC Volume device (by-id glob)
+  ansible.builtin.find:
+    paths: /dev/disk/by-id
+    patterns: "scsi-0HC_Volume_*"
+    excludes: "*-part*"
+    file_type: link
+  register: volume_mount_links
+
+- name: Fail if no HC Volume is attached
+  ansible.builtin.assert:
+    that: volume_mount_links.files | length > 0
+    fail_msg: >-
+      No /dev/disk/by-id/scsi-0HC_Volume_* device found — is the Volume attached?
+
+- name: Pick the HC Volume by-id path
+  ansible.builtin.set_fact:
+    volume_mount_device: "{{ volume_mount_links.files | map(attribute='path') | sort | first }}"
+
+- name: Resolve the real block device behind the by-id symlink
+  ansible.builtin.stat:
+    path: "{{ volume_mount_device }}"
+    follow: false
+  register: volume_mount_realdev
+
+- name: Detect any existing mount of this device at the wrong path
+  ansible.builtin.set_fact:
+    volume_mount_stray: >-
+      {{ ansible_facts['mounts']
+         | selectattr('device', 'equalto', volume_mount_realdev.stat.lnk_source)
+         | rejectattr('mount', 'equalto', volume_mount_path)
+         | map(attribute='mount') | list }}
+
+- name: Unmount the Hetzner default automount path(s)
+  ansible.posix.mount:
+    path: "{{ item }}"
+    state: unmounted
+  loop: "{{ volume_mount_stray }}"
+
+- name: Remove the Hetzner default automount fstab entry(s)
+  ansible.posix.mount:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ volume_mount_stray }}"
+
+- name: Ensure the target mountpoint exists
+  ansible.builtin.file:
+    path: "{{ volume_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Mount the HC Volume at the target path
+  ansible.posix.mount:
+    path: "{{ volume_mount_path }}"
+    src: "{{ volume_mount_device }}"
+    fstype: "{{ volume_mount_fstype }}"
+    opts: "{{ volume_mount_opts }}"
+    state: mounted

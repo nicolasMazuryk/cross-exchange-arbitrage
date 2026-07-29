@@ -4,11 +4,11 @@ import { WebSocketConfig, PublicWebSocketMessageParser, StreamBatch } from './ty
 import { MarketType } from '../../types/exchange'
 import { OrderBookUpdate } from '../../core/orderbook/orderbookManager'
 import { Logger } from '../../utils/logger'
-import { TraceContext } from '../../utils/traceContext'
+import { parseLevels } from './parseLevels'
 
 const EXCHANGE_NAME = 'binance'
 const HEARTBEAT_INTERVAL_MS = 10_000
-const PONG_TIMEOUT_MS = 2_000
+const PONG_TIMEOUT_MS = 5_000 // 2_000
 
 const logger = new Logger(`ws-${EXCHANGE_NAME}`)
 
@@ -122,18 +122,9 @@ class BinanceMessageParser implements PublicWebSocketMessageParser {
         symbol: this.getUnifiedSymbol(nativeIdFromStream!, marketType),
         marketType,
         timestamp: Date.now(),
-        asks: data.asks.map(([price, quantity]: [string, string]) => ({
-          price: parseFloat(price),
-          quantity: parseFloat(quantity),
-          amount: parseFloat(price) * parseFloat(quantity),
-        })),
-        bids: data.bids.map(([price, quantity]: [string, string]) => ({
-          price: parseFloat(price),
-          quantity: parseFloat(quantity),
-          amount: parseFloat(price) * parseFloat(quantity),
-        })),
+        asks: parseLevels(data.asks),
+        bids: parseLevels(data.bids),
         finalUpdateId: data.lastUpdateId,
-        traceId: '',
       }
     }
 
@@ -142,21 +133,12 @@ class BinanceMessageParser implements PublicWebSocketMessageParser {
       exchange: EXCHANGE_NAME,
       symbol: this.getUnifiedSymbol(data.s, marketType),
       marketType,
-      timestamp: data.E,
-      asks: data.a.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
-      bids: data.b.map(([price, quantity]: [string, string]) => ({
-        price: parseFloat(price),
-        quantity: parseFloat(quantity),
-        amount: parseFloat(price) * parseFloat(quantity),
-      })),
+      timestamp: data.T ?? data.E,
+      asks: parseLevels(data.a),
+      bids: parseLevels(data.b),
       firstUpdateId: data.U,
       finalUpdateId: data.u,
       prevFinalUpdateId: data.pu,
-      traceId: '',
     }
   }
 }
@@ -179,13 +161,13 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
     let errorHandled = false
 
     batch.client.on('open', () => {
-      logger.info({
-        msg: 'WebSocket connection opened',
-        function: 'BinancePublicWebSocketClient.setupEventHandlers.open',
-        exchange: this.exchangeName,
-        batchId: batch.id,
-        symbolCount: batch.symbols.length,
-      })
+      // logger.info({
+      //   msg: 'WebSocket connection opened',
+      //   function: 'BinancePublicWebSocketClient.setupEventHandlers.open',
+      //   exchange: this.exchangeName,
+      //   batchId: batch.id,
+      //   symbolCount: batch.symbols.length,
+      // })
       batch.isConnected = true
     })
 
@@ -219,32 +201,22 @@ export class BinancePublicWebSocketClient extends BasePublicWebSocketClient {
     })
 
     batch.client.on('message', (data: any) => {
-      TraceContext.runWithTrace(`ws-orderbook-update-${this.exchangeName}`, async traceId => {
-        try {
-          if (this.messageParser.isOrderBookMessage(data, batch.marketType)) {
-            const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
-            update.traceId = traceId
-            this.emit('orderbookUpdate', update)
-          }
-        } catch (error) {
-          logger.error({
-            msg: 'Error parsing WebSocket message',
-            function: 'BinancePublicWebSocketClient.setupEventHandlers.message',
-            exchange: this.exchangeName,
-            batchId: batch.id,
-            messageType: data?.e,
-            symbol: data?.s,
-            error,
-          })
+      try {
+        if (this.messageParser.isOrderBookMessage(data, batch.marketType)) {
+          const update = this.messageParser.parseOrderBookUpdate(data, batch.marketType)
+          this.emit('orderbookUpdate', update)
         }
-      }).catch(error => {
+      } catch (error) {
         logger.error({
-          msg: 'Error in trace context for WebSocket message',
+          msg: 'Error parsing WebSocket message',
           function: 'BinancePublicWebSocketClient.setupEventHandlers.message',
           exchange: this.exchangeName,
+          batchId: batch.id,
+          messageType: data?.e,
+          symbol: data?.s,
           error,
         })
-      })
+      }
     })
   }
 

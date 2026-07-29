@@ -1,0 +1,12 @@
+---
+# spread_computer — config-on-host only (no app logic, no container). Lays the
+# env file the Kamal-run spread-computer container mounts (task 13). Source of
+# truth for ports/brokers is group_vars/role_core.yml; these are fallbacks.
+spread_computer_config_dir: /etc/arbinet/spread-computer
+spread_computer_env_file: /etc/arbinet/spread-computer/spread-computer.env
+# /metrics bind — loopback only; Alloy scrapes it locally. Mirrored in group_vars.
+spread_computer_metrics_port: 9105
+# Redpanda brokers on the private net (core box) and CH over loopback (spec
+# §secrets-management — app reaches CH on 127.0.0.1, never the private IP).
+spread_computer_redpanda_brokers: 10.0.1.20:9092
+spread_computer_ch_url: http://127.0.0.1:8123

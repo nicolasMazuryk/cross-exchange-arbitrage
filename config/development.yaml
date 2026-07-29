@@ -16,7 +16,7 @@ exchanges:
     - "bitget"
     - "gateio"
   binance:
-    maxStreamsPerConnection: 200 # Binance combined stream URL limit (~8KB) constrains to ~200 symbols per connection
+    maxStreamsPerConnection: 100 # Binance combined stream URL limit (~8KB) constrains to ~200 symbols per connection
     reconnectInterval: 5000
     fees:
       spot:
@@ -28,9 +28,9 @@ exchanges:
       inverse:
         maker: 0.02
         taker: 0.05
-    ignoredMarkets: []
-    enabledMarketTypes: ["linear", "inverse", "spot"]
-    enabledQuoteCurrencies: []
+    ignoredMarkets: ["BTC/USDT", "BTC/USDT:USDT", "ETH/USDT", "ETH/USDT:USDT", "BNB/USDT", "BNB/USDT:USDT", "XRP/USDT", "XRP/USDT:USDT", "SOL/USDT", "SOL/USDT:USDT", "TRX/USDT", "TRX/USDT:USDT", "HYPE/USDT", "HYPE/USDT:USDT", "DOGE/USDT", "DOGE/USDT:USDT", "LEO/USDT", "LEO/USDT:USDT", "XLM/USDT", "XLM/USDT:USDT", "ADA/USDT", "ADA/USDT:USDT", "XMR/USDT", "XMR/USDT:USDT"]
+    enabledMarketTypes: ["linear", "spot"]
+    enabledQuoteCurrencies: ['USDT']
     disabledQuoteCurrencies: ["BRL"]
   bybit:
     maxStreamsPerConnection: 50 # max 60 streams per connection
@@ -45,12 +45,9 @@ exchanges:
       inverse:
         maker: 0.036
         taker: 0.10
-    ignoredMarkets:
-      - "ETHBTC/USDT:USDT"
-      - "USDC/USDT:USDT"
-      - "SLF/USDT:USDT"
-    enabledMarketTypes: ["linear", "inverse", "spot"]
-    enabledQuoteCurrencies: []
+    ignoredMarkets: ["ETHBTC/USDT:USDT", "USDC/USDT:USDT", "SLF/USDT:USDT", "BTC/USDT", "BTC/USDT:USDT", "ETH/USDT", "ETH/USDT:USDT", "BNB/USDT", "BNB/USDT:USDT", "XRP/USDT", "XRP/USDT:USDT", "SOL/USDT", "SOL/USDT:USDT", "TRX/USDT", "TRX/USDT:USDT", "HYPE/USDT", "HYPE/USDT:USDT", "DOGE/USDT", "DOGE/USDT:USDT", "LEO/USDT", "LEO/USDT:USDT", "XLM/USDT", "XLM/USDT:USDT", "ADA/USDT", "ADA/USDT:USDT", "XMR/USDT", "XMR/USDT:USDT"]
+    enabledMarketTypes: ["linear", "spot"]
+    enabledQuoteCurrencies: ['USDT']
     disabledQuoteCurrencies: ["BRL"]
     ignoredFundingSymbols:
       - "USDC/USDT:USDT"
@@ -69,9 +66,9 @@ exchanges:
       inverse:
         maker: 0.02
         taker: 0.05
-    ignoredMarkets: []
-    enabledMarketTypes: ["linear", "inverse", "spot"]
-    enabledQuoteCurrencies: []
+    ignoredMarkets: ["BTC/USDT", "BTC/USDT:USDT", "ETH/USDT", "ETH/USDT:USDT", "BNB/USDT", "BNB/USDT:USDT", "XRP/USDT", "XRP/USDT:USDT", "SOL/USDT", "SOL/USDT:USDT", "TRX/USDT", "TRX/USDT:USDT", "HYPE/USDT", "HYPE/USDT:USDT", "DOGE/USDT", "DOGE/USDT:USDT", "LEO/USDT", "LEO/USDT:USDT", "XLM/USDT", "XLM/USDT:USDT", "ADA/USDT", "ADA/USDT:USDT", "XMR/USDT", "XMR/USDT:USDT"]
+    enabledMarketTypes: ["linear", "spot"]
+    enabledQuoteCurrencies: ['USDT']
     disabledQuoteCurrencies: ["BRL"]
   bitget:
     maxStreamsPerConnection: 500 # max connections per IP - 100; max subscriptions per connection - 1000; max subscription messages per hour - 240 per connection; max messages per second per connection - 10 (includes PING, subs)
@@ -86,10 +83,10 @@ exchanges:
       inverse:
         maker: 0.036
         taker: 0.10
-    ignoredMarkets:
-      - "DegenReborn/USDT:USDT"
-    enabledMarketTypes: ["linear", "inverse", "spot"]
-    enabledQuoteCurrencies: []
+    ignoredMarkets: ["BTC/USDT", "BTC/USDT:USDT", "ETH/USDT", "ETH/USDT:USDT", "BNB/USDT", "BNB/USDT:USDT", "XRP/USDT", "XRP/USDT:USDT", "SOL/USDT", "SOL/USDT:USDT", "TRX/USDT", "TRX/USDT:USDT", "HYPE/USDT", "HYPE/USDT:USDT", "DOGE/USDT", "DOGE/USDT:USDT", "LEO/USDT", "LEO/USDT:USDT", "XLM/USDT", "XLM/USDT:USDT", "ADA/USDT", "ADA/USDT:USDT", "XMR/USDT", "XMR/USDT:USDT"]
+      # - "DegenReborn/USDT:USDT"
+    enabledMarketTypes: ["linear", "spot"]
+    enabledQuoteCurrencies: ['USDT']
     disabledQuoteCurrencies: ["BRL"]
   gateio:
     maxStreamsPerConnection: 100
@@ -104,7 +101,7 @@ exchanges:
       inverse:
         maker: 0.02
         taker: 0.05
-    ignoredMarkets: []
+    ignoredMarkets: ["BTC/USDT", "BTC/USDT:USDT", "ETH/USDT", "ETH/USDT:USDT", "BNB/USDT", "BNB/USDT:USDT", "XRP/USDT", "XRP/USDT:USDT", "SOL/USDT", "SOL/USDT:USDT", "TRX/USDT", "TRX/USDT:USDT", "HYPE/USDT", "HYPE/USDT:USDT", "DOGE/USDT", "DOGE/USDT:USDT", "LEO/USDT", "LEO/USDT:USDT", "XLM/USDT", "XLM/USDT:USDT", "ADA/USDT", "ADA/USDT:USDT", "XMR/USDT", "XMR/USDT:USDT"]
 
 trackedPairs:
   - BTCUSDT
@@ -113,9 +110,14 @@ trackedPairs:
   - ADAUSDT
   - DOGEUSDT
 
+# Minimum arbitrage peers a market must have to be subscribed (perf: fewer WS streams).
+# A peer = a leg sharing the same normalized base/quote that is NOT (same exchange AND same type).
+# 0 = disabled (subscribe all). 1 = drop unpairable singletons. 2+ = require N counterparts.
+minMarketPeers: 1
+
 trading:
-  orderAmountUsd: 20  # in USDT, default order size for arbitrage opportunities
-  maxPositionAmountUsd: 30  # maximum position amount in USD
+  orderAmountUsd: 100  # in USDT, default order size for arbitrage opportunities
+  maxPositionAmountUsd: 120  # maximum position amount in USD
   minBalanceBufferPercent: 10  # minimum balance buffer in percent
   orderConfirmationTimeoutMs: 10000  # 10 seconds timeout for order confirmation
   leverage: 4  # leverage multiplier for trading (1 = no leverage)
@@ -128,7 +130,7 @@ trading:
     exitCandidateCleanupMs: 5000  # cleanup stale exit candidates after 10 seconds
 
 arbitrage: # pairs require > $20 to enter minimum order size
-  blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT', 'AAVE/USDT:USDT', 'H/USDT:USDT']  # pairs to exclude from arbitrage
+  blacklistPairs: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SUI/USDT:USDT', 'XAUT/USDT:USDT', 'AAVE/USDT:USDT']  # pairs to exclude from arbitrage
   minConfidenceScore: 0.7  # minimum confidence score for opportunities (0-1 range)
   maxMarketSpreadPercent: 0.3  # maximum market spread width within an exchange in percent
   maxAnomalySpreadThresholdPercent: 1000000000000000.0  # maximum anomaly profit threshold in percent
@@ -144,6 +146,22 @@ arbitrage: # pairs require > $20 to enter minimum order size
 accountSync:
   maxStateAgeMs: 30000  # maximum age of account state data in milliseconds (30 seconds)
   snapshotIntervalMs: 180000  # interval for periodic snapshots in milliseconds (3 minutes)
+
+performanceMonitor:
+  enabled: true      # config-gated; flip off without code change
+  intervalMs: 10000  # flush one structured process-health sample every 10s
+
+ingest:
+  enabled: true  # per-exchange WS ingest workers (worker_threads); false = legacy in-process path (rollback lever)
+  depth: 20      # levels per side shipped worker -> main per book message (feeds simulateSlippage depth walk)
+  # Explicit worker topology (Phase 3). Exchanges without an entry get one worker for
+  # all market types. Listing an exchange splits it — market types NOT listed are NOT
+  # subscribed for that exchange (config load fails on typos/duplicates/overlap).
+  workers:
+    - exchange: bybit
+      marketType: spot
+    - exchange: bybit
+      marketType: linear
 
 funding:
   fetchIntervalMs: 20000  # fetch funding rates every 20 seconds using browser automation
