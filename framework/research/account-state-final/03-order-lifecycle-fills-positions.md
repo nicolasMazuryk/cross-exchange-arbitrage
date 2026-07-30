@@ -218,7 +218,7 @@ Fills are *facts*, not commands; their FSM is small but **exactly-once applicati
 | `OBSERVED → APPLIED` | Dedup check passes | `tradeId ∉ seenTradeIds` | Add to `seenTradeIds`; update order FSM cumFilled/avgPx; update position (size, avgEntry, realizedPnL); accrue fee (in its `feeAsset`); adjust capital reservation by filled notional. **Persist the fill before mutating projections** (→ `06 §3`) |
 | `OBSERVED → (dropped)` | Dedup check fails | `tradeId ∈ seenTradeIds` | **No-op.** This is the exactly-once guarantee: duplicate fills (WS replay, REST overlap, reconnect backfill) are silently discarded |
 | `APPLIED → SUPERSEDED` | Venue restates a trade (price/fee correction) | correction references same `tradeId` | Append `FillCorrected{delta}`; apply *delta only* to position/fees |
-| `APPLIED → REVERSED` | Venue busts trade | authoritative bust notice | Append `FillReversed`; apply inverse to position/fees; re-open order leftover if applicable |
+| `APPLIED → REVERSED` | Venue busts trade | authoritative bust notice | Append `FillReversed`; re-open order leftover if applicable |
 
 > **Why a `seenTradeIds` set and not "just trust order cumFilled":** the same fill can arrive (a) on the WS user-data stream, (b) again after a WS reconnect backfill, (c) again in a REST `myTrades` reconciliation pull. Each path is independent and lossy. The only safe dedup key is the venue's immutable `tradeId`. Persist the set (or a Bloom filter + exact backing store) so it survives restart — rebuilt-verifiable from the event log within a TTL window.
 

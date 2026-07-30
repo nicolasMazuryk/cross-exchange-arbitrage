@@ -31,8 +31,3 @@
 - **Latency-budget decomposition** — wire → parse → normalize → signal → risk → sign → send, with a number on each.
 - **Allocation reduction & GC tuning** — object pooling; avoid `JSON.parse` on the hot path (binary/streaming parsers); zero-copy buffers.
 
-
-## O. Failure Modes & Resilience
-
-- A real **failure taxonomy** — network; exchange-side (rejects, halts, maintenance); internal (bug, OOM); data (desync, bad book).
-- **Degraded-mode operation** — one venue down → keep trading the rest, don't halt everything; graceful drain/shutdown; poison-message handling.

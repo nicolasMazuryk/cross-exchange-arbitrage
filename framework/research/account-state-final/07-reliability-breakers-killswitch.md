@@ -73,7 +73,7 @@ The single consolidated catalog. Columns: how it's **detected**, the **immediate
 |---|---|---|---|---|
 | Missed fill (often undetectable live on no-seq venues) | reconcile: venue cumFilled > local; balance delta w/o fill; position mismatch | gate scope sizing | `fetchUserTrades` backfill (idempotent) | I4, I5; `05 §2` |
 | Double-applied fill | `seenTradeIds` | structurally prevented (no-op) | — | I5; `03 §7` |
-| Fill correction / trade bust | venue restatement / bust notice | apply delta / inverse as `FillCorrected`/`FillReversed` | recompute position/fees from ledger | `03 §7.2` |
+| Fill correction / trade bust | venue restatement / bust notice | apply delta  as `FillCorrected`/`FillReversed` | recompute position/fees from ledger | `03 §7.2` |
 | Orphan fill (fill before ack/bind) | coid unbound | buffer by coid; provisional order | apply on bind; reconcile confirms | `03 §7.2` |
 | Phantom balance motion (no explaining event) | I1 check; reconcile diff | freeze scope | explain via trades/funding/fees history; else `BalanceCorrected` + page | I1; `05 §6` |
 | Position size/sign mismatch | joint reconcile (exact size) | `DIVERGED`: halt symbol | hunt missing fill/funding/liq; venue wins via correction | I7, I8 |

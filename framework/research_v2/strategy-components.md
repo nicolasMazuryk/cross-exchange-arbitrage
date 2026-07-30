@@ -86,21 +86,39 @@
 ## Persistance & Restart recovery
 ## Crash recovery & persistence
 ## Cold Start
+- **Durable order journal / WAL** — append-only log of every intent and event, so a crash mid-trade is recoverable and auditable.
+- **Crash recovery** — deterministic state reconstruction, idempotent replay, no double-sends after restart.
+9.  Crash recovery & persistence. Write-ahead log, durable local state, cold
+    start, and rebuilding correct state after an unclean restart.
 - Save application state & recover from shutting down
 - statistics model recovery
 
 ## Visualisation UI 
 - website
 - spread history
+- estimated profit/opportunities history
 
 ## Configuration
 - hot config reload
 
 ## API Rate Limits
 
+
+## M. Architecture & Topology
+
+- Architecture, process topology & system decomposition.
+
+- **Process decomposition** — per-venue gateway processes vs in-process adapters; separate OMS / risk / strategy vs co-located. On a **single host / single region**, lean toward a **small number of processes** (gateways isolated from the strategy/OMS core) over **Unix domain sockets or shared memory**, not microservice sprawl. The failure isolation of separate gateway processes is worth it; network-style decomposition on one box is just latency tax.
+- **Hot path vs cold path separation** — order entry / market data vs reference data / accounting / reporting.
+
 ## Testing & Verification Framework and Architecture
 - integration, end-to-end, etc
 - Testing: Exchange mock-simulation, chaos testing.
+
+
+
+
+
 
 
 
@@ -114,15 +132,41 @@
 - Trade-level attribution: Every trade's PnL decomposed into spread capture, funding, fees, slippage — so degradation is diagnosable, not just visible.
 - Real-time dashboards: spreads, positions, funding accruals, margin ratios, transfer statuses
 
-## Performance Evaluation & Success Criteria
-- Metrics: Net Sharpe/Sortino, return on allocated capital (including idle buffers), max drawdown, average edge captured per trade in bps
-- Net bps per trade, PnL per unit of leg risk
-- Sharpe/Sortino, max drawdown, drawdown duration
-- Return on deployed capital vs return on total capital 
-
-## Strategy Lifecycle & Decay
-- Recalibration policy: What gets re-fit, how often, and what counts as a "new strategy" requiring full re-validation vs. a parameter refresh.
-- Post-mortem culture: Every loss limit hit and every operational incident produces a written analysis and a spec change.
 
 
 
+ account-state-final
+ - 1500
+ - 9700
+ - 11200
+ - 8300
+ - 3700
+ - 3900
+ - 1800
+ - 5900
+ - 2700
+ === 49000
+
+ orderbook-ws-connectivity
+ - 3000
+ - 5000
+ - 600
+ - 6500
+ - 700
+ - 3700
+ - 3700
+ - 4700
+ - 2500
+ === 30400
+
+arbitrage-signal
+- 5500
+- 10600
+- 18800
+- 16000
+- 4100
+- 10800
+- 14900
+- 2400
+- 1400
+=== 84500

@@ -20,7 +20,7 @@
 
 6. **Fail loud, fail safe.** On any unresolvable divergence: stop opening, flatten if mandated, page a human. A frozen-but-honest system beats a fast-but-lying one.
 
-7. **One canonical model, venue adapters at the edge.** Internally everything is normalized (venue-agnostic states, signed quantities, unified asset ids). Each venue's quirks (listenKey expiry, sequence semantics, amend atomicity, inverse-contract math) live in an **adapter**, never in core logic.
+7. **One canonical model, venue adapters at the edge.** Internally everything is normalized (venue-agnostic states, signed quantities, unified asset ids). Each venue's quirks (listenKey expiry, sequence semantics, amend atomicity) live in an **adapter**, never in core logic.
 
 ---
 
@@ -81,7 +81,7 @@ Normalize everything at the adapter boundary. Internal types are venue-agnostic.
 
 | Entity | Primary key | Notes |
 |---|---|---|
-| Account | `(venueId, subAccountId, marketType)` | `marketType ∈ {spot, linear, inverse, unified}` |
+| Account | `(venueId, subAccountId, marketType)` | `marketType ∈ {spot, linear, unified}` |
 | Order | `(accountKey, clientOrderId)` | `clientOrderId` is **ours**, deterministic, never reused |
 | Venue order ref | `venueOrderId` | venue-assigned; may arrive late; map to `clientOrderId` |
 | Fill/Trade | `(venueId, tradeId)` | venue-assigned; **the dedup key** |
@@ -96,7 +96,6 @@ Use a fixed-point/decimal representation end-to-end (string-backed bigint scaled
 ### 2.3 Signed, unified position math
 
 - Linear/spot: quantity in base asset.
-- **Inverse**: contracts are quoted in USD notional, PnL and margin are in the *base* coin. The adapter must convert to the canonical signed-exposure + margin-currency model so the strategy never special-cases it.
 - **Unified margin**: balances are shared collateral across instruments; "available" is a *portfolio margin* computation, not a per-asset subtraction. Treat the venue's reported available-margin/equity as authoritative and *never* try to recompute portfolio margin yourself for gating — recompute only as a *sanity bound*.
 
 ### 2.4 The aggregates
@@ -241,7 +240,7 @@ Fills are *facts*, not commands, so their FSM is small but its **exactly-once** 
 | `OBSERVED → APPLIED` | Dedup check passes | `tradeId ∉ seenTradeIds` | Add to `seenTradeIds`; update order FSM cumFilled/avgPx; update position (size, avgEntry, realizedPnL); accrue fee; adjust capital reservation by filled notional |
 | `OBSERVED → (dropped)` | Dedup check fails | `tradeId ∈ seenTradeIds` | **No-op.** This is the exactly-once guarantee: duplicate fills (WS replay, REST overlap, reconnect backfill) are silently discarded |
 | `APPLIED → SUPERSEDED` | Venue restates a trade (price/fee correction) | correction references same `tradeId` | Append `FillCorrected{delta}`; apply *delta only* to position/fees |
-| `APPLIED → REVERSED` | Venue busts trade | authoritative bust notice | Append `FillReversed`; apply inverse to position/fees; re-open order leftover if applicable |
+| `APPLIED → REVERSED` | Venue busts trade | authoritative bust notice | Append `FillReversed`; re-open order leftover if applicable |
 
 > **Why a `seenTradeIds` set and not "just trust order cumFilled":** the same fill can arrive (a) on the WS user-data stream, (b) again after a WS reconnect backfill, (c) again in a REST `myTrades` reconciliation pull. Each path is independent and lossy. The only safe dedup key is the venue's immutable `tradeId`. Persist this set (or a Bloom filter + exact backing store) so it survives restart.
 

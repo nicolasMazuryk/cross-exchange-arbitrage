@@ -1,6 +1,3 @@
-
-Instrument model & symbol normalization. A unified internal instrument abstraction over: spot, linear perp, inverse perp. Inverse perps are the trap — contract value is denominated in USD and PnL is in the base coin, so your position math, exposure, and hedging are inverted. Unified-margin accounts add cross-collateral and shared margin that breaks per-symbol balance assumptions.
-
 ## Instrument-lifecycle failures
 
 Mid-session halt / suspension / delisting. This is the subtle one: a halted symbol looks identical to staleness (no ticks) but the correct response is the opposite. Staleness → resync. Halt → there's nothing to sync to; invalidate the book and remove from the arb set. If your staleness watchdog resyncs a halted symbol it'll loop forever fetching a snapshot that never resumes. Detection: venue status feed / instrument-info refresh, not the freshness watchdog. Response: HALTED state distinct from STALE.
@@ -26,8 +23,6 @@ Instrument master — tick size, lot size, min notional, contract multiplier, se
 Cross-venue symbol mapping — BTC/USDT ≠ BTCUSDT ≠ XBTUSDT; perps carry venue-specific naming.
 
 Reference-data refresh — detect new listings, delistings, tick/lot changes, contract migrations without a redeploy.
-
-
 
 
 symbol normalization

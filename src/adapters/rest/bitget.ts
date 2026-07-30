@@ -18,7 +18,8 @@ export const BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE: Record<string, string> = {
 
 export class BitgetExchange extends BaseExchange {
   constructor(config: ExchangeConfig) {
-    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, config)
+    // Account is unified-trading-account (UTA) only; Classic-account endpoints return error 40085.
+    super(EXCHANGE_NAME, CCXT_EXCHANGE_NAME, { ...config, options: { uta: true, ...config.options } })
   }
 
   paramsForMarket(marketType: MarketType, ctx?: { symbol?: string; quote?: string }): Record<string, any> {

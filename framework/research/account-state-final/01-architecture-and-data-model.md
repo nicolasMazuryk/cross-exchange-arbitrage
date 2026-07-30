@@ -103,7 +103,7 @@ flowchart TB
 - **Correctness:** account state is a *per-venue consistency domain*. A balance, an order, and a fill on Binance only ever interact with each other; there is no cross-venue transaction needing a single lock, so there is no reason to centralize state and pay coordination cost. Each venue worker is a self-contained, single-writer consistency boundary — the simplest possible model to reason about. (The one cross-venue authority is the capital allocator, → `04 §3`.)
 - **Isolation:** a flaky WS, a CPU spike from a fill burst, a GC pause, or a crash is contained to that venue's thread; the other 14 keep trading. Failure blast radius = one venue.
 - **Hot-path performance:** the latency-critical sequence is *event-in → reduce → register-write*. Co-locating the WS parser, the reducer, and the account model in one thread means no IPC hop and no structured-clone serialization — the event lands on the socket and mutates an in-thread object directly.
-- **Scale/maintain/extend:** adding venue #16 is "spawn one more identical worker." Each venue's quirks (Binance `listenKey` keepalive, Bybit unified account, OKX account modes, inverse-contract math) live behind one normalization adapter inside one worker, not smeared across a shared engine.
+- **Scale/maintain/extend:** adding venue #16 is "spawn one more identical worker." Each venue's quirks (Binance `listenKey` keepalive, Bybit unified account, OKX account modes) live behind one normalization adapter inside one worker, not smeared across a shared engine.
 
 ### 2.3 Thread roles
 
@@ -298,7 +298,7 @@ Normalize everything at the adapter boundary; internal types are venue-agnostic 
 
 | Entity | Primary key | Notes |
 |---|---|---|
-| Account | `(venueId, subAccountId, marketType)` | `marketType ∈ {spot, linear, inverse, unified}` |
+| Account | `(venueId, subAccountId, marketType)` | `marketType ∈ {spot, linear, unified}` |
 | Order | `(accountKey, clientOrderId)` | `clientOrderId` is **ours**, deterministic, never reused (→ `03 §1`) |
 | Venue order ref | `venueOrderId` | venue-assigned; may arrive late; map to `clientOrderId` |
 | Fill/Trade | `(venueId, tradeId)` | venue-assigned; **the dedup key** |
@@ -419,7 +419,7 @@ interface VenueAdapter {
 
 **`VenueCapabilities` is load-bearing:** it declares, per venue, whether streams carry sequence numbers, whether native amend exists (vs. cancel/replace), whether balances are pushed or poll-only, how subaccounts are addressed, and the funding schedule. The reconciler and order manager read capabilities to decide behavior rather than hard-coding venue names — roll out venues behind capability flags; the core never learns their names.
 
-**Validate every inbound payload at this boundary with `zod`** (parse, don't validate) before it becomes a canonical event. A malformed/partial frame is rejected loudly, never coerced — bad shapes never corrupt core state. Per-market-type contract math (inverse, unified) lives in the adapter, covered by golden tests against known REST snapshots.
+**Validate every inbound payload at this boundary with `zod`** (parse, don't validate) before it becomes a canonical event. A malformed/partial frame is rejected loudly, never coerced — bad shapes never corrupt core state. Per-market-type contract math (unified) lives in the adapter, covered by golden tests against known REST snapshots.
 
 ---
 
@@ -439,21 +439,20 @@ JS `number` is IEEE-754 double; `0.1 + 0.2 !== 0.3`. Accumulating fills/funding 
 ## 10. Market-type normalization (signed, unified position math)
 
 - **Linear/spot:** quantity in base asset.
-- **Inverse perps:** contracts are quoted in USD notional; PnL and margin are in the *base* coin. The adapter converts to the canonical signed-exposure + margin-currency model so the strategy never special-cases it.
 - **Unified margin:** balances are shared collateral across instruments; "available" is a *portfolio-margin* computation, not a per-asset subtraction. Treat the venue's reported available-margin/equity as authoritative; **never** recompute portfolio margin yourself for gating — recompute only as a *sanity bound* (→ `04 §5`).
 - Per-venue **account modes** (e.g., OKX Simple / Single-currency margin / Multi-currency margin / Portfolio margin; Bybit UTA vs classic) drastically change balance and margin semantics; the adapter declares the account's mode and the model follows it (→ `08 §5` venue notes).
 
 Accounting differences at a glance (full position treatment → `03 §8`):
 
-| | **Spot** | **Linear perp (USDT-margined)** | **Inverse perp (coin-margined)** |
+| | **Spot** | **Linear perp (USDT-margined)** | 
 |---|---|---|---|
-| "Position" is | just the asset balance | separate position object | separate position object |
-| Margin | n/a (or borrowed in margin spot) | posted from quote wallet | posted from coin wallet |
-| Size unit | base asset | base/contracts | USD-notional contracts |
-| PnL/funding asset | implicit in balances | quote (USDT) | base coin |
-| Liquidation | none (unless margin/loan) | yes | yes (different formula) |
-| Cost basis | optional (arb cares about realized spread) | required (avg entry) | required |
-| Available depends on uPnL? | no | yes (esp. cross margin) | yes |
+| "Position" is | just the asset balance | separate position object |
+| Margin | n/a (or borrowed in margin spot) | posted from quote wallet |
+| Size unit | base asset | base/contracts |
+| PnL/funding asset | implicit in balances | quote (USDT) |
+| Liquidation | none (unless margin/loan) | yes |
+| Cost basis | optional (arb cares about realized spread) | required (avg entry) |
+| Available depends on uPnL? | no | yes (esp. cross margin) |
 
 ---
 

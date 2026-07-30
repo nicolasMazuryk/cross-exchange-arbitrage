@@ -187,7 +187,7 @@ Rules to survive it:
 
 ### 6.1 Model the venue's view faithfully
 
-Per `(subaccount, asset, marketType)` track at minimum: `total`, `available`, `locked` (venue-reserved against resting orders), and per-market-type segregation (spot wallet vs. linear/USDⓈ-M vs. inverse/coin-M vs. unified margin, depending on venue account mode). Unified/portfolio-margin accounts collapse some of these — the adapter declares the account mode and the model follows it. Never sum across market types that the venue keeps separate, or you'll conjure "available" capital that can't actually be deployed on the leg you intend.
+Per `(subaccount, asset, marketType)` track at minimum: `total`, `available`, `locked` (venue-reserved against resting orders), and per-market-type segregation (spot wallet vs. linear/USDⓈ-M vs. unified margin, depending on venue account mode). Unified/portfolio-margin accounts collapse some of these — the adapter declares the account mode and the model follows it. Never sum across market types that the venue keeps separate, or you'll conjure "available" capital that can't actually be deployed on the leg you intend.
 
 ### 6.2 The reservation overlay (this is the double-spend fix)
 

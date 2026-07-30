@@ -1,6 +1,6 @@
 # Reliable, Lowest-Latency WebSocket Order Execution for CEX Arbitrage
 
-**Scope:** Consolidated best practices (as of mid-2026) for WebSocket order placement and cancellation with REST as fallback, for a CEX–CEX price-arbitrage system (spot–spot, spot–perp, perp–perp; spot, linear/inverse perp, unified margin). Up to 15 venues, many simultaneous orders, bursty place+cancel traffic, single region, single host. **Correctness > latency on conflict; every controllable millisecond elsewhere is minimized.** Implementation ecosystem: **Node.js / TypeScript.**
+**Scope:** Consolidated best practices (as of mid-2026) for WebSocket order placement and cancellation with REST as fallback, for a CEX–CEX price-arbitrage system (spot–spot, spot–perp, perp–perp; spot, linear perp, unified margin). Up to 15 venues, many simultaneous orders, bursty place+cancel traffic, single region, single host. **Correctness > latency on conflict; every controllable millisecond elsewhere is minimized.** Implementation ecosystem: **Node.js / TypeScript.**
 
 **Two design theses run through everything below:**
 
@@ -46,7 +46,7 @@ Verify per venue at integration time — this churns.
 |---|---|---|
 | Binance spot | Yes (`ws-api.binance.com`: `order.place` / `order.cancel` / `order.cancelReplace` / amend; JSON or SBE-encoded requests) | Separate service from market-data streams (orders and market data require two separate connections); functionally equivalent to REST — same features, parameters, status and error codes. Ed25519 `session.logon` → no per-request signature; SBE responses available; unfilled-order-count limits. Also offers FIX order entry. |
 | Binance USDⓈ-M / COIN-M futures | Yes (`ws-fapi` / `ws-dapi`, same request/response model) | Session-logon support landed later than spot — **verify per product**. Legacy WS URLs were decommissioned 2026-04-23 — **pin current endpoints in config, not code**. |
-| Bybit (v5 unified) | Yes (`wss://stream.bybit.com/v5/trade`: `order.create` / `order.amend` / `order.cancel` + batch) | Covers USDT contract, USDC contract, spot, options, inverse — i.e., everything including unified-margin accounts. One auth per connection (HMAC over `GET/realtime{expires}`); shares rate limits with REST. **The ack only means the request was accepted — order status must come from the private order stream** (§8). |
+| Bybit (v5 unified) | Yes (`wss://stream.bybit.com/v5/trade`: `order.create` / `order.amend` / `order.cancel` + batch) | Covers USDT contract, USDC contract, spot — i.e., everything including unified-margin accounts. One auth per connection (HMAC over `GET/realtime{expires}`); shares rate limits with REST. **The ack only means the request was accepted — order status must come from the private order stream** (§8). |
 | OKX (v5 unified) | Yes (`order`, `cancel-order`, `amend-order`, `batch-orders`, `batch-cancel-orders` on private WS after one `login`) | Batch ops are real ops, not loops: up to 20 orders per request, can mix instrument types, **not all-or-nothing** — check per-order `sCode`/`sMsg`. Good cancel-on-disconnect support. |
 | Bitget | Yes (v2 WS trade channel) | Newer; test reject semantics carefully. |
 | Gate.io | Yes (v4, spot & futures WS order placement) | |

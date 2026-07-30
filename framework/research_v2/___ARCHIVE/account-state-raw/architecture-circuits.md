@@ -1,6 +1,6 @@
 # Reliable Local Account State — Architecture, Orchestration, Reliability & Kill-Switches
 
-**Scope:** CEX–CEX price arbitrage (spot-spot, spot-perp, perp-perp) across ~15 venues, multiple subaccounts each, market types spot / linear / inverse / unified-margin. Single host, single region, Node.js + TypeScript, `worker_threads` spawned from one orchestrator process. Local account state (balances, orders, fills, positions, funding, fees) must be continuously correct, survive restarts, and gate execution.
+**Scope:** CEX–CEX price arbitrage (spot-spot, spot-perp, perp-perp) across ~15 venues, multiple subaccounts each, market types spot / linear / unified-margin. Single host, single region, Node.js + TypeScript, `worker_threads` spawned from one orchestrator process. Local account state (balances, orders, fills, positions, funding, fees) must be continuously correct, survive restarts, and gate execution.
 
 **The one principle everything below serves:** *the venue is the only source of truth; local state is a cache that is allowed to be fast but never allowed to be silently wrong.* When correctness and latency conflict, correctness wins — and "wrong" must always be loud (degrade + halt), never quiet.
 
@@ -75,7 +75,7 @@ flowchart TB
 - **Correctness:** account state is a *per-venue consistency domain*. A balance, an order, and a fill on Binance only ever interact with each other. There is no cross-venue transaction that needs a single lock, so there is no reason to centralize state and pay coordination cost. Each venue worker is a self-contained, single-writer consistency boundary — the simplest possible model to reason about.
 - **Isolation:** a flaky WS on one venue, a CPU spike from a burst of fills, a GC pause, or a crash is contained to that venue's thread. The other 14 keep trading. (Failure blast radius = one venue.)
 - **Hot-path performance:** the latency-critical sequence is *event-in → reduce → register-write*. By co-locating the WS parser, the reducer, and the account model in **one thread**, that sequence has **no IPC hop and no structured-clone serialization**. The event lands on the socket and mutates an in-thread object directly.
-- **Scale/maintain/extend:** adding venue #16 is "spawn one more identical worker." Each venue's quirks (Binance `listenKey` keepalive, Bybit unified account, OKX account modes, inverse-contract math) live behind one normalization adapter inside one worker, not smeared across a shared engine.
+- **Scale/maintain/extend:** adding venue #16 is "spawn one more identical worker." Each venue's quirks (Binance `listenKey` keepalive, Bybit unified account, OKX account modes) live behind one normalization adapter inside one worker, not smeared across a shared engine.
 
 ### 15.3 Thread roles (concrete)
 
@@ -297,7 +297,7 @@ Single host helps (one clock), but venue clocks still matter:
 | 12 | **Process crash** | restart | Recover from snapshot + WAL replay → REST resync → reconcile (16.4). Checksummed WAL records survive torn writes. |
 | 13 | **Crash loop** | restart counter | Supervisor breaker: stop restarting, stay HALTED, page human (16.6). |
 | 14 | **Split-brain** (2nd instance) | data-dir lock contention | Single-writer advisory/file lock; second instance refuses to start. |
-| 15 | **Inverse / unified-margin math errors** | invariant breach; reconcile diff | Per-market-type contract math in the normalization adapter, covered by golden tests against known REST snapshots. |
+| 15 | **unified-margin math errors** | invariant breach; reconcile diff | Per-market-type contract math in the normalization adapter, covered by golden tests against known REST snapshots. |
 
 ### 14.3 Reconciliation engine (the heart of correctness)
 

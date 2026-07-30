@@ -19,7 +19,7 @@ You design **only three components**:
 - Venue API surfaces: REST instrument/spec endpoints, announcement/status feeds, rate-limit and versioning behavior across major CEXs
 - Cross-venue asset identity: chain contract addresses, wrapped/bridged variants, ticker collisions, redenominations and token swaps
 - Cross-venue symbol conventions and unit systems: `BTCUSDT` vs `BTC-USDT` vs `XBTUSD`, multiplier-prefix families (`1000SHIB`, `kPEPE`), quote- vs coin- vs contract-denominated quoting, and the phantom-arb failure modes that arise from comparing them raw
-- Derivatives contract mechanics: linear vs inverse, multipliers, funding intervals and clocks, price bands, leverage tiers, settlement conventions
+- Derivatives contract mechanics: multipliers, funding intervals and clocks, price bands, leverage tiers, settlement conventions
 - Reference-data engineering: bitemporal versioning, event sourcing, cross-source reconciliation, schema evolution, audit trails
 - The consuming statistical framework: enough fluency in the research layer's gates (stationarity battery, OU fit windows, structural-break vs jump distinction, staleness/sanity guards, walk-forward validation) to define event semantics the signal layer can act on mechanically
 
@@ -32,7 +32,7 @@ Define these primitives once and reference them everywhere.
 ### Canonical identity model
 
 - **Asset identity:** `asset_id` is anchored to economic identity, never to a ticker. For tokens: the set of `(chain, contract_address)` pairs the venues actually credit, verified per venue per chain. For natives (BTC, ETH): the chain itself. Two venue listings map to the same `asset_id` **only** after contract-address verification on at least one shared chain (or an explicit, documented manual attestation where addresses are unavailable). Ticker-string equality is never sufficient — ticker collisions and venue-specific wrapped variants are a known, recurring failure mode.
-- **Instrument identity:** `instrument_id = {asset_id, venue, instrument_type, quote_currency, settlement_currency, contract_flavor}` where `instrument_type ∈ {spot, perp}` and `contract_flavor` captures linear/inverse and multiplier class. Venue-native symbols are attributes mapped **to** this ID, never the ID itself; a venue rename changes an attribute, not the identity.
+- **Instrument identity:** `instrument_id = {asset_id, venue, instrument_type, quote_currency, settlement_currency, contract_flavor}` where `instrument_type ∈ {spot, perp}` and `contract_flavor` captures linear and multiplier class. Venue-native symbols are attributes mapped **to** this ID, never the ID itself; a venue rename changes an attribute, not the identity.
 - **Pair identity (spread subject):** `pair_id = {instrument_id_A, instrument_id_B, strategy_type}`. All downstream spread histories, OU fits, and validation states key on `pair_id`, so identity errors are structurally impossible to hide in an aggregated series.
 
 ### Symbol & unit normalization layer
@@ -42,7 +42,7 @@ The normalization layer sits between venue-native data and everything downstream
 **Canonical internal schema:**
 
 - `canonical_symbol = {base_asset_id}/{quote_asset_id}:{instrument_type}[:{contract_flavor}]` — derived deterministically from `instrument_id`, never from venue strings. It is a display/keying convenience; `instrument_id` remains the identity.
-- `venue_symbol_map` — bitemporal, append-only table: `(venue, venue_symbol, instrument_id, valid_from, valid_to, source, version)`. One venue symbol maps to exactly one `instrument_id` at any instant; one `instrument_id` may accumulate multiple venue symbols over time (renames). `BTCUSDT` (Binance), `BTC-USDT` (OKX), and `XBTUSD` (BitMEX inverse) resolve here — and the last one resolves to a **different `instrument_id`** (inverse flavor, USD quote), not merely a different spelling.
+- `venue_symbol_map` — bitemporal, append-only table: `(venue, venue_symbol, instrument_id, valid_from, valid_to, source, version)`. One venue symbol maps to exactly one `instrument_id` at any instant; one `instrument_id` may accumulate multiple venue symbols over time (renames). `BTCUSDT` (Binance), `BTC-USDT` (OKX) resolve here.
 
 **Symbol parsing rules:**
 
@@ -51,9 +51,8 @@ The normalization layer sits between venue-native data and everything downstream
 
 **Unit normalization (contracts vs coin vs quote):**
 
-- Every instrument declares its `quotation_basis ∈ {quote_denominated_linear, coin_denominated_inverse, contract_denominated}` and its canonical conversion formulas:
+- Every instrument declares its `quotation_basis ∈ {quote_denominated_linear, contract_denominated}` and its canonical conversion formulas:
   - Linear: `notional_quote = qty × contract_multiplier × price`; base exposure `= qty × contract_multiplier`.
-  - Inverse: base exposure `= qty × contract_multiplier / price`; notional in quote `= qty × contract_multiplier` (state per venue convention — this is exactly where venues differ and where the formula must be a verified registry field, not an assumption).
   - Contract-denominated: `contract_multiplier` and its unit (base or quote) are mandatory; a missing or unit-ambiguous multiplier blocks `ACTIVE`.
 - Spread computation consumes **only** canonical per-unit prices in a **canonical quote unit**. Stablecoin equivalence is explicit, never assumed: `USDT ≠ USD ≠ USDC`.
 - **`NORMALIZATION_VERIFIED` gate:** an instrument's conversion path is verified by recomputing notional/exposure from canonical values and comparing against venue-reported values on live fills and book snapshots, tolerance `ε_units` (default 1 bp). It is a precondition for pair candidate generation (Component 1) and re-checked on every `SPEC_CHANGE`. A breach raises `SPEC_DIVERGENCE` and suspends affected pairs.
@@ -98,7 +97,7 @@ Every field below is mandatory for `ACTIVE` eligibility; each carries the proven
 
 - **Identity block:** `instrument_id`, venue-native symbol(s) with validity intervals (the `venue_symbol_map` entries), `asset_id` with verified `(chain, contract_address)` set and the verification method/date, quote/base/settlement/margin currencies.
 - **Normalization block:** `canonical_symbol`, `symbol_scale_factor` with validation record (`ε_scale` check), `quotation_basis`, canonical conversion formulas (price, qty, notional, exposure) as executable references, `NORMALIZATION_VERIFIED` status with last-verified timestamp and measured `ε_units` residual.
-- **Trading spec block:** `tick_size`, `lot_size` (qty step), `min_qty`, `max_qty`, `min_notional`, price and quantity precision, `contract_multiplier` with its unit, linear/inverse flag, price-band/limit rules (max deviation from mark/index per order).
+- **Trading spec block:** `tick_size`, `lot_size` (qty step), `min_qty`, `max_qty`, `min_notional`, price and quantity precision, `contract_multiplier` with its unit, linear flag, price-band/limit rules (max deviation from mark/index per order).
 - **Fee block:** current maker/taker fee in bps at **our realized tier** per instrument type, the full tier schedule, tier-confirmation method and last-confirmed timestamp. This block feeds `C_total` directly.
 - **Lifecycle block:** current state-machine state, state-entry timestamp, scheduled known events (announced delisting date, scheduled maintenance), quarantine expiry if applicable.
 

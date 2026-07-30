@@ -227,7 +227,7 @@ A spread whose measured `σ_spread` is within a few `σ_quant` of the floor is *
 
 ### 4.3 Per-venue normalization
 
-Normalize scaling conventions (contract multipliers, quote-currency units, inverse vs. linear perps) to a single canonical price/size convention **before** differencing. A mismatch here is not noise — it is a systematic, constant or proportional spread bias that ADF may even read as a stable cointegrating mean. **Startup assertion:** the two legs' normalized mid prices must agree to within a few `tick_coarse` during a known-liquid window, else `HALT_FIT` (`NORMALIZATION_FAIL`).
+Normalize scaling conventions (contract multipliers, quote-currency units) to a single canonical price/size convention **before** differencing. A mismatch here is not noise — it is a systematic, constant or proportional spread bias that ADF may even read as a stable cointegrating mean. **Startup assertion:** the two legs' normalized mid prices must agree to within a few `tick_coarse` during a known-liquid window, else `HALT_FIT` (`NORMALIZATION_FAIL`).
 
 ---
 

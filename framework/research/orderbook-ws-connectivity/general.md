@@ -44,7 +44,7 @@ Total Exchange Symbols / (Connection-rate-limit per exchange / MAX_CONNECTION_SA
 | Venue | Gotcha |
 |---|---|
 | **Binance** | Server force-closes every **24h** — you must rotate proactively (see §4). Separate hosts for spot (`stream.binance.com`) vs USD-M futures (`fstream`) vs coin-M (`dstream`). Connection-attempt rate limit per IP — uncontrolled reconnect storms get you **banned**. Combined-stream limit per connection. |
-| **Bybit (V5)** | Separate public endpoints per category (spot / linear / inverse) and separate private. Subscribe via `{"op":"subscribe","args":[...]}`; watch for the subscribe ack. |
+| **Bybit (V5)** | Separate public endpoints per category (spot / linear) and separate private. Subscribe via `{"op":"subscribe","args":[...]}`; watch for the subscribe ack. |
 | **OKX** | Idle timeout ~30s — must send a literal text `"ping"` (not a WS ping frame) or you're dropped. `books`/`bbo-tbt` tick-by-tick orderbooks. **Every push carries a CRC32 checksum** you must validate. |
 | **Bitget** | `op`/`subscribe` model; text `"ping"` heartbeat (~30s). |
 | **Private channels (all)** | HMAC signing with a timestamp/`recvWindow`. **Clock skew → rejected signatures.** Run `chrony`/NTP and monitor skew (see §3, §9). |
@@ -237,7 +237,7 @@ Node.js: risk is **GC pause tail latency** and **event-loop blocking**. Node's w
 ```
 
 - **Process-per-venue (or per-shard) isolation.** Node is single-threaded; a blocked/crashing Binance connector must not stall OKX. Use **separate OS processes** (not just `worker_threads`) for fault isolation *and* to use multiple cores. *Table stakes.*
-- **Split ingestion/normalization from strategy/execution.** Gateways publish a **canonical book/update schema**; venue quirks (tick size, contract multiplier, inverse vs linear, fee model) are pushed to the edge so strategy is venue-agnostic.
+- **Split ingestion/normalization from strategy/execution.** Gateways publish a **canonical book/update schema**; venue quirks (tick size, contract multiplier, fee model) are pushed to the edge so strategy is venue-agnostic.
 - **Hot-path IPC — choose deliberately:**
 
   | Option | Use for | Tradeoff |

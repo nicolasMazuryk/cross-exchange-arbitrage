@@ -1324,19 +1324,19 @@ export class ArbitrageEngine extends EventEmitter {
     const opportunityStalenessMs = nowTs - Math.min(buyBook.timestamp, sellBook.timestamp)
     const orderbookTimestampSkewMs = Math.abs(buyBook.timestamp - sellBook.timestamp)
 
-    if (["AI/USDT|spot:spot", "U/USDT|spot:spot", "SAHARA/USDT|spot:spot", "ARX/USDT|spot:spot", "ICNT/USDT|spot:spot", "NFP/USDT|spot:spot", "TAIKO/USDT|spot:spot", "LUNC/USDT|spot:spot", "USTC/USDT|spot:spot", "VANA/USDT|spot:spot", "SATS/USDT|spot:spot", "TAC/USDT|spot:spot"].includes(normalizedPair)) return
+    // if (["AI/USDT|spot:spot", "U/USDT|spot:spot", "SAHARA/USDT|spot:spot", "ARX/USDT|spot:spot", "ICNT/USDT|spot:spot", "NFP/USDT|spot:spot", "TAIKO/USDT|spot:spot", "LUNC/USDT|spot:spot", "USTC/USDT|spot:spot", "VANA/USDT|spot:spot", "SATS/USDT|spot:spot", "TAC/USDT|spot:spot", "ZIL/USDT|spot:spot"].includes(normalizedPair)) return
 
-    // if (["BB/USDT|spot:linear", "UP/USDT|spot:linear", "AI/USDT|spot:linear", "QNT/USDT|spot:linear"].includes(normalizedPair)) return
+    if (["BB/USDT|spot:linear", "UP/USDT|spot:linear", "AI/USDT|spot:linear", "QNT/USDT|spot:linear"].includes(normalizedPair)) return
 
     // if (["QNT/USDT|linear:linear", "BB/USDT|linear:linear", "OPENAI/USDT|linear:linear", "ON/USDT|linear:linear", "ANTHROPIC/USDT|linear:linear"].includes(normalizedPair)) return
 
     // if ([buyExchange, sellExchange].includes('binance')) return
 
-    if (!isSpotSpot) return
+    // if (!isSpotSpot) return
 
     // if (!bothLegsArePerp) return
 
-    // if (isSpotSpot || bothLegsArePerp) return
+    if (isSpotSpot || bothLegsArePerp) return
 
     if (profitEstimate.estimatedProfitPercent > 0.3 && orderbookTimestampSkewMs < 500) {
       logger.signal(normalizedPair, buyExchange, sellExchange, profitEstimate.costsPercent, profitEstimate.fundingProfitPercent, profitEstimate.spreadProfitPercent, profitEstimate.estimatedProfitPercent, nowTs - buyBook.timestamp, nowTs - sellBook.timestamp, opportunityStalenessMs, orderbookTimestampSkewMs)

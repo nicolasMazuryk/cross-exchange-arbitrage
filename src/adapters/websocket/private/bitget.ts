@@ -1,24 +1,24 @@
-import { WebsocketClientV2 } from 'bitget-api'
+import { WebsocketClientV3, WS_KEY_MAP } from 'bitget-api'
 import { BasePrivateWebSocketClient } from './base'
 import { WebSocketConfig, PrivateWebSocketMessageParser } from '../types'
 import { RestClientInterface } from '../../rest/types'
 import { BalanceInfo, PositionInfo, OrderInfo } from '../../../types/account'
 import { OrderType, OrderStatus, PositionSide, MarketType } from '../../../types/exchange'
 import { Logger } from '../../../utils/logger'
-import { convertExchangeSymbolToUnifiedSymbol, getOrderSide, positionId, quoteCurrenciesFor } from '../../../utils/utils'
-import { BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE } from '../../rest/bitget'
-import appConfig from '../../../utils/config'
+import { convertExchangeSymbolToUnifiedSymbol, positionId } from '../../../utils/utils'
 
-function bitgetInstTypeToMarketType(instType: string): MarketType {
-  const upper = instType.toUpperCase()
+// V3/UTA payload items carry their own `category` field (SPOT | USDT-FUTURES | COIN-FUTURES | USDC-FUTURES)
+// since subscriptions are no longer split per instType (everything subscribes under instType 'UTA').
+function bitgetCategoryToMarketType(category: string): MarketType {
+  const upper = category.toUpperCase()
   if (upper === 'SPOT') return MarketType.SPOT
   if (upper === 'COIN-FUTURES' || upper === 'DMCBL' || upper === 'COIN_FUTURES') return MarketType.INVERSE_PERP
   if (upper === 'USDT-FUTURES' || upper === 'USDC-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES' || upper === 'USDC_FUTURES') return MarketType.LINEAR_PERP
-  throw new Error(`unknown bitget instType: ${instType}`)
+  throw new Error(`unknown bitget category: ${category}`)
 }
 
-function bitgetInstTypeToQuote(instType: string): string | undefined {
-  const upper = instType.toUpperCase()
+function bitgetCategoryToQuote(category: string): string | undefined {
+  const upper = category.toUpperCase()
   if (upper === 'COIN-FUTURES' || upper === 'DMCBL' || upper === 'COIN_FUTURES') return 'USD'
   if (upper === 'USDT-FUTURES' || upper === 'UMCBL' || upper === 'USDT_FUTURES') return 'USDT'
   if (upper === 'USDC-FUTURES' || upper === 'USDC_FUTURES') return 'USDC'
@@ -38,8 +38,8 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
     this.messageParser = new BitgetPrivateMessageParser()
   }
 
-  protected createClient(): WebsocketClientV2 {
-    return new WebsocketClientV2({
+  protected createClient(): WebsocketClientV3 {
+    return new WebsocketClientV3({
       apiKey: this.config.apiKey,
       apiSecret: this.config.apiSecret,
       apiPass: this.config.apiPass,
@@ -129,54 +129,39 @@ export class BitgetPrivateWebSocketClient extends BasePrivateWebSocketClient {
   }
 
   protected async subscribeToAccountStreams(): Promise<void> {
-    // SPOT only supports account (balance) — positions/orders are futures-only on Bitget
-    this.client.subscribeTopic('SPOT' as any, 'account', 'default')
-
-    // Derive perp instTypes from config: use BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE for linear, COIN-FUTURES for inverse
-    const enabledQuotes = new Set(quoteCurrenciesFor('bitget'))
-    const enabledMarketTypes = appConfig.exchanges.bitget.enabledMarketTypes
-    const perpInstTypes: string[] = []
-    for (const [quote, productType] of Object.entries(BITGET_LINEAR_PRODUCT_TYPE_FOR_QUOTE)) {
-      if (enabledQuotes.has(quote) && !perpInstTypes.includes(productType)) {
-        perpInstTypes.push(productType)
-      }
-    }
-    if (!enabledMarketTypes || enabledMarketTypes.includes(MarketType.INVERSE_PERP)) {
-      perpInstTypes.push('COIN-FUTURES')
-    } else {
-      logger.warn({
-        msg: 'Skipping COIN-FUTURES subscription: INVERSE_PERP not in enabledMarketTypes',
-        function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
-        exchange: this.exchangeName,
-        enabledMarketTypes,
-      })
-    }
-
-    for (const instType of perpInstTypes) {
-      this.client.subscribeTopic(instType as any, 'account', 'default')
-      this.client.subscribeTopic(instType as any, 'positions', 'default')
-      this.client.subscribeTopic(instType as any, 'orders', 'default')
-    }
+    // V3/UTA: a single account spans all product types — every private topic subscribes under instType 'UTA'.
+    const ACCOUNT_INST_TYPE = 'UTA'
+    this.client.subscribe(
+      (['account', 'position', 'order'] as const).map(topic => ({
+        topic,
+        payload: { instType: ACCOUNT_INST_TYPE },
+      })),
+      WS_KEY_MAP.v3Private
+    )
 
     logger.info({
       msg: 'Subscribed to account WebSocket streams',
       function: 'BitgetPrivateWebSocketClient.subscribeToAccountStreams',
       exchange: this.exchangeName,
-      perpInstTypes,
     })
   }
 }
 
+// Field names below follow bitget-api's V3 REST response DTOs (AccountAssetV3, CurrentPositionV3, OrderInfoV3) —
+// the closest authoritative reference available (the package ships no WS-specific payload types for V3).
+// TEMP-VERIFY: confirm these against a live UTA `update` event per channel before trusting them long-term.
 class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
   parseBalanceUpdate(data: any): BalanceInfo[] {
     const balances: BalanceInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
       for (const wallet of data.data) {
+        // TEMP-VERIFY: raw UTA account push payload
+        logger.debug({ msg: 'TEMP-VERIFY raw balance update', function: 'BitgetPrivateMessageParser.parseBalanceUpdate', wallet })
         balances.push({
-          asset: wallet.marginCoin,
+          asset: wallet.coin,
           total: parseFloat(wallet.equity),
-          available: parseFloat(wallet.maxOpenPosAvailable),
+          available: parseFloat(wallet.available),
         })
       }
     }
@@ -188,40 +173,43 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
     const positions: PositionInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
-      if (!data.arg?.instType) throw new Error(`bitget private position update missing data.arg.instType: ${JSON.stringify(data)}`)
-      const instType = data.arg.instType
-      const marketType = bitgetInstTypeToMarketType(instType)
-
       for (const position of data.data) {
-        const meta = restClient.getMarketMetadataService().getMetadataByNativeId(position.instId, marketType)
+        // TEMP-VERIFY: raw UTA position push payload
+        logger.debug({ msg: 'TEMP-VERIFY raw position update', function: 'BitgetPrivateMessageParser.parsePositionUpdate', position })
+
+        if (!position.category) throw new Error(`bitget private position update missing category: ${JSON.stringify(position)}`)
+        const marketType = bitgetCategoryToMarketType(position.category)
+
+        const meta = restClient.getMarketMetadataService().getMetadataByNativeId(position.symbol, marketType)
         let symbol: string
         if (meta) {
           symbol = meta.symbol
         } else {
-          const quote = bitgetInstTypeToQuote(instType)
+          const quote = bitgetCategoryToQuote(position.category)
           if (!quote) {
             logger.warn({
-              msg: 'Bitget WS: cannot resolve position symbol, unknown instType quote',
+              msg: 'Bitget WS: cannot resolve position symbol, unknown category quote',
               function: 'BitgetPrivateMessageParser.parsePositionUpdate',
-              instId: position.instId,
-              instType,
+              nativeSymbol: position.symbol,
+              category: position.category,
             })
             continue
           }
-          symbol = convertExchangeSymbolToUnifiedSymbol(position.instId, marketType, quote)
+          symbol = convertExchangeSymbolToUnifiedSymbol(position.symbol, marketType, quote)
         }
-        const positionSide = position.holdSide.toUpperCase() as PositionSide
+        const positionSide = position.posSide.toUpperCase() as PositionSide
+        const updatedTime = Number(position.updatedTime)
 
         positions.push({
           id: positionId(symbol, positionSide),
           symbol: symbol,
           side: positionSide,
           size: Math.abs(parseFloat(position.total)),
-          entryPrice: parseFloat(position.openPriceAvg) || 0,
+          entryPrice: parseFloat(position.avgPrice) || 0,
           leverage: parseFloat(position.leverage) || 1,
-          unrealizedPnL: parseFloat(position.unrealizedPL) || 0,
-          timestamp: Number(position.cTime),
-          date: new Date(Number(position.cTime)),
+          unrealizedPnL: parseFloat(position.unrealisedPnl) || 0,
+          timestamp: updatedTime,
+          date: new Date(updatedTime),
           marketType,
         })
       }
@@ -234,42 +222,45 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
     const orders: OrderInfo[] = []
 
     if (data.data && Array.isArray(data.data)) {
-      if (!data.arg?.instType) throw new Error(`bitget private order update missing data.arg.instType: ${JSON.stringify(data)}`)
-      const instType = data.arg.instType
-      const marketType = bitgetInstTypeToMarketType(instType)
-
       for (const order of data.data) {
-        const orderMeta = restClient.getMarketMetadataService().getMetadataByNativeId(order.instId, marketType)
+        // TEMP-VERIFY: raw UTA order push payload
+        logger.debug({ msg: 'TEMP-VERIFY raw order update', function: 'BitgetPrivateMessageParser.parseOrderUpdate', order })
+
+        if (!order.category) throw new Error(`bitget private order update missing category: ${JSON.stringify(order)}`)
+        const marketType = bitgetCategoryToMarketType(order.category)
+
+        const orderMeta = restClient.getMarketMetadataService().getMetadataByNativeId(order.symbol, marketType)
         let orderSymbol: string
         if (orderMeta) {
           orderSymbol = orderMeta.symbol
         } else {
-          const quote = bitgetInstTypeToQuote(instType)
+          const quote = bitgetCategoryToQuote(order.category)
           if (!quote) {
             logger.warn({
-              msg: 'Bitget WS: cannot resolve order symbol, unknown instType quote',
+              msg: 'Bitget WS: cannot resolve order symbol, unknown category quote',
               function: 'BitgetPrivateMessageParser.parseOrderUpdate',
-              instId: order.instId,
-              instType,
+              nativeSymbol: order.symbol,
+              category: order.category,
             })
             continue
           }
-          orderSymbol = convertExchangeSymbolToUnifiedSymbol(order.instId, marketType, quote)
+          orderSymbol = convertExchangeSymbolToUnifiedSymbol(order.symbol, marketType, quote)
         }
+        const updatedTime = parseInt(order.updatedTime)
         orders.push({
           id: order.orderId,
           clientOrderId: order.clientOid,
           symbol: orderSymbol,
           exchange: EXCHANGE_NAME,
-          orderSide: getOrderSide(order.posSide, order.tradeSide),
+          orderSide: order.side.toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
           positionSide: order.posSide.toUpperCase() as PositionSide,
           type: order.orderType.toUpperCase() as OrderType,
           price: parseFloat(order.price) || 0,
-          averagePrice: parseFloat(order.priceAvg) || 0,
-          quantity: parseFloat(order.size),
-          status: this.normalizeOrderStatus(order.status),
-          timestamp: parseInt(order.cTime),
-          date: new Date(Number(order.cTime)),
+          averagePrice: parseFloat(order.avgPrice) || 0,
+          quantity: parseFloat(order.qty),
+          status: this.normalizeOrderStatus(order.orderStatus),
+          timestamp: updatedTime,
+          date: new Date(updatedTime),
           marketType,
         })
       }
@@ -283,11 +274,11 @@ class BitgetPrivateMessageParser implements PrivateWebSocketMessageParser {
   }
 
   isPositionMessage(data: any): boolean {
-    return data.arg && data.arg.channel === 'positions'
+    return data.arg && data.arg.channel === 'position'
   }
 
   isOrderMessage(data: any): boolean {
-    return data.arg && data.arg.channel === 'orders'
+    return data.arg && data.arg.channel === 'order'
   }
 
   private normalizeOrderStatus(bitgetStatus: string): OrderStatus {

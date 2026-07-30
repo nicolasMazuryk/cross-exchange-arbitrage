@@ -1,6 +1,4 @@
 
-### NO FIXED THRESHOLDS, THRESHOLDS ARE DYNAMIC STATISTICALY DERIVED VALUES.
-
 ### 1.3 Equilibrium, normalization, and the z-score
 
 - **Mean/variance of the spread:** exponentially weighted (EWMA) with half-life tied to the spread's own mean-reversion speed (below), with **robust** dispersion (use MAD-scaled or winsorize at the 1st/99th percentile of innovations) so a single flash event doesn't inflate σ and silence the signal for hours.

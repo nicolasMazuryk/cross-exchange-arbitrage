@@ -25,7 +25,7 @@ effective_available(scope, asset) =
 Properties that make this safe:
 
 - **The venue owns `confirmed`; we own `reservations`.** No code path may "adjust" confirmed balance because we *think* a fill happened — confirmed moves only on venue evidence (event or snapshot). Our optimism lives entirely in the overlay, where it can be audited and expired.
-- **Never sum balances across market types the venue segregates.** Spot, linear-futures, and inverse wallets are distinct cells; transfers between them are explicit, tracked operations (initiate → poll/confirm → apply), not arithmetic. Sub-account transfers have their own latency and failure modes — model a transfer as a tiny FSM (`REQUESTED → SENT → CONFIRMED/FAILED/UNKNOWN`) like an order.
+- **Never sum balances across market types the venue segregates.** Spot, linear-futures wallets are distinct cells; transfers between them are explicit, tracked operations (initiate → poll/confirm → apply), not arithmetic. Sub-account transfers have their own latency and failure modes — model a transfer as a tiny FSM (`REQUESTED → SENT → CONFIRMED/FAILED/UNKNOWN`) like an order.
 - **The safety buffer is not paranoia décor:** it absorbs in-flight fees, funding accrual since the last snapshot, and venue rounding (set per scope from observed fee/funding magnitudes, §4–§6).
 - The deployable figure is additionally gated by health: `deployable = effective_available × (state == LIVE ∧ fresh ∧ invariants hold ? 1 : 0)` (→ `05 §7`). Stale or diverged ⇒ deployable is **0** by construction.
 
@@ -143,7 +143,7 @@ Funding is the slow leak that turns winning arb into losing arb; it deserves the
 
 ### 6.1 Mechanics, normalized
 
-- **Linear perps:** funding settles in the **quote** asset (USDT/USDC). **Inverse perps:** in the **base** coin. The canonical `FundingSettled{scope, symbol, amount, asset, rate, ts}` event carries the asset explicitly; the reducer posts it to the right cell.
+- **Linear perps:** funding settles in the **quote** asset (USDT/USDC).The canonical `FundingSettled{scope, symbol, amount, asset, rate, ts}` event carries the asset explicitly; the reducer posts it to the right cell.
 - **Intervals vary** — 8 h standard, but 4 h/1 h on some venues/symbols, and venues adjust intervals on volatile symbols. Store `fundingIntervalMs` and `nextFundingTime` **per symbol from venue instrument metadata, refreshed periodically — never hardcode the schedule.**
 - **Direction:** `funding = −sign(size) · |size| · markPrice · fundingRate` in the settlement asset (positive rate ⇒ longs pay shorts). Normalize each venue's sign/notional convention **in the adapter** with golden tests — sign errors here are silent and symmetric, the worst kind.
 

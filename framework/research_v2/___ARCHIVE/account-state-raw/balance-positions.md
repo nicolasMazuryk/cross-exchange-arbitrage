@@ -267,15 +267,15 @@ For **unified-margin / portfolio-margin** accounts (Bybit UTA, OKX unified), `av
 
 ### 5.1 Spot vs. perp accounting differences
 
-| | **Spot** | **Linear perp (USDT-margined)** | **Inverse perp (coin-margined)** |
+| | **Spot** | **Linear perp (USDT-margined)** |
 |---|---|---|---|
-| "Position" is | just the asset balance | separate position object | separate position object |
-| Margin | n/a (or borrowed in margin spot) | posted from quote wallet | posted from coin wallet |
-| Size unit | base asset | base/contracts | USD-notional contracts |
-| PnL/funding asset | implicit in balances | quote (USDT) | base coin |
-| Liquidation | none (unless margin/loan) | yes | yes (different formula) |
-| Cost basis | optional (arb cares about realized spread) | required (avg entry) | required |
-| Available depends on uPnL? | no | yes (esp. cross margin) | yes |
+| "Position" is | just the asset balance | separate position object |
+| Margin | n/a (or borrowed in margin spot) | posted from quote wallet |
+| Size unit | base asset | base/contracts | 
+| PnL/funding asset | implicit in balances | quote (USDT) |
+| Liquidation | none (unless margin/loan) | yes | 
+| Cost basis | optional (arb cares about realized spread) | required (avg entry) |
+| Available depends on uPnL? | no | yes (esp. cross margin) |
 
 For **spot**, "position tracking" collapses into balance tracking; the arb engine cares about the realized spread between legs, not a mark-to-market. For **perps**, position is a first-class object with size, avg entry, leverage, liq price, and continuously-marked uPnL.
 
@@ -325,7 +325,6 @@ For **spot**, "position tracking" collapses into balance tracking; the arb engin
 ### 6.1 Mechanics by market type
 
 - **Linear (USDT) perps:** funding settles in **quote (USDT)** → directly hits wallet `available`/`total`.
-- **Inverse perps:** funding settles in **base coin** → hits the coin-margin balance.
 - **Cadence varies:** 8h is common, but many symbols/venues use 4h or 1h; some use dynamic intervals. Store `fundingInterval` and `nextFundingTime` per symbol from exchange info; never hard-code 8h.
 - **Direction:** positive rate → longs pay shorts. Your payment = `−sign(size)·|size|·markPrice·fundingRate` (sign conventions differ per venue; normalize in the adapter).
 
