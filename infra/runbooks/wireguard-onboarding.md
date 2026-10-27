@@ -46,7 +46,7 @@ ansible-playbook playbooks/site.yml --tags wireguard
 ## 5. Operator connects
 
 ```bash
-sudo wg-quick up ~/Documents/exchange-arbitrage/wireguard/operator-wg0.conf
+sudo wg-quick up ~/code/cross-exchange-arbitrage/wireguard/operator-wg0.conf
 ```
 
 Then reachable: `http://10.0.1.30:3000` (Grafana), `:8000` (GlitchTip),
